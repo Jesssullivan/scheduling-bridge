@@ -1,0 +1,46 @@
+{
+  "name": "@tummycrypt/acuity-middleware",
+  "version": "0.1.0",
+  "description": "Playwright-based Acuity booking middleware server",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jesssullivan/acuity-middleware.git"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/middleware/server.js",
+    "dev": "tsx src/middleware/server.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "playwright-core": "^1.58.1",
+    "effect": "^3.19.14",
+    "fp-ts": "^2.16.9"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "tsx": "^4.0.0",
+    "vitest": "^4.0.0",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
