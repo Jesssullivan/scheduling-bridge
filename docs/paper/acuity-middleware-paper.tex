@@ -1,0 +1,375 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{balance}
+\usepackage{url}
+\usepackage{cite}
+
+% Code listing colors
+\definecolor{codebg}{HTML}{F8F8F8}
+\definecolor{tskw}{HTML}{7C3AED}
+\definecolor{tsstr}{HTML}{059669}
+\definecolor{tscmt}{HTML}{6B7280}
+\definecolor{tstype}{HTML}{2563EB}
+
+% TypeScript language definition
+\lstdefinelanguage{TypeScript}{
+  keywords={function, return, const, let, if, else, switch, case, class, interface, type, extends, implements, import, export, from, as, new, this, async, await, yield, default, typeof, void, null, undefined, true, false, in, of},
+  keywordstyle=\color{tskw}\bfseries,
+  ndkeywords={string, number, boolean, Promise, Effect, Either, TaskEither, SchedulingResult, SchedulingError, SchedulingAdapter, Service, Booking, BookingRequest, Provider, TimeSlot, AvailableDate, SlotReservation, ClientInfo, Layer, Context, Exit, Cause, BrowserService},
+  ndkeywordstyle=\color{tstype},
+  sensitive=true,
+  comment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  commentstyle=\color{tscmt}\itshape,
+  string=[b]',
+  morestring=[b]",
+  morestring=[b]`,
+  stringstyle=\color{tsstr},
+}
+
+% Python language additions
+\lstdefinelanguage{ModalPython}{
+  language=Python,
+  morekeywords={modal, Image, app, function, web_server, concurrent},
+}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  framerule=0.4pt,
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=2,
+  showstringspaces=false,
+  numbers=left,
+  numberstyle=\tiny\color{tscmt},
+  numbersep=5pt,
+  xleftmargin=1.5em,
+  aboveskip=0.5\baselineskip,
+  belowskip=0.5\baselineskip,
+}
+
+\begin{document}
+
+\title{Browser Automation Middleware for Zero-Downtime SaaS Migration: A Scheduling System Case Study}
+
+\author{\IEEEauthorblockN{Jess Sullivan}
+\IEEEauthorblockA{Tinyland Inc.\\
+jess@tinyland.dev}}
+
+\maketitle
+
+\begin{abstract}
+Small-business SaaS platforms create vendor lock-in through API paywalls and proprietary data formats. When the vendor restricts programmatic access to premium pricing tiers, businesses face a choice between paying for API access they should already have or accepting that their own data is held hostage. We present a browser automation middleware architecture that implements a standardized 16-method scheduling adapter interface by puppeteering the vendor's public-facing web UI via headless Playwright, deployed as a containerized service on Modal Labs. A feature-flag-driven backend selector enables zero-downtime migration from the legacy vendor to a homegrown PostgreSQL backend, implementing the strangler fig pattern against a third-party SaaS dependency. The system has been deployed in production since March 2026, processing real appointment bookings across both backends simultaneously. We report on the architecture, the dual functional programming approach (Effect TS for browser lifecycle management, fp-ts for adapter composition), the reliability challenges of DOM automation against a React SPA with Emotion CSS, and the lessons learned from automating 604 legacy appointments across 62 weeks of calendar data. The middleware replaces 8 blocked REST API endpoints through DOM interaction alone, demonstrating that browser automation is a viable---if intentionally temporary---bridge pattern for escaping SaaS vendor lock-in.
+\end{abstract}
+
+\begin{IEEEkeywords}
+browser automation, middleware, SaaS migration, strangler fig pattern, scheduling systems, vendor lock-in, adapter pattern, headless browser
+\end{IEEEkeywords}
+
+%% ============================================================
+\section{Introduction}
+
+The modern small business operates on a stack of vertical SaaS products: scheduling, payments, email marketing, inventory, point-of-sale. Each product captures business data in proprietary formats behind vendor-controlled APIs. When the relationship sours---pricing changes, feature regression, acquisition, or simple neglect---the business discovers that migration is not a product feature. It is an engineering problem, and one the vendor has no incentive to solve.
+
+Acuity Scheduling, a Squarespace subsidiary, exemplifies this dynamic. The platform provides appointment booking for service businesses (massage therapy, consulting, tutoring) via an embeddable iframe widget and a web-based admin panel. The REST API that would enable programmatic access to appointment data, availability, and booking operations is gated behind the ``Powerhouse'' plan---a pricing tier that returns HTTP 403 on all endpoints for lower-tier accounts~\cite{acuity-api}. The business's own appointment history, client records, and scheduling configuration are accessible only through the web UI.
+
+This paper presents a middleware architecture that solves the migration problem through browser automation. Rather than reverse-engineering the vendor's internal APIs or negotiating for API access, the system drives the vendor's public-facing booking wizard via headless Playwright~\cite{playwright}, translating standardized adapter method calls into sequences of DOM interactions. The middleware is deployed as a containerized service on Modal Labs~\cite{modal}, providing serverless scaling with warm container pools for acceptable latency.
+
+The key insight is that browser automation middleware is not the destination---it is the bridge. The architecture implements the strangler fig pattern~\cite{fowler-strangler} with a feature-flag-controlled backend selector that routes scheduling operations to either the legacy vendor (via browser automation) or a homegrown PostgreSQL backend (via direct queries). As the homegrown backend reaches feature parity, the browser middleware layer becomes disposable. The adapter interface ensures that consumers of scheduling operations are completely isolated from which backend serves them.
+
+\subsection{Contributions}
+
+This paper makes four contributions:
+
+\begin{enumerate}
+\item A formal 16-method \texttt{SchedulingAdapter} interface that abstracts scheduling operations (services, availability, reservations, bookings, clients) across heterogeneous backends, with all methods returning monadic \texttt{TaskEither<SchedulingError, T>} for composable error handling.
+
+\item An Effect TS middleware layer that implements this interface via headless browser automation, using typed effect programs for each wizard step, managed browser lifecycle via \texttt{acquireRelease}, and a CSS selector registry with fallback chains for resilience against DOM instability.
+
+\item A feature-flag-driven backend selection mechanism with hostname override, enabling both backends to serve production traffic simultaneously with instant rollback capability.
+
+\item Production deployment evidence from a real massage therapy practice, including reliability data from 604 automated legacy appointment operations and concurrent dual-backend operation.
+\end{enumerate}
+
+%% ============================================================
+\section{Related Work}
+
+\subsection{Legacy System Modernization}
+
+The Carnegie Mellon Software Engineering Institute taxonomy~\cite{sei-legacy} classifies modernization strategies along a spectrum from wrapping (black-box, no source access) to reengineering (white-box, full source transformation). Browser automation middleware is a form of black-box wrapping---the legacy system's UI is the only interface analyzed. Seacord et al.~\cite{seacord-modernizing} formalize the risk-managed approach to modernization, emphasizing incremental strategies that preserve system availability during transition. Our feature-flag approach implements their recommended ``parallel operation'' phase.
+
+\subsection{Wrapper-Based Evolution}
+
+Sneed~\cite{sneed-wrapping} proposes wrapping legacy information systems with service-oriented interfaces, treating the wrapper as a translation layer between modern consumers and legacy implementations. Rahgozar and Oroumchian~\cite{rahgozar-patterns} identify three design patterns for wrapper interfaces: Lowest Common Denominator, Most Popular, and Negotiated. Our \texttt{SchedulingAdapter} interface follows the Negotiated pattern---the 16 methods represent the intersection of capabilities needed by the application, not the full surface area of any single backend.
+
+Prior wrapper work focused on mainframe terminal interfaces (3270 screen scraping) and COBOL API wrapping~\cite{sei-legacy}. This work wraps a modern React single-page application rendered with Emotion CSS-in-JS---a qualitatively different challenge where DOM structure is dynamic, CSS class names are hash-unstable, and user interactions trigger asynchronous client-side state transitions rather than synchronous server round-trips.
+
+\subsection{The Strangler Fig Pattern}
+
+Fowler~\cite{fowler-strangler} describes the strangler fig pattern as a metaphor for incremental system replacement: new functionality is built alongside the old system, with a routing layer that progressively shifts traffic from legacy to replacement. Newman~\cite{newman-microservices} applies the pattern to microservice migration. Our \texttt{resolveBackend()} function is the routing facade, checking environment variables and hostname to select between the Acuity wizard adapter (legacy) and the homegrown PostgreSQL adapter (replacement).
+
+\subsection{Anti-Corruption Layer}
+
+Evans~\cite{evans-ddd} defines the Anti-Corruption Layer as a pattern for isolating a bounded context from the domain model of an external system. The \texttt{SchedulingAdapter} interface serves this role: it prevents Acuity's domain concepts (appointment type IDs, React wizard steps, Square payment integration) from leaking into the homegrown domain model (UUID-based services, slot reservations, Stripe/Venmo payments). The dual-ID resolution pattern in the homegrown adapter---accepting both UUID and legacy \texttt{acuityId}---is an explicit corruption-containment mechanism.
+
+\subsection{Robotic Process Automation}
+
+Van der Aalst et al.~\cite{vanderaalst-rpa} survey Robotic Process Automation as an enterprise paradigm for automating UI-level business processes. A systematic mapping study by Enriquez et al.~\cite{enriquez-rpa-mapping} found a ``relative lack of attention to RPA in the academic literature'' contrasting with ``early practical adoption of RPA in industry.'' Dong et al.~\cite{dong-webrobot} formalize web-based RPA in WebRobot (PLDI 2022), proposing a program synthesis algorithm for automating browser interactions evaluated on 76 benchmarks. Our work differs in using hand-written Effect TS programs rather than synthesized scripts, trading generality for the type-level guarantees needed in a production scheduling system.
+
+\subsection{SaaS Vendor Lock-in}
+
+Alhamazani et al.~\cite{alhamazani-lockin} and Opara-Martins et al.~\cite{opara-lockin} provide decision frameworks for assessing and mitigating SaaS vendor lock-in across API, data, and contract dimensions. Our work is a concrete case study of the scenario they describe: API access restricted by pricing tier, data accessible only through vendor UI, and no standard export mechanism for appointment history or client records.
+
+\subsection{Containerized Browser Runtimes}
+
+Running headless browsers in serverless environments requires careful resource management. The \texttt{@sparticuz/chromium} project~\cite{sparticuz-chromium} provides a stripped Chromium binary for AWS Lambda's 50MB deployment constraint. Microsoft's Playwright Docker images~\cite{playwright-docker} provide pre-configured containers with all browser dependencies.
+
+The choice of container runtime significantly impacts browser automation viability (Table~\ref{tab:runtimes}). Modal's FUSE-based lazy-loading filesystem~\cite{modal-fuse} treats container images as a $\sim$5~MB index, loading file contents on demand. gVisor-based isolation~\cite{gvisor} provides a userspace kernel boundary appropriate for running untrusted browser content.
+
+\begin{table}[htbp]
+\caption{Serverless Platform Comparison for Browser Automation}
+\label{tab:runtimes}
+\centering
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Characteristic} & \textbf{Modal} & \textbf{Lambda} & \textbf{Vercel} \\
+\midrule
+Max package size & No limit & 250 MB & 50 MB \\
+Max memory & Config. & 10 GB & 3 GB \\
+Max timeout & No limit & 15 min & 900s \\
+Chromium & Native & Stripped & Impractical \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{iframe Deprecation}
+
+The embedded iframe remains the dominant integration mechanism for SaaS scheduling widgets~\cite{acuity-embed}. However, third-party cookie deprecation in modern browsers increasingly breaks iframe-based authentication~\cite{smashing-cookies}. Approximately one-third of all breaches in 2024 were third-party related, with iframes serving as a primary attack vector~\cite{qrvey-iframe}. Migration from iframe embedding to native UI components has been documented as yielding 20--30\% higher conversion rates~\cite{cloudbeds-iframe}.
+
+%% ============================================================
+\section{System Design}
+
+\subsection{Architecture Overview}
+
+The system consists of four layers:
+
+\textbf{Consumer Layer.} SvelteKit~\cite{sveltekit} API routes (\texttt{/api/schedule/*}) and admin pages that invoke scheduling operations through the adapter interface. Consumers are completely backend-agnostic.
+
+\textbf{Routing Layer.} The \texttt{resolveBackend()} function selects a backend based on environment variables (\texttt{SCHEDULING\_BACKEND}) and hostname overrides (the \texttt{dev/main} branch forces Acuity for beta stability). The \texttt{getSchedulingKit()} singleton factory instantiates the selected adapter and wraps it with a \texttt{PaymentRegistry} for payment processor composition.
+
+\textbf{Adapter Layer.} Five concrete implementations of the \texttt{SchedulingAdapter} interface: \texttt{HomegrownAdapter} (direct PostgreSQL via Drizzle ORM~\cite{drizzle}), \texttt{AcuityWizardAdapter} (Effect TS browser automation), \texttt{AcuityScraperAdapter} (read-only DOM scraping), \texttt{RemoteWizardAdapter} (HTTP proxy to Modal), and \texttt{CalComAdapter} (stub for future migration).
+
+\textbf{Browser Middleware Layer.} Effect TS~\cite{effect-ts} programs that drive individual wizard steps (navigate, fill form, bypass payment, submit, extract confirmation), managed by a \texttt{BrowserService} layer that handles Playwright lifecycle via \texttt{acquireRelease}.
+
+\subsection{The SchedulingAdapter Interface}
+
+The interface defines 16 methods across five categories (Table~\ref{tab:interface}).
+
+\begin{table}[htbp]
+\caption{SchedulingAdapter Interface Methods}
+\label{tab:interface}
+\centering
+\begin{tabular}{@{}llc@{}}
+\toprule
+\textbf{Category} & \textbf{Methods} & \textbf{Count} \\
+\midrule
+Services & \texttt{getServices}, \texttt{getService} & 2 \\
+Providers & \texttt{getProviders}, \texttt{getProvider}, \texttt{getProvidersForService} & 3 \\
+Availability & \texttt{getAvailableDates}, \texttt{getAvailableSlots}, \texttt{checkSlotAvailability} & 3 \\
+Reservations & \texttt{createReservation}, \texttt{releaseReservation} & 2 \\
+Bookings & \texttt{createBooking}, \texttt{createBookingWithPaymentRef}, \texttt{getBooking}, \texttt{cancelBooking} & 4 \\
+Clients & \texttt{findOrCreateClient}, \texttt{getClientByEmail} & 2 \\
+\midrule
+\textbf{Total} & & \textbf{16} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+All methods return \texttt{SchedulingResult<T>}, defined as \texttt{TaskEither<SchedulingError, T>} from fp-ts~\cite{fp-ts}. The \texttt{SchedulingError} type is a discriminated union with seven variants (\texttt{AcuityError}, \texttt{CalComError}, \texttt{PaymentError}, \texttt{ValidationError}, \texttt{ReservationError}, \texttt{IdempotencyError}, \texttt{InfrastructureError}), each carrying a \texttt{\_tag} discriminant, a \texttt{code} string, and a human-readable \texttt{message}.
+
+\subsection{Dual Functional Programming Architecture}
+
+The system uses two functional programming libraries simultaneously. \textbf{Effect TS}~\cite{effect-ts} manages the browser middleware layer: generator-based programs, typed errors, dependency injection via \texttt{Context.Tag}, and resource lifecycle via \texttt{Layer.scoped} and \texttt{Effect.acquireRelease}. \textbf{fp-ts}~\cite{fp-ts} provides the adapter interface type (\texttt{TaskEither}) and composition operators (\texttt{pipe}, \texttt{chain}, \texttt{map}).
+
+The bridge between the two is the \texttt{runEffect} function, which converts Effect programs to fp-ts \texttt{TaskEither} by running the Effect to an \texttt{Exit} value and mapping typed failures via \texttt{toSchedulingError}.
+
+\subsection{CSS Selector Registry}
+
+The Acuity wizard uses Emotion CSS-in-JS with hash-unstable class names. The selector registry maps 30+ logical names to arrays of CSS selector candidates tried in order. The \texttt{resolveSelector} function returns the first match within a configurable timeout, providing resilience against minor DOM restructuring.
+
+%% ============================================================
+\section{Implementation}
+
+\subsection{Wizard Step Programs}
+
+The booking creation flow is seven Effect programs:
+
+\begin{enumerate}
+\item \textbf{Navigate} (537 LOC). Service selection, react-calendar navigation, time slot selection.
+\item \textbf{Fill Form} (359 LOC). Standard client fields plus React-controlled intake radio buttons (no \texttt{name}/\texttt{id} attributes---click \texttt{<label>} elements via Playwright's \texttt{locator().nth()} API).
+\item \textbf{Bypass Payment} (226 LOC). Gift certificate coupon application to bypass Square integration.
+\item \textbf{Submit} (168 LOC). Click confirmation with triple-detection polling (CSS selectors, URL patterns, body text).
+\item \textbf{Extract} (174 LOC). Confirmation page scraping via regex patterns.
+\item \textbf{Read Availability} (399 LOC). Calendar date reading with multi-month scanning.
+\item \textbf{Read Slots} (405 LOC). Time slot extraction with AM/PM to ISO conversion.
+\end{enumerate}
+
+\subsection{Modal Labs Deployment}
+
+The middleware deploys on Modal Labs~\cite{modal} using the official Playwright container image. Key configuration: 2 CPU cores, 2048~MB memory, \texttt{max\_inputs=1} per container (serialized requests prevent browser state conflicts), \texttt{min\_containers=1} for warm-pool latency. esbuild produces a single ESM bundle with all dependencies inlined except \texttt{playwright-core} (provided by the base image).
+
+\subsection{Feature-Flag Backend Selection}
+
+\begin{lstlisting}[language=TypeScript,caption={Backend resolution with hostname override}]
+function resolveBackend(): 'acuity' | 'homegrown' {
+  if (env.VERCEL_GIT_COMMIT_REF === 'dev/main')
+    return 'acuity';
+  return (env.SCHEDULING_BACKEND
+    as 'acuity' | 'homegrown') ?? 'acuity';
+}
+\end{lstlisting}
+
+The hostname override (\texttt{dev/main} forces Acuity) prevents accidental homegrown exposure on the beta environment while alpha runs the homegrown backend.
+
+\subsection{The Homegrown Replacement}
+
+The \texttt{HomegrownAdapter} implements all 16 methods via direct PostgreSQL queries through Drizzle ORM~\cite{drizzle} against Neon~\cite{neon} serverless. Design decisions include lazy database connections (factory function per-operation for Vercel cold starts), lazy schema imports (preventing ORM bundling in client code), and dual-ID resolution (UUID and legacy \texttt{acuityId} via format detection).
+
+\subsection{Availability Engine}
+
+A pure-function module with zero database dependency generates candidate slots at configurable intervals within business hours, filtering overlaps with occupied blocks. DST safety uses \texttt{Intl.DateTimeFormat} with named timezones. The module has 39 dedicated unit tests.
+
+%% ============================================================
+\section{Evaluation}
+
+\subsection{Legacy Automation Campaign}
+
+The browser automation layer was validated through a checkout campaign against 62 weeks of historical data (Table~\ref{tab:campaign}).
+
+\begin{table}[htbp]
+\caption{Checkout Automation Campaign Results}
+\label{tab:campaign}
+\centering
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Appointments verified & 604 \\
+Marked as paid & $\sim$245 \\
+Discounts applied & 10 \\
+Price corrections (bug remediation) & 2 \\
+Circuit breaker aborts & 0 \\
+Wrong-panel safety catches & 3 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The ``sticky panel'' bug---where the Acuity admin panel's React state management exhibited a race condition causing wrong appointment data to persist in the detail form---was discovered during this campaign and remediated via explicit DOM removal waits, form action URL verification, and dual pre/post verification in all action functions.
+
+\subsection{Test Coverage}
+
+\begin{table}[htbp]
+\caption{Test Suite Coverage}
+\label{tab:tests}
+\centering
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Component} & \textbf{Tests} \\
+\midrule
+Scheduling-kit (core) & 555 \\
+Availability engine & 39 \\
+Adapter bridge & 3 \\
+Application (root) & 282 \\
+\midrule
+\textbf{Total} & \textbf{879} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Performance Characteristics}
+
+\begin{table}[htbp]
+\caption{Operation Latency Comparison}
+\label{tab:perf}
+\centering
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Operation} & \textbf{Browser} & \textbf{PG} & \textbf{Speedup} \\
+\midrule
+Get services & $\sim$8s & $<$50ms & $\sim$160$\times$ \\
+Available dates & $\sim$18s & $<$100ms & $\sim$180$\times$ \\
+Time slots & $\sim$18s & $<$100ms & $\sim$180$\times$ \\
+Create booking & $\sim$45s & $<$200ms & $\sim$225$\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The two-order-of-magnitude performance gap underscores the importance of the strangler fig approach: the browser path exists to maintain service continuity during migration, not as a permanent architecture.
+
+\subsection{Adapter Interface Coverage}
+
+\begin{table}[htbp]
+\caption{Adapter Method Coverage}
+\label{tab:coverage}
+\centering
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Category} & \textbf{Wizard} & \textbf{Homegrown} \\
+\midrule
+Services (2) & 2/2 & 2/2 \\
+Providers (3) & 3/3 & 3/3 \\
+Availability (3) & 3/3 & 3/3 \\
+Reservations (2) & 0/2 & 2/2 \\
+Bookings (4) & 2/4 & 4/4 \\
+Clients (2) & 2/2 & 2/2 \\
+\midrule
+\textbf{Total (16)} & \textbf{12/16} & \textbf{16/16} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%% ============================================================
+\section{Discussion}
+
+\subsection{The Fragility Trade-off}
+
+Browser automation against a third-party SPA is inherently fragile. Acuity can change their React component structure or Emotion CSS naming at any time. Three mitigations make this acceptable: (a) isolation via adapter interface---only the wizard adapter breaks; (b) disposability by design---the wizard adapter is a migration bridge; (c) fallback chains in the selector registry absorb minor DOM restructuring.
+
+\subsection{Dual Effect System Complexity}
+
+Using both Effect TS and fp-ts introduces cognitive overhead. The \texttt{runEffect} bridge is a source of subtle bugs around \texttt{FiberFailure} wrappers and \texttt{Cause} trees. A future version might unify on Effect TS throughout.
+
+\subsection{Ethical and Legal Considerations}
+
+Automating a vendor's UI to access data the business owns raises ethical questions. The Terms of Service may prohibit automated access, even to one's own data. The approach should be understood as a temporary bridge during migration, not a permanent circumvention of vendor access controls.
+
+\subsection{Generalizability}
+
+The adapter interface + browser middleware + feature-flag routing architecture generalizes to any vertical SaaS vendor providing a web UI but restricting programmatic access: CRM, billing, inventory, email marketing, and other categories where small businesses accumulate data in vendor-controlled systems.
+
+%% ============================================================
+\section{Conclusion}
+
+We have presented a browser automation middleware architecture for zero-downtime migration away from a SaaS scheduling vendor that restricts API access. The architecture implements the strangler fig pattern with a 16-method adapter interface, an Effect TS browser middleware layer, and feature-flag-driven backend selection. The system has been deployed in production since March 2026, serving real appointment bookings across both backends simultaneously.
+
+The browser middleware layer is intentionally temporary---a bridge, not a destination. The strangler fig completes not with a dramatic cutover but with the quiet deletion of the browser automation code that made the migration possible.
+
+Future work includes completing the Acuity sunset, generalizing the middleware framework for other vertical SaaS categories, and investigating AI-assisted selector maintenance for longer-lived browser automation deployments.
+
+%% ============================================================
+\balance
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

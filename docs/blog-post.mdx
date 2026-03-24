@@ -1,0 +1,240 @@
+---
+title: "Why Pay for an API When You Are the API"
+date: "2026-03-24"
+description: "Playwright-based middleware for migrating off Acuity Scheduling with zero downtime, because sometimes the best API is the one you puppeteer into existence."
+tags:
+  - brute-force-functional-design
+  - effect-ts
+  - modal-labs
+  - no-api-no-problem
+  - work-harder-not-smarter
+  - playwright-in-production
+  - scheduling-lifecycle
+published: true
+category: "software"
+source_repo: "tinyland-inc/acuity-middleware"
+slug: "why-pay-for-an-api-when-you-are-the-api"
+---
+
+*Puppeteering a React SPA into submission because Acuity wants $150/month for the privilege of reading your own appointment data.*
+
+---
+
+It started with a 403.
+
+Not a dramatic 403- not the kind where you fat-fingered an auth header or forgot to rotate a key. The boring kind. The kind that means "we know you have the credentials, we know this is your data, but you haven't paid enough for the door we put in front of it." Acuity Scheduling gates their REST API behind the Powerhouse plan. Every endpoint. Every verb. HTTP 403 Forbidden, and the response body might as well say "please upgrade to read your own appointment history."
+
+I sat with this for about thirty seconds before the obvious question formed: the scheduling page at `MassageIthaca.as.me` loads appointments, availability, and time slots in a browser just fine. No paywall on the browser. The data is right there, rendered into DOM nodes, waiting to be read by anyone with a copy of Chrome and an opinion about CSS selectors.
+
+So I built an API out of a browser.
+
+---
+
+## The Shape of the Problem
+
+Jen runs a massage therapy practice in Ithaca, NY. TMD specialist, intraoral work, the kind of practitioner who books 604 appointments across 62 weeks and then discovers that the scheduling platform she's been paying for has been quietly accumulating a hostage situation. Her appointment data, her client records, her availability configuration- all locked behind a vendor UI with no programmatic export path.
+
+The standard advice is: migrate. Build your own thing. Accept two weeks of downtime and a spreadsheet-based data migration and a prayer that nothing falls through the cracks.
+
+That advice is bad.
+
+---
+
+## The Architecture Nobody Asked For
+
+Here is what I actually built:
+
+A 16-method `SchedulingAdapter` interface- services, providers, availability, reservations, bookings, clients- with every method returning `TaskEither<SchedulingError, T>` from fp-ts. Monadic composition all the way down. You cannot accidentally ignore an error because the type system won't let you access the success value without folding over the Either first.
+
+Then I implemented that interface twice.
+
+**Path A**: Drive the Acuity booking wizard with headless Playwright. Click through the service selection page. Navigate the react-calendar. Fill the client form. Apply a 100% gift certificate coupon to bypass Square's payment integration. Click "PAY & CONFIRM" at $0. Scrape the confirmation page.
+
+**Path B**: Direct PostgreSQL queries via Drizzle ORM against Neon serverless. Sub-100ms responses. No browser. No DOM. No opinions about CSS selectors.
+
+A feature flag chooses which path serves traffic:
+
+```typescript
+function resolveBackend(): 'acuity' | 'homegrown' {
+  if (env.VERCEL_GIT_COMMIT_REF === 'dev/main') return 'acuity';
+  return (env.SCHEDULING_BACKEND as 'acuity' | 'homegrown') ?? 'acuity';
+}
+```
+
+That's the strangler fig. Both backends run simultaneously. Alpha gets the homegrown PG adapter. Beta gets the Acuity wizard. The adapter interface means neither the booking page nor the admin calendar nor any API consumer knows or cares which backend answered their call.
+
+---
+
+## Effect TS and fp-ts Walk Into a Codebase
+
+I am not proud of this part.
+
+The adapter interface was defined in fp-ts terms before the browser middleware existed. `TaskEither` is the right type for "a lazy async computation that might fail"- it composes beautifully via `pipe`, `chain`, `map`. Consumers of the scheduling adapter get clean monadic composition with explicit error handling. Good.
+
+Then I needed to manage a Playwright browser lifecycle. Launch browser, create page, run 7 sequential wizard steps, guarantee cleanup even when step 4 throws because Acuity decided to rearrange their radio buttons this week. This is a resource management problem. fp-ts does not do resource management. Effect TS does.
+
+So the middleware layer uses Effect. Generator syntax, `Context.Tag` for dependency injection, `Layer.scoped` with `acquireRelease` for the browser process and page instance. Each wizard step is an Effect program that yields the `BrowserService` from context, wraps Playwright calls in `Effect.tryPromise`, and returns typed errors (`WizardStepError`, `SelectorError`, `CouponError`, `BrowserError`).
+
+The bridge between the two worlds is a function called `runEffect`:
+
+```typescript
+const runEffect = <A>(
+  effect: Effect.Effect<A, MiddlewareError>,
+): SchedulingResult<A> =>
+  () =>
+    Effect.runPromiseExit(effect.pipe(Effect.provide(layer))).then(
+      (exit) => {
+        if (Exit.isSuccess(exit)) return E.right(exit.value);
+        const failure = Cause.failureOption(exit.cause);
+        if (failure._tag === 'Some')
+          return E.left(toSchedulingError(failure.value));
+        return E.left(Errors.infrastructure('UNKNOWN', '...'));
+      },
+    );
+```
+
+That last paragraph is doing a tremendous amount of heavy lifting. We run the Effect to an `Exit` value (not a Promise- an Exit, so we get the typed error channel instead of a FiberFailure wrapper), extract the first failure from the Cause tree, convert it from Effect's tagged error type to fp-ts's discriminated union type via `toSchedulingError`, and wrap the whole thing in a thunk that returns `Promise<Either<SchedulingError, A>>`.
+
+Two functional effect systems. One bridge function. I have made my choices and I will live with them.
+
+---
+
+## Puppeteering a React SPA
+
+Acuity's booking wizard is a React SPA circa 2026 using Emotion CSS-in-JS. This means CSS class names are hash-generated (`css-1a2b3c4`) and unstable across deployments. The semantic class names are sparse. The form inputs for intake questions have no `name` or `id` attributes- they are purely React-controlled.
+
+The selector registry is a map from logical names to fallback chains:
+
+```typescript
+const Selectors = {
+  submitButton: [
+    'button[type="submit"]:not([disabled])',
+    'button.btn-primary:not([disabled])',
+    '[data-testid="submit-booking"]',
+    'button:has-text("Confirm")',
+    'button:has-text("Book")',
+    'button:has-text("Schedule")',
+    'button:has-text("PAY")',
+    'input[type="submit"]',
+  ],
+  // ... 29 more keys
+};
+```
+
+Eight fallback selectors for the submit button. Eight. Because Acuity renders different button markup depending on whether you have a coupon applied, whether payment is required, and apparently what phase the moon is in. The `resolveSelector` function tries each candidate in order with a timeout, and the first one that matches wins. This is not elegant. This is the kind of code that exists because the alternative is the scheduling page going down every time Acuity ships a frontend deploy.
+
+The intake radio buttons deserve special mention. They have no `name` attribute. No `id`. No `data-testid`. They are React-controlled inputs wrapped in `<label>` elements, and the only reliable way to interact with them is to click the label via Playwright's `locator().nth()` API, which dispatches OS-level mouse events that React's synthetic event delegation actually processes. I verified this against the live application on February 25th and 26th, 2026. (This cost me half a day to figure out, and I am not proud of it.)
+
+---
+
+## Modal Labs: Chromium in a Box
+
+You cannot run Chromium in a Vercel Lambda. Well- you can, if you use @sparticuz/chromium's stripped 50MB binary and accept the cold start penalty and the memory pressure and the 120-second timeout that makes booking creation a coin flip. I tried this path. It is not good.
+
+Modal Labs solves this by being a container runtime that does not pretend to be a function runtime. Under the hood it uses a FUSE-based lazy-loading filesystem- container images are treated as a 5 MB index, and file contents are served on demand through an OverlayFS layer. No size constraints. No stripped binaries. No praying that your dependencies fit in 50 megabytes of zip file. gVisor provides the isolation boundary (a userspace kernel, not a shared host kernel), which is the right security model for running untrusted browser content. The deployment:
+
+```python
+image = (
+    modal.Image.from_registry(
+        "mcr.microsoft.com/playwright:v1.58.2-noble"
+    )
+    .run_commands("rm -rf /usr/local/lib/nodejs", "...")
+    .run_commands("npm install -g corepack && corepack enable")
+    .copy_local_dir(".", "/app")
+    .run_commands("cd /app && pnpm install")
+    .run_commands(
+        "cd /app && npx esbuild src/middleware/server.ts "
+        "--bundle --platform=node --format=esm "
+        "--outfile=dist/server.mjs "
+        "--external:playwright-core"
+    )
+)
+```
+
+Start with Microsoft's official Playwright image (which includes Chromium). Swap Node 24 for Node 22 LTS. Install pnpm. Bundle everything into a single `server.mjs` with esbuild- all dependencies inlined except `playwright-core`, which the base image already provides.
+
+The runtime config is 2 CPU cores, 2048 MB memory, `max_inputs=1` per container. That last bit is critical. Each browser session has page-level state- navigation history, cookies, form data. Concurrent requests on the same page instance would race. Modal scales horizontally by spawning additional containers, each with its own isolated browser. `min_containers=1` keeps one warm for low-latency reads.
+
+The result is a standalone HTTP server at a Modal URL that accepts scheduling API calls and translates them into wizard automation. The `RemoteWizardAdapter` in the SvelteKit app is just an HTTP client:
+
+```
+Client -> SvelteKit -> RemoteWizardAdapter -> Modal -> Playwright -> Acuity SPA
+```
+
+Five hops to read an appointment calendar. This is not a permanent architecture.
+
+---
+
+## The Sticky Panel Bug
+
+(And now for the war story.)
+
+I was running the checkout automation- 604 appointments across 62 weeks, marking unpaid appointments as paid in the Acuity admin panel. The automation was clicking through appointments one by one, opening the side detail panel, checking the "isPaid" checkbox, saving.
+
+On week 2025-02-10, appointment 1413986492 (Tess Legler) did something interesting. When the code clicked the *next* appointment (Liz Hartman), the detail panel still showed Tess Legler's data. The React SPA's state management had a race condition- the React state updated (showing a new panel), but the PHP form data from the previous appointment persisted in the DOM.
+
+The automation did not know this. It read the old panel's price ($100), applied the $30 Liz Hartman discount (setting it to $70), and saved. But the form action URL still pointed to Tess Legler. So Tess Legler got her price changed to $70, and Liz Hartman was untouched.
+
+Same mechanism hit Coleen Cleeve on the same week. $160 became $130.
+
+Three appointments corrupted by a vendor's React state management bug, discovered only because I was auditing the output logs afterward. The fix was three changes:
+
+1. `closeAppointmentDetail()` now waits for `form#appointment-details-page` to actually disappear from the DOM. Not "click close and hope." Wait until the element is gone.
+2. `openAppointmentDetail()` now parses the form action URL and verifies it contains the expected appointment ID. Wrong ID? Close. Wait. Retry once.
+3. All action functions call `verifyPanelId()` both before AND after entering edit mode. React may swap panels when you click the edit button.
+
+I then wrote three targeted fix scripts to correct the specific wrong-priced appointments. Each script navigates to the affected week, opens the specific appointment by ID, verifies the current price, applies the correction, and verifies the result. The scripts read like legal depositions because at that point I was not trusting any DOM state that I had not personally interrogated twice.
+
+---
+
+## The Migration So Far
+
+```
+| Operation          | Browser Middleware | Homegrown (PG) | Speedup   |
+|--------------------|-------------------|----------------|-----------|
+| Get services       | ~8s (DOM scrape)  | <50ms          | ~160x     |
+| Get available dates| ~15-20s (wizard)  | <100ms         | ~200x     |
+| Get time slots     | ~15-20s (wizard)  | <100ms         | ~200x     |
+| Create booking     | ~30-60s (wizard)  | <200ms         | ~300x     |
+```
+
+Two orders of magnitude. The browser path exists to maintain service continuity during migration. The homegrown adapter has full 16/16 method coverage. The wizard adapter has 12/16 (no `getBooking`, `cancelBooking`, or slot reservations through the public UI).
+
+879 tests across the scheduling stack. 39 dedicated availability engine tests covering slot generation, DST transitions, overlap detection, buffer time, and the kind of edge cases that make you question whether `America/New_York` was a deliberate choice by the IANA or a cosmic prank.
+
+Both backends have been running simultaneously in production since March 2026. The alpha environment serves real bookings through the homegrown PG adapter. The beta environment serves through the Acuity wizard. Nobody has noticed the difference, which is the whole point.
+
+---
+
+## What This Actually Is
+
+It's the strangler fig pattern applied to a third-party SaaS dependency.
+
+The scheduling adapter interface is the stable contract. The browser middleware is the vine growing around the tree. The homegrown PostgreSQL backend is the new tree. When the vine has fully covered the old tree- when the homegrown backend handles every operation that the business needs- the middleware gets deleted. Not deprecated. Not archived. Deleted. It was never meant to survive.
+
+The adapter interface stays. The availability engine stays. The booking schema, the email templates, the admin calendar, the payment integration- all of that stays. The browser automation was the scaffolding. You don't preserve scaffolding.
+
+Modal and Playwright and the selector registry and the coupon bypass and the `runEffect` bridge and the entire elaborate machinery for puppeteering a React SPA into pretending to be a REST API- all of it was built to be thrown away. That is the design. That is the point.
+
+Why pay for an API to rebuild a closed-source wizard when you *are* a wizard?
+
+---
+
+## The Stack
+
+| Layer | Technology | Purpose |
+|-------|-----------|---------|
+| Adapter interface | fp-ts `TaskEither` | 16-method contract, monadic errors |
+| Browser middleware | Effect TS + Playwright | Wizard step programs, resource management |
+| Container runtime | Modal Labs | Serverless Chromium, warm pools |
+| Selector registry | CSS fallback chains | DOM resilience against Emotion hash instability |
+| Homegrown backend | Drizzle ORM + Neon PG | Direct queries, sub-100ms |
+| Availability engine | Pure functions + Intl | DST-safe slot generation, 39 tests |
+| Feature flag | `SCHEDULING_BACKEND` env var | Strangler fig routing |
+| Payment bypass | Gift certificate coupon | Decouples scheduling from Square |
+
+Source: [tinyland-inc/acuity-middleware](https://github.com/tinyland-inc/acuity-middleware)
+
+---
+
+-Jess

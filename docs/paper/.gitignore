@@ -1,0 +1,14 @@
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.bbl
+*.blg
+*.toc
+*.nav
+*.snm
+*.vrb
+# PDF is gitignored locally but force-added by CI on main
+*.pdf
