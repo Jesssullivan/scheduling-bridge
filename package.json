@@ -26,7 +26,9 @@
     "dev": "tsx src/middleware/server.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "paper:build": "cd docs/paper && tectonic acuity-middleware-paper.tex",
+    "paper:dev": "node docs/paper/watch.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.58.1",
