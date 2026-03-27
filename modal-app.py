@@ -45,10 +45,15 @@ image = (
         "cd /app && pnpm install --no-frozen-lockfile",
         "cd /app && pnpm add esbuild",
         # Bundle middleware server to a single JS file with all deps inlined
+        # External: playwright (runtime dep), tinyland-auth-pg (not used by middleware)
         "cd /app && npx esbuild src/middleware/server.ts"
         " --bundle --platform=node --format=esm --outfile=dist/server.mjs"
         " --external:playwright-core --external:playwright"
-        " --external:@playwright/test",
+        " --external:@playwright/test"
+        " --external:@tummycrypt/tinyland-auth-pg"
+        " --external:@tummycrypt/tinyland-auth-pg/*"
+        " --external:@neondatabase/serverless"
+        " --external:drizzle-orm --external:drizzle-orm/*",
         "ls -la /app/dist/server.mjs",
     )
 )
