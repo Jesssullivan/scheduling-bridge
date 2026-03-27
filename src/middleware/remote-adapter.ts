@@ -19,8 +19,7 @@
  * ```
  */
 
-import * as TE from 'fp-ts/TaskEither';
-import { pipe } from 'fp-ts/function';
+import { Effect } from 'effect';
 import type { SchedulingAdapter } from '../adapters/types.js';
 import type {
 	Booking,
@@ -77,8 +76,8 @@ const makeRequest = <T>(
 	method: 'GET' | 'POST',
 	body?: unknown,
 ): SchedulingResult<T> =>
-	TE.tryCatch(
-		async () => {
+	Effect.tryPromise({
+		try: async () => {
 			const url = `${config.baseUrl}${path}`;
 			const headers: Record<string, string> = {
 				'Content-Type': 'application/json',
@@ -113,7 +112,7 @@ const makeRequest = <T>(
 
 			return json.data as T;
 		},
-		(e): SchedulingError => {
+		catch: (e): SchedulingError => {
 			if (e instanceof Error && 'tag' in e) {
 				const tagged = e as Error & { tag: string; code: string };
 				return mapRemoteError(tagged.tag, tagged.code, tagged.message);
@@ -126,7 +125,7 @@ const makeRequest = <T>(
 				`Middleware server error: ${e instanceof Error ? e.message : String(e)}`,
 			);
 		},
-	);
+	});
 
 const mapRemoteError = (tag: string, code: string, message: string): SchedulingError => {
 	switch (tag) {
@@ -165,7 +164,7 @@ export const createRemoteWizardAdapter = (config: RemoteAdapterConfig): Scheduli
 
 	getServices: () => {
 		if (config.services) {
-			return TE.right([...config.services]);
+			return Effect.succeed([...config.services]);
 		}
 		return makeRequest<Service[]>(config, '/services', 'GET');
 	},
@@ -174,14 +173,14 @@ export const createRemoteWizardAdapter = (config: RemoteAdapterConfig): Scheduli
 		if (config.services) {
 			const found = config.services.find((s) => s.id === serviceId);
 			return found
-				? TE.right(found)
-				: TE.left(Errors.acuity('NOT_FOUND', `Service ${serviceId} not found`));
+				? Effect.succeed(found)
+				: Effect.fail(Errors.acuity('NOT_FOUND', `Service ${serviceId} not found`));
 		}
 		return makeRequest<Service>(config, `/services/${encodeURIComponent(serviceId)}`, 'GET');
 	},
 
 	getProviders: () =>
-		TE.right([{
+		Effect.succeed([{
 			id: '1',
 			name: 'Default Provider',
 			email: 'provider@example.com',
@@ -190,7 +189,7 @@ export const createRemoteWizardAdapter = (config: RemoteAdapterConfig): Scheduli
 		}]),
 
 	getProvider: () =>
-		TE.right({
+		Effect.succeed({
 			id: '1',
 			name: 'Default Provider',
 			email: 'provider@example.com',
@@ -199,7 +198,7 @@ export const createRemoteWizardAdapter = (config: RemoteAdapterConfig): Scheduli
 		}),
 
 	getProvidersForService: () =>
-		TE.right([{
+		Effect.succeed([{
 			id: '1',
 			name: 'Default Provider',
 			email: 'provider@example.com',
@@ -237,9 +236,9 @@ export const createRemoteWizardAdapter = (config: RemoteAdapterConfig): Scheduli
 	// ---------------------------------------------------------------------------
 
 	createReservation: () =>
-		TE.left(Errors.reservation('BLOCK_FAILED', 'Reservations not supported by remote wizard adapter')),
+		Effect.fail(Errors.reservation('BLOCK_FAILED', 'Reservations not supported by remote wizard adapter')),
 
-	releaseReservation: () => TE.right(undefined),
+	releaseReservation: () => Effect.succeed(undefined),
 
 	// ---------------------------------------------------------------------------
 	// Write operations - proxied to remote wizard
@@ -260,20 +259,20 @@ export const createRemoteWizardAdapter = (config: RemoteAdapterConfig): Scheduli
 		}),
 
 	getBooking: () =>
-		TE.left(Errors.acuity('NOT_IMPLEMENTED', 'Get booking not yet supported via wizard')),
+		Effect.fail(Errors.acuity('NOT_IMPLEMENTED', 'Get booking not yet supported via wizard')),
 
 	cancelBooking: () =>
-		TE.left(Errors.acuity('NOT_IMPLEMENTED', 'Cancel not yet supported via wizard')),
+		Effect.fail(Errors.acuity('NOT_IMPLEMENTED', 'Cancel not yet supported via wizard')),
 
 	rescheduleBooking: () =>
-		TE.left(Errors.acuity('NOT_IMPLEMENTED', 'Reschedule not yet supported via wizard')),
+		Effect.fail(Errors.acuity('NOT_IMPLEMENTED', 'Reschedule not yet supported via wizard')),
 
 	// ---------------------------------------------------------------------------
 	// Client - pass-through
 	// ---------------------------------------------------------------------------
 
 	findOrCreateClient: (client) =>
-		TE.right({ id: `local-${client.email}`, isNew: true }),
+		Effect.succeed({ id: `local-${client.email}`, isNew: true }),
 
-	getClientByEmail: () => TE.right(null),
+	getClientByEmail: () => Effect.succeed(null),
 });

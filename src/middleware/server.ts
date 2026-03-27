@@ -31,7 +31,7 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Effect, Scope } from 'effect';
-import * as E from 'fp-ts/Either';
+import { Effect, Exit, Cause, Scope } from 'effect';
 import { createScraperAdapter, type ScraperConfig } from '../adapters/acuity-scraper.js';
 import { BrowserService, BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from './browser-service.js';
 import { toSchedulingError, type MiddlewareError } from './errors.js';
@@ -133,17 +133,37 @@ const parseBody = async (req: IncomingMessage): Promise<unknown> => {
 
 const layer = BrowserServiceLive(browserConfig);
 
+type Result<A> = { ok: true; value: A } | { ok: false; error: SchedulingError };
+
 const runEffect = async <A>(
 	effect: Effect.Effect<A, MiddlewareError, BrowserService | Scope.Scope>,
-): Promise<E.Either<SchedulingError, A>> => {
-	try {
-		const result = await Effect.runPromise(
-			Effect.scoped(effect.pipe(Effect.provide(layer))),
-		);
-		return E.right(result);
-	} catch (e) {
-		return E.left(toSchedulingError(e as MiddlewareError));
+): Promise<Result<A>> => {
+	const exit = await Effect.runPromiseExit(
+		Effect.scoped(effect.pipe(Effect.provide(layer))),
+	);
+	if (Exit.isSuccess(exit)) {
+		return { ok: true, value: exit.value };
 	}
+	const failure = Cause.failureOption(exit.cause);
+	if (failure._tag === 'Some') {
+		return { ok: false, error: toSchedulingError(failure.value) };
+	}
+	return { ok: false, error: { _tag: 'InfrastructureError', code: 'UNKNOWN', message: Cause.pretty(exit.cause) } };
+};
+
+/** Run a SchedulingResult (Effect) and return Result */
+const runSchedulingEffect = async <A>(
+	effect: Effect.Effect<A, SchedulingError>,
+): Promise<Result<A>> => {
+	const exit = await Effect.runPromiseExit(effect);
+	if (Exit.isSuccess(exit)) {
+		return { ok: true, value: exit.value };
+	}
+	const failure = Cause.failureOption(exit.cause);
+	if (failure._tag === 'Some') {
+		return { ok: false, error: failure.value };
+	}
+	return { ok: false, error: { _tag: 'InfrastructureError', code: 'UNKNOWN', message: Cause.pretty(exit.cause) } };
 };
 
 // =============================================================================
@@ -220,20 +240,20 @@ const handleGetServices = async (_req: IncomingMessage, res: ServerResponse) => 
 
 	// 3. Deprecated fallback: DOM scraper (may return [] — Acuity is React SPA)
 	console.warn('[services] falling back to DOM scraper (deprecated)');
-	const result = await getScraper().getServices()();
-	if (E.isLeft(result)) return sendError(res, 500, result.left);
-	if (result.right.length === 0) {
+	const result = await runSchedulingEffect(getScraper().getServices());
+	if (!result.ok) return sendError(res, 500, result.error);
+	if (result.value.length === 0) {
 		console.error('[services] all sources exhausted — returning empty []');
 	}
-	cachedServices = result.right;
-	sendSuccess(res, result.right);
+	cachedServices = result.value;
+	sendSuccess(res, result.value);
 };
 
 const handleGetService = async (serviceId: string, res: ServerResponse) => {
 	if (!cachedServices) {
 		const all = await getScraper().getServices()();
-		if (E.isLeft(all)) return sendError(res, 500, all.left);
-		cachedServices = all.right;
+		if (!all.ok) return sendError(res, 500, all.error);
+		cachedServices = all.value;
 	}
 	const found = cachedServices.find((s) => s.id === serviceId);
 	if (!found) {
@@ -259,15 +279,15 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) =
 		}),
 	);
 
-	if (E.isLeft(result)) {
-		const err = result.left;
+	if (!result.ok) {
+		const err = result.error;
 		console.error(`[availability/dates] error:`, err);
 		return sendJson(res, 500, {
 			success: false,
 			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Availability lookup failed' },
 		});
 	}
-	sendSuccess(res, result.right);
+	sendSuccess(res, result.value);
 };
 
 const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) => {
@@ -282,15 +302,15 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) =
 		}),
 	);
 
-	if (E.isLeft(result)) {
-		const err = result.left;
+	if (!result.ok) {
+		const err = result.error;
 		console.error(`[availability/slots] error:`, err);
 		return sendJson(res, 500, {
 			success: false,
 			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot lookup failed' },
 		});
 	}
-	sendSuccess(res, result.right);
+	sendSuccess(res, result.value);
 };
 
 const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
@@ -305,14 +325,14 @@ const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
 		}),
 	);
 
-	if (E.isLeft(result)) {
-		const err = result.left;
+	if (!result.ok) {
+		const err = result.error;
 		return sendJson(res, 500, {
 			success: false,
 			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot check failed' },
 		});
 	}
-	const available = result.right.some((s: { datetime: string; available: boolean }) =>
+	const available = result.value.some((s: { datetime: string; available: boolean }) =>
 		s.datetime === body.datetime && s.available
 	);
 	sendSuccess(res, available);
@@ -339,8 +359,8 @@ const handleCreateBooking = async (req: IncomingMessage, res: ServerResponse) =>
 		}),
 	);
 
-	if (E.isLeft(result)) return sendError(res, 500, result.left);
-	sendSuccess(res, result.right);
+	if (!result.ok) return sendError(res, 500, result.error);
+	sendSuccess(res, result.value);
 };
 
 const handleCreateBookingWithPayment = async (req: IncomingMessage, res: ServerResponse) => {
@@ -386,8 +406,8 @@ const handleCreateBookingWithPayment = async (req: IncomingMessage, res: ServerR
 		}),
 	);
 
-	if (E.isLeft(result)) return sendError(res, 500, result.left);
-	sendSuccess(res, result.right);
+	if (!result.ok) return sendError(res, 500, result.error);
+	sendSuccess(res, result.value);
 };
 
 // =============================================================================

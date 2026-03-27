@@ -16,10 +16,7 @@
  * fp-ts (pipeline/adapter layer).
  */
 
-import { Effect, Scope, Exit, Cause } from 'effect';
-import * as E from 'fp-ts/Either';
-import * as TE from 'fp-ts/TaskEither';
-import { pipe } from 'fp-ts/function';
+import { Effect, pipe } from 'effect';
 
 import type { SchedulingAdapter } from '../adapters/types.js';
 import { createScraperAdapter, type ScraperConfig } from '../adapters/acuity-scraper.js';
@@ -209,34 +206,15 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 
 	const layer = BrowserServiceLive(browserConfig);
 
-	// Helper: run an Effect program and convert to fp-ts TaskEither.
-	// Uses runPromiseExit to properly access the typed error E without
-	// dealing with FiberFailure wrappers from runPromise.
-	const runEffect = <A>(
+	// Provide browser layer and map MiddlewareError → SchedulingError
+	const runWizard = <A>(
 		effect: Effect.Effect<A, MiddlewareError>,
 	): SchedulingResult<A> =>
-		() =>
-			Effect.runPromiseExit(effect.pipe(Effect.provide(layer))).then(
-				(exit) => {
-					if (Exit.isSuccess(exit)) {
-						return E.right(exit.value) as E.Either<never, A>;
-					}
-					// Extract the first failure from the cause
-					const failure = Cause.failureOption(exit.cause);
-					if (failure._tag === 'Some') {
-						return E.left(toSchedulingError(failure.value));
-					}
-					// Defect (unexpected error) — convert cause to string
-					const pretty = Cause.pretty(exit.cause);
-					console.error('[runEffect] Defect:', pretty);
-					return E.left(
-						Errors.infrastructure(
-							'UNKNOWN',
-							`Effect defect: ${pretty}`,
-						),
-					);
-				},
-			);
+		pipe(
+			Effect.scoped(effect),
+			Effect.provide(layer),
+			Effect.mapError(toSchedulingError),
+		);
 
 	// Static services from config (avoids browser launch for service listing)
 	const staticServices: Service[] | null = config.services ? [...config.services] : null;
@@ -268,13 +246,13 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 
 		getServices: () => {
 			if (staticServices) {
-				return TE.right(staticServices);
+				return Effect.succeed(staticServices);
 			}
 			// Fallback to scraper (may fail with broken selectors)
 			return pipe(
 				scraper.getServices(),
-				TE.tap((services) =>
-					TE.fromIO(() => {
+				Effect.tap((services) =>
+					Effect.sync(() => {
 						cachedServices = services;
 					}),
 				),
@@ -285,23 +263,23 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 			if (cachedServices) {
 				const found = cachedServices.find((s) => s.id === serviceId);
 				return found
-					? TE.right(found)
-					: TE.left(Errors.acuity('NOT_FOUND', `Service ${serviceId} not found`));
+					? Effect.succeed(found)
+					: Effect.fail(Errors.acuity('NOT_FOUND', `Service ${serviceId} not found`));
 			}
 			return pipe(
 				scraper.getServices(),
-				TE.chain((services) => {
+				Effect.flatMap((services) => {
 					cachedServices = services;
 					const found = services.find((s) => s.id === serviceId);
 					return found
-						? TE.right(found)
-						: TE.left(Errors.acuity('NOT_FOUND', `Service ${serviceId} not found`));
+						? Effect.succeed(found)
+						: Effect.fail(Errors.acuity('NOT_FOUND', `Service ${serviceId} not found`));
 				}),
 			);
 		},
 
 		getProviders: () =>
-			TE.right([
+			Effect.succeed([
 				{
 					id: '1',
 					name: 'Default Provider',
@@ -312,7 +290,7 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 			]),
 
 		getProvider: () =>
-			TE.right({
+			Effect.succeed({
 				id: '1',
 				name: 'Default Provider',
 				email: 'provider@example.com',
@@ -321,7 +299,7 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 			}),
 
 		getProvidersForService: () =>
-			TE.right([
+			Effect.succeed([
 				{
 					id: '1',
 					name: 'Default Provider',
@@ -334,11 +312,11 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		getAvailableDates: (params) => {
 			const serviceName = resolveServiceName(params.serviceId);
 			if (!serviceName) {
-				return TE.left(
+				return Effect.fail(
 					Errors.acuity('NOT_FOUND', `Cannot resolve service name for ID ${params.serviceId}. Provide static services in config.`),
 				);
 			}
-			return runEffect(
+			return runWizard(
 				Effect.scoped(
 					readAvailableDates({
 						serviceName,
@@ -353,11 +331,11 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		getAvailableSlots: (params) => {
 			const serviceName = resolveServiceName(params.serviceId);
 			if (!serviceName) {
-				return TE.left(
+				return Effect.fail(
 					Errors.acuity('NOT_FOUND', `Cannot resolve service name for ID ${params.serviceId}. Provide static services in config.`),
 				);
 			}
-			return runEffect(
+			return runWizard(
 				Effect.scoped(
 					readTimeSlots({
 						serviceName,
@@ -370,12 +348,12 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		checkSlotAvailability: (params) => {
 			const serviceName = resolveServiceName(params.serviceId);
 			if (!serviceName) {
-				return TE.left(
+				return Effect.fail(
 					Errors.acuity('NOT_FOUND', `Cannot resolve service name for ID ${params.serviceId}`),
 				);
 			}
 			return pipe(
-				runEffect(
+				runWizard(
 					Effect.scoped(
 						readTimeSlots({
 							serviceName,
@@ -383,7 +361,7 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 						}),
 					) as Effect.Effect<Array<{ datetime: string; available: boolean }>, MiddlewareError>,
 				),
-				TE.map((slots) => {
+				Effect.map((slots) => {
 					// Slots return local time (no TZ suffix: "2026-03-07T14:00:00").
 					// Request datetime should also be local, but normalize both by
 					// stripping any trailing Z or offset for comparison.
@@ -399,14 +377,14 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		// -----------------------------------------------------------------------
 
 		createReservation: () =>
-			TE.left(
+			Effect.fail(
 				Errors.reservation(
 					'BLOCK_FAILED',
 					'Reservations not supported by wizard adapter',
 				),
 			),
 
-		releaseReservation: () => TE.right(undefined),
+		releaseReservation: () => Effect.succeed(undefined),
 
 		// -----------------------------------------------------------------------
 		// Write operations - Effect TS middleware
@@ -414,7 +392,7 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 
 		createBooking: (request) => {
 			const serviceName = cachedServices?.find((s) => s.id === request.serviceId)?.name;
-			return runEffect(
+			return runWizard(
 				createBookingProgram(request, serviceName) as Effect.Effect<Booking, MiddlewareError>,
 			);
 		},
@@ -423,7 +401,7 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 			const coupon = config.couponCode ?? generateCouponCode(paymentRef, paymentProcessor);
 			const service = cachedServices?.find((s) => s.id === request.serviceId);
 
-			return runEffect(
+			return runWizard(
 				createBookingWithPaymentRefProgram(
 					request,
 					paymentRef,
@@ -435,13 +413,13 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		},
 
 		getBooking: () =>
-			TE.left(Errors.acuity('NOT_IMPLEMENTED', 'Get booking not yet supported via wizard')),
+			Effect.fail(Errors.acuity('NOT_IMPLEMENTED', 'Get booking not yet supported via wizard')),
 
 		cancelBooking: () =>
-			TE.left(Errors.acuity('NOT_IMPLEMENTED', 'Cancel not yet supported via wizard')),
+			Effect.fail(Errors.acuity('NOT_IMPLEMENTED', 'Cancel not yet supported via wizard')),
 
 		rescheduleBooking: () =>
-			TE.left(
+			Effect.fail(
 				Errors.acuity('NOT_IMPLEMENTED', 'Reschedule not yet supported via wizard'),
 			),
 
@@ -450,8 +428,8 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		// -----------------------------------------------------------------------
 
 		findOrCreateClient: (client) =>
-			TE.right({ id: `local-${client.email}`, isNew: true }),
+			Effect.succeed({ id: `local-${client.email}`, isNew: true }),
 
-		getClientByEmail: () => TE.right(null),
+		getClientByEmail: () => Effect.succeed(null),
 	};
 };
