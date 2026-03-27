@@ -31,10 +31,9 @@
     "paper:dev": "node docs/paper/watch.mjs"
   },
   "dependencies": {
-    "@tummycrypt/scheduling-kit": "^0.1.0",
+    "@tummycrypt/scheduling-kit": "^0.2.0",
     "playwright-core": "^1.58.1",
-    "effect": "^3.19.14",
-    "fp-ts": "^2.16.9"
+    "effect": "^3.19.14"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
