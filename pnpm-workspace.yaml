@@ -1,0 +1,2 @@
+overrides:
+  '@tummycrypt/scheduling-kit': link:../scheduling-kit

@@ -49,6 +49,12 @@ export interface RemoteAdapterConfig {
 	readonly timeout?: number;
 	/** Coupon code for payment bypass */
 	readonly couponCode?: string;
+	/**
+	 * Static service catalog. When provided, getServices()/getService() return
+	 * from this list without hitting the remote server. Avoids dependency on
+	 * the middleware's DOM scraper for service listing.
+	 */
+	readonly services?: readonly Service[];
 }
 
 // =============================================================================
@@ -157,11 +163,22 @@ export const createRemoteWizardAdapter = (config: RemoteAdapterConfig): Scheduli
 	// Read operations - proxied to remote scraper
 	// ---------------------------------------------------------------------------
 
-	getServices: () =>
-		makeRequest<Service[]>(config, '/services', 'GET'),
+	getServices: () => {
+		if (config.services) {
+			return TE.right([...config.services]);
+		}
+		return makeRequest<Service[]>(config, '/services', 'GET');
+	},
 
-	getService: (serviceId) =>
-		makeRequest<Service>(config, `/services/${encodeURIComponent(serviceId)}`, 'GET'),
+	getService: (serviceId) => {
+		if (config.services) {
+			const found = config.services.find((s) => s.id === serviceId);
+			return found
+				? TE.right(found)
+				: TE.left(Errors.acuity('NOT_FOUND', `Service ${serviceId} not found`));
+		}
+		return makeRequest<Service>(config, `/services/${encodeURIComponent(serviceId)}`, 'GET');
+	},
 
 	getProviders: () =>
 		TE.right([{
@@ -190,14 +207,30 @@ export const createRemoteWizardAdapter = (config: RemoteAdapterConfig): Scheduli
 			timezone: 'America/New_York',
 		}]),
 
-	getAvailableDates: (params) =>
-		makeRequest<AvailableDate[]>(config, '/availability/dates', 'POST', params),
+	getAvailableDates: (params) => {
+		// Resolve service name for wizard navigation (Acuity navigates by name, not ID)
+		const serviceName = config.services?.find((s) => s.id === params.serviceId)?.name;
+		return makeRequest<AvailableDate[]>(config, '/availability/dates', 'POST', {
+			...params,
+			serviceName: serviceName ?? params.serviceId,
+		});
+	},
 
-	getAvailableSlots: (params) =>
-		makeRequest<TimeSlot[]>(config, '/availability/slots', 'POST', params),
+	getAvailableSlots: (params) => {
+		const serviceName = config.services?.find((s) => s.id === params.serviceId)?.name;
+		return makeRequest<TimeSlot[]>(config, '/availability/slots', 'POST', {
+			...params,
+			serviceName: serviceName ?? params.serviceId,
+		});
+	},
 
-	checkSlotAvailability: (params) =>
-		makeRequest<boolean>(config, '/availability/check', 'POST', params),
+	checkSlotAvailability: (params) => {
+		const serviceName = config.services?.find((s) => s.id === params.serviceId)?.name;
+		return makeRequest<boolean>(config, '/availability/check', 'POST', {
+			...params,
+			serviceName: serviceName ?? params.serviceId,
+		});
+	},
 
 	// ---------------------------------------------------------------------------
 	// Reservation - not supported (pipeline has graceful fallback)

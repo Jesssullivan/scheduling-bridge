@@ -25,3 +25,13 @@ export {
 	type ReadSlotsParams,
 	type SlotResult,
 } from './read-slots.js';
+export {
+	extractBusinessFromPage,
+	extractBusinessFromHtml,
+	extractBusinessServices,
+	fetchBusinessData,
+	businessToServices,
+	type AcuityAppointmentType,
+	type AcuityCalendar,
+	type AcuityBusinessData,
+} from './extract-business.js';

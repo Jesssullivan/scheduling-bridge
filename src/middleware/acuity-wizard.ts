@@ -197,6 +197,7 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		return createRemoteWizardAdapter({
 			...config.remote,
 			couponCode: config.remote.couponCode ?? config.couponCode,
+			services: config.services,
 		});
 	}
 

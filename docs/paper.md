@@ -4,7 +4,7 @@
 Tinyland Inc.
 
 ---
-
+[acuity-middleware-paper.tex](paper/acuity-middleware-paper.tex)
 ## Abstract
 
 Small-business SaaS platforms create vendor lock-in through API paywalls and proprietary data formats. When the vendor restricts programmatic access to premium pricing tiers, businesses face a choice between paying for API access they should already have or accepting that their own data is held hostage. We present a browser automation middleware architecture that implements a standardized 16-method scheduling adapter interface by puppeteering the vendor's public-facing web UI via headless Playwright, deployed as a containerized service on Modal Labs. A feature-flag-driven backend selector enables zero-downtime migration from the legacy vendor to a homegrown PostgreSQL backend, implementing the strangler fig pattern against a third-party SaaS dependency. The system has been deployed in production since March 2026, processing real appointment bookings across both backends simultaneously. We report on the architecture, the dual functional programming approach (Effect TS for browser lifecycle management, fp-ts for adapter composition), the reliability challenges of DOM automation against a React SPA with Emotion CSS, and the lessons learned from automating 604 legacy appointments across 62 weeks of calendar data. The middleware replaces 8 blocked REST API endpoints through DOM interaction alone, demonstrating that browser automation is a viable -- if intentionally temporary -- bridge pattern for escaping SaaS vendor lock-in.

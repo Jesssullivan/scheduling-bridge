@@ -43,6 +43,10 @@ import {
 	submitBooking,
 	extractConfirmation,
 	toBooking,
+	readAvailableDates,
+	readTimeSlots,
+	fetchBusinessData,
+	businessToServices,
 } from './steps/index.js';
 import type {
 	Booking,
@@ -157,6 +161,23 @@ const getScraper = () => {
 
 let cachedServices: Service[] | null = null;
 
+// Static services from SERVICES_JSON env var (avoids scraper dependency)
+const STATIC_SERVICES: Service[] | null = (() => {
+	const raw = process.env.SERVICES_JSON;
+	if (!raw) return null;
+	try {
+		return JSON.parse(raw) as Service[];
+	} catch (e) {
+		console.error('[middleware-server] Failed to parse SERVICES_JSON:', e);
+		return null;
+	}
+})();
+
+if (STATIC_SERVICES) {
+	cachedServices = STATIC_SERVICES;
+	console.log(`[middleware-server] Loaded ${STATIC_SERVICES.length} static services from SERVICES_JSON`);
+}
+
 // =============================================================================
 // ROUTE HANDLERS
 // =============================================================================
@@ -167,14 +188,43 @@ const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
 		baseUrl: ACUITY_BASE_URL,
 		hasCoupon: !!COUPON_CODE,
 		headless: browserConfig.headless,
+		staticServices: STATIC_SERVICES ? STATIC_SERVICES.length : 0,
 		timestamp: new Date().toISOString(),
 	});
 };
 
 
 const handleGetServices = async (_req: IncomingMessage, res: ServerResponse) => {
+	// 1. Prefer static services from env (always reliable, no network needed)
+	if (STATIC_SERVICES) {
+		console.log('[services] source: SERVICES_JSON env');
+		cachedServices = STATIC_SERVICES;
+		return sendSuccess(res, STATIC_SERVICES);
+	}
+
+	// 2. Extract from BUSINESS object (HTTP fetch + regex, no browser)
+	try {
+		const business = await fetchBusinessData(ACUITY_BASE_URL);
+		if (business) {
+			const services = businessToServices(business);
+			if (services.length > 0) {
+				console.log(`[services] source: BUSINESS object (${services.length} services)`);
+				cachedServices = services;
+				return sendSuccess(res, services);
+			}
+			console.warn('[services] BUSINESS object found but 0 active services');
+		}
+	} catch (e) {
+		console.warn('[services] BUSINESS extraction failed:', e instanceof Error ? e.message : e);
+	}
+
+	// 3. Deprecated fallback: DOM scraper (may return [] — Acuity is React SPA)
+	console.warn('[services] falling back to DOM scraper (deprecated)');
 	const result = await getScraper().getServices()();
 	if (E.isLeft(result)) return sendError(res, 500, result.left);
+	if (result.right.length === 0) {
+		console.error('[services] all sources exhausted — returning empty []');
+	}
 	cachedServices = result.right;
 	sendSuccess(res, result.right);
 };
@@ -196,28 +246,75 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 };
 
 const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) => {
-	const body = (await parseBody(req)) as { serviceId: string; startDate?: string };
-	const result = await getScraper().getAvailableDates(
-		body.serviceId,
-		body.startDate?.slice(0, 7),
-	)();
-	if (E.isLeft(result)) return sendError(res, 500, result.left);
-	sendSuccess(res, result.right.map((d) => ({ date: d, slots: 1 })));
+	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
+	// Use service name for wizard navigation (click-based, not URL param)
+	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
+	console.log(`[availability/dates] serviceName="${serviceName}" from serviceId="${body.serviceId}"`);
+
+	const result = await runEffect(
+		readAvailableDates({
+			serviceName,
+			targetMonth: body.startDate?.slice(0, 7),
+			monthsToScan: 2,
+		}),
+	);
+
+	if (E.isLeft(result)) {
+		const err = result.left;
+		console.error(`[availability/dates] error:`, err);
+		return sendJson(res, 500, {
+			success: false,
+			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Availability lookup failed' },
+		});
+	}
+	sendSuccess(res, result.right);
 };
 
 const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) => {
-	const body = (await parseBody(req)) as { serviceId: string; date: string };
-	const result = await getScraper().getTimeSlots(body.serviceId, body.date)();
-	if (E.isLeft(result)) return sendError(res, 500, result.left);
+	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; date: string };
+	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
+	console.log(`[availability/slots] serviceName="${serviceName}" date="${body.date}"`);
+
+	const result = await runEffect(
+		readTimeSlots({
+			serviceName,
+			date: body.date,
+		}),
+	);
+
+	if (E.isLeft(result)) {
+		const err = result.left;
+		console.error(`[availability/slots] error:`, err);
+		return sendJson(res, 500, {
+			success: false,
+			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot lookup failed' },
+		});
+	}
 	sendSuccess(res, result.right);
 };
 
 const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
-	const body = (await parseBody(req)) as { serviceId: string; datetime: string };
+	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; datetime: string };
 	const date = body.datetime.split('T')[0];
-	const result = await getScraper().getTimeSlots(body.serviceId, date)();
-	if (E.isLeft(result)) return sendError(res, 500, result.left);
-	const available = result.right.some((s) => s.datetime === body.datetime && s.available);
+	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
+
+	const result = await runEffect(
+		readTimeSlots({
+			serviceName,
+			date,
+		}),
+	);
+
+	if (E.isLeft(result)) {
+		const err = result.left;
+		return sendJson(res, 500, {
+			success: false,
+			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot check failed' },
+		});
+	}
+	const available = result.right.some((s: { datetime: string; available: boolean }) =>
+		s.datetime === body.datetime && s.available
+	);
 	sendSuccess(res, available);
 };
 

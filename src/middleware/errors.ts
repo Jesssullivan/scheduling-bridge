@@ -28,7 +28,7 @@ export class SelectorError extends Data.TaggedError('SelectorError')<{
 }> {}
 
 export class WizardStepError extends Data.TaggedError('WizardStepError')<{
-	readonly step: 'navigate' | 'fill-form' | 'bypass-payment' | 'submit' | 'extract' | 'read-availability' | 'read-slots';
+	readonly step: 'navigate' | 'fill-form' | 'bypass-payment' | 'submit' | 'extract' | 'read-availability' | 'read-slots' | 'extract-business';
 	readonly message: string;
 	readonly screenshot?: Buffer;
 	readonly cause?: unknown;
