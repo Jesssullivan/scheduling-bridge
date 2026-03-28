@@ -32,14 +32,15 @@
   },
   "dependencies": {
     "@tummycrypt/scheduling-kit": "^0.2.0",
-    "playwright-core": "^1.58.1",
-    "effect": "^3.19.14"
+    "effect": "^3.19.14",
+    "playwright-core": "^1.58.1"
   },
   "devDependencies": {
-    "typescript": "^5.9.0",
+    "@types/node": "^22.0.0",
+    "playwright": "^1.58.2",
     "tsx": "^4.0.0",
-    "vitest": "^4.0.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
   },
   "publishConfig": {
     "access": "public"

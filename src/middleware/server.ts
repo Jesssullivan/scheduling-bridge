@@ -43,8 +43,6 @@ import {
 	submitBooking,
 	extractConfirmation,
 	toBooking,
-	readAvailableDates,
-	readTimeSlots,
 	fetchBusinessData,
 	businessToServices,
 } from './steps/index.js';
@@ -246,26 +244,127 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 	sendSuccess(res, found);
 };
 
+/**
+ * Navigate directly to a service's calendar via URL param, bypassing
+ * category-based click navigation (which breaks with collapseCategories).
+ *
+ * This is the approach the original scraper used — ?appointmentType={id}
+ * goes straight to the calendar page for that service.
+ */
+const readDatesViaUrl = (serviceId: string, targetMonth?: string) =>
+	Effect.gen(function* () {
+		const { acquirePage, config } = yield* BrowserService;
+		const page = yield* acquirePage;
+
+		const url = new URL(config.baseUrl);
+		url.searchParams.set('appointmentType', serviceId);
+		if (targetMonth) url.searchParams.set('month', targetMonth);
+
+		yield* Effect.tryPromise({
+			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
+			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-availability' as const, message: `Navigation failed: ${e}` }),
+		});
+
+		// Read enabled calendar tiles
+		const dates = yield* Effect.tryPromise({
+			try: async () => {
+				await page.waitForSelector('.react-calendar__tile, .scheduleday, [data-date]', { timeout: 10000 }).catch(() => {});
+				return page.evaluate(() => {
+					const results: Array<{ date: string; slots: number }> = [];
+					// React calendar tiles that are NOT disabled
+					document.querySelectorAll('.react-calendar__tile:not(:disabled):not(.react-calendar__tile--neighboringMonth)').forEach(tile => {
+						const abbr = tile.querySelector('abbr');
+						const date = abbr?.getAttribute('aria-label') || tile.getAttribute('data-date') || '';
+						if (date) {
+							// Parse "March 28, 2026" or "2026-03-28" format
+							const d = new Date(date);
+							if (!isNaN(d.getTime())) {
+								results.push({ date: d.toISOString().slice(0, 10), slots: 1 });
+							}
+						}
+					});
+					return results;
+				});
+			},
+			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-availability' as const, message: `Calendar read failed: ${e}` }),
+		});
+
+		return dates;
+	});
+
+const readSlotsViaUrl = (serviceId: string, date: string) =>
+	Effect.gen(function* () {
+		const { acquirePage, config } = yield* BrowserService;
+		const page = yield* acquirePage;
+
+		const url = new URL(config.baseUrl);
+		url.searchParams.set('appointmentType', serviceId);
+		url.searchParams.set('date', date);
+
+		yield* Effect.tryPromise({
+			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
+			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-slots' as const, message: `Navigation failed: ${e}` }),
+		});
+
+		// Click the target date on the calendar
+		yield* Effect.tryPromise({
+			try: async () => {
+				await page.waitForSelector('.react-calendar__tile, [data-date]', { timeout: 10000 }).catch(() => {});
+				// Find and click the tile for the target date
+				const tiles = await page.$$('.react-calendar__tile');
+				for (const tile of tiles) {
+					const abbr = await tile.$('abbr');
+					const label = await abbr?.getAttribute('aria-label');
+					if (label) {
+						const d = new Date(label);
+						if (d.toISOString().slice(0, 10) === date) {
+							await tile.click();
+							break;
+						}
+					}
+				}
+				await page.waitForTimeout(2000);
+			},
+			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-slots' as const, message: `Date click failed: ${e}` }),
+		});
+
+		// Read time slots
+		const slots = yield* Effect.tryPromise({
+			try: async () => {
+				await page.waitForSelector('button.time-selection, [data-time]', { timeout: 10000 }).catch(() => {});
+				return page.evaluate(() => {
+					const results: Array<{ datetime: string; available: boolean }> = [];
+					document.querySelectorAll('button.time-selection').forEach(btn => {
+						const time = btn.textContent?.trim() || '';
+						const disabled = btn.hasAttribute('disabled');
+						if (time) {
+							results.push({ datetime: time, available: !disabled });
+						}
+					});
+					return results;
+				});
+			},
+			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-slots' as const, message: `Slots read failed: ${e}` }),
+		});
+
+		return slots;
+	});
+
 const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
-	// Use service name for wizard navigation (click-based, not URL param)
-	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
-	console.log(`[availability/dates] serviceName="${serviceName}" from serviceId="${body.serviceId}"`);
+	// Use Acuity numeric ID for direct URL navigation (bypasses collapsed categories)
+	const serviceId = body.serviceId;
+	console.log(`[availability/dates] serviceId="${serviceId}" startDate="${body.startDate}"`);
 
 	const result = await runEffect(
-		readAvailableDates({
-			serviceName,
-			targetMonth: body.startDate?.slice(0, 7),
-			monthsToScan: 2,
-		}),
+		readDatesViaUrl(serviceId, body.startDate?.slice(0, 7)),
 	);
 
 	if (!result.ok) {
-		const err = result.error;
-		console.error(`[availability/dates] error:`, err);
+		console.error(`[availability/dates] error:`, result.error);
 		return sendJson(res, 500, {
 			success: false,
-			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Availability lookup failed' },
+			error: { tag: 'InfrastructureError', code: 'AVAILABILITY_FAILED', message: result.error.message ?? 'Availability lookup failed' },
 		});
 	}
 	sendSuccess(res, result.value);
@@ -273,22 +372,17 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) =
 
 const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; date: string };
-	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
-	console.log(`[availability/slots] serviceName="${serviceName}" date="${body.date}"`);
+	console.log(`[availability/slots] serviceId="${body.serviceId}" date="${body.date}"`);
 
 	const result = await runEffect(
-		readTimeSlots({
-			serviceName,
-			date: body.date,
-		}),
+		readSlotsViaUrl(body.serviceId, body.date),
 	);
 
 	if (!result.ok) {
-		const err = result.error;
-		console.error(`[availability/slots] error:`, err);
+		console.error(`[availability/slots] error:`, result.error);
 		return sendJson(res, 500, {
 			success: false,
-			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot lookup failed' },
+			error: { tag: 'InfrastructureError', code: 'SLOTS_FAILED', message: result.error.message ?? 'Slot lookup failed' },
 		});
 	}
 	sendSuccess(res, result.value);
@@ -297,20 +391,15 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) =
 const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; datetime: string };
 	const date = body.datetime.split('T')[0];
-	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
 
 	const result = await runEffect(
-		readTimeSlots({
-			serviceName,
-			date,
-		}),
+		readSlotsViaUrl(body.serviceId, date),
 	);
 
 	if (!result.ok) {
-		const err = result.error;
 		return sendJson(res, 500, {
 			success: false,
-			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot check failed' },
+			error: { tag: 'InfrastructureError', code: 'CHECK_FAILED', message: result.error.message ?? 'Slot check failed' },
 		});
 	}
 	const available = result.value.some((s: { datetime: string; available: boolean }) =>
