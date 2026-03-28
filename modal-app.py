@@ -53,7 +53,8 @@ image = (
         " --external:@tummycrypt/tinyland-auth-pg"
         " --external:@tummycrypt/tinyland-auth-pg/*"
         " --external:@neondatabase/serverless"
-        " --external:drizzle-orm --external:drizzle-orm/*",
+        " --external:drizzle-orm --external:drizzle-orm/*"
+        " --external:@skeletonlabs/* --external:svelte --external:svelte/*",
         "ls -la /app/dist/server.mjs",
     )
 )
