@@ -30,9 +30,9 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { Effect, Scope } from 'effect';
 import { Effect, Exit, Cause, Scope } from 'effect';
-import { createScraperAdapter, type ScraperConfig } from '../adapters/acuity-scraper.js';
+// Scraper removed — deprecated and caused esbuild bundling issues.
+// Services are served from SERVICES_JSON env or BUSINESS object extraction.
 import { BrowserService, BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from './browser-service.js';
 import { toSchedulingError, type MiddlewareError } from './errors.js';
 import {
@@ -73,14 +73,7 @@ const browserConfig: BrowserConfig = {
 	launchArgs: process.env.CHROMIUM_LAUNCH_ARGS?.split(','),
 };
 
-const scraperConfig: ScraperConfig = {
-	baseUrl: ACUITY_BASE_URL,
-	headless: browserConfig.headless,
-	timeout: browserConfig.timeout,
-	userAgent: browserConfig.userAgent,
-	executablePath: browserConfig.executablePath,
-	launchArgs: browserConfig.launchArgs ? [...browserConfig.launchArgs] : undefined,
-};
+// scraperConfig removed — scraper deprecated, BUSINESS extraction replaces it
 
 // =============================================================================
 // RESPONSE HELPERS
@@ -170,15 +163,6 @@ const runSchedulingEffect = async <A>(
 // SCRAPER (cached)
 // =============================================================================
 
-let scraper: ReturnType<typeof createScraperAdapter> | null = null;
-
-const getScraper = () => {
-	if (!scraper) {
-		scraper = createScraperAdapter(scraperConfig);
-	}
-	return scraper;
-};
-
 let cachedServices: Service[] | null = null;
 
 // Static services from SERVICES_JSON env var (avoids scraper dependency)
@@ -238,23 +222,20 @@ const handleGetServices = async (_req: IncomingMessage, res: ServerResponse) => 
 		console.warn('[services] BUSINESS extraction failed:', e instanceof Error ? e.message : e);
 	}
 
-	// 3. Deprecated fallback: DOM scraper (may return [] — Acuity is React SPA)
-	console.warn('[services] falling back to DOM scraper (deprecated)');
-	const result = await runSchedulingEffect(getScraper().getServices());
-	if (!result.ok) return sendError(res, 500, result.error);
-	if (result.value.length === 0) {
-		console.error('[services] all sources exhausted — returning empty []');
-	}
-	cachedServices = result.value;
-	sendSuccess(res, result.value);
+	// No more fallbacks — return empty with warning
+	console.error('[services] all sources exhausted (SERVICES_JSON not set, BUSINESS extraction failed)');
+	sendSuccess(res, []);
 };
 
 const handleGetService = async (serviceId: string, res: ServerResponse) => {
 	if (!cachedServices) {
-		const all = await getScraper().getServices()();
-		if (!all.ok) return sendError(res, 500, all.error);
-		cachedServices = all.value;
+		// Try BUSINESS extraction to populate cache
+		try {
+			const business = await fetchBusinessData(ACUITY_BASE_URL);
+			if (business) cachedServices = businessToServices(business);
+		} catch { /* ignore */ }
 	}
+	if (!cachedServices) cachedServices = [];
 	const found = cachedServices.find((s) => s.id === serviceId);
 	if (!found) {
 		return sendJson(res, 404, {
