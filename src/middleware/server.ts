@@ -34,7 +34,7 @@ import { Effect, Exit, Cause, Layer, Scope } from 'effect';
 // Scraper removed — deprecated and caused esbuild bundling issues.
 // Services are served from SERVICES_JSON env or BUSINESS object extraction.
 import { BrowserService, BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from './browser-service.js';
-import { WizardStepError, toSchedulingError, type MiddlewareError } from './errors.js';
+import { toSchedulingError, type MiddlewareError } from './errors.js';
 import { ServiceResolver, ServiceResolverLive } from './service-resolver.js';
 import { LoggerLive, ndjsonLog } from './logger.js';
 import { selectorHealthCheck } from './selector-health.js';
