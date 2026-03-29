@@ -13,7 +13,7 @@ import { Effect, Scope } from 'effect';
 import { BrowserService } from '../browser-service.js';
 import { WizardStepError } from '../errors.js';
 import { Selectors } from '../selectors.js';
-import { parseSlotText } from '../slot-parser.js';
+import { parseSlotText, buildIsoDatetime } from '../slot-parser.js';
 
 // =============================================================================
 // TYPES
@@ -169,11 +169,11 @@ export const readSlotsViaUrl = (
 			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Slots read failed: ${e}` }),
 		});
 
-		// Parse slot text to extract clean time (strip "1 spot left" etc.)
+		// Parse slot text and build full ISO datetime (e.g., "4:00 PM" → "2026-04-01T16:00:00")
 		return slots.map(s => {
 			const parsed = parseSlotText(s.datetime);
 			return {
-				datetime: parsed ? parsed.time : s.datetime,
+				datetime: parsed ? buildIsoDatetime(date, parsed.time) : s.datetime,
 				available: s.available,
 			};
 		});
