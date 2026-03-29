@@ -30,11 +30,14 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { Effect, Exit, Cause, Scope } from 'effect';
+import { Effect, Exit, Cause, Layer, Scope } from 'effect';
 // Scraper removed — deprecated and caused esbuild bundling issues.
 // Services are served from SERVICES_JSON env or BUSINESS object extraction.
 import { BrowserService, BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from './browser-service.js';
 import { toSchedulingError, type MiddlewareError } from './errors.js';
+import { ServiceResolver, ServiceResolverLive } from './service-resolver.js';
+import { LoggerLive, ndjsonLog } from './logger.js';
+import { selectorHealthCheck } from './selector-health.js';
 import {
 	navigateToBooking,
 	fillFormFields,
@@ -45,6 +48,8 @@ import {
 	toBooking,
 	fetchBusinessData,
 	businessToServices,
+	readDatesViaUrl,
+	readSlotsViaUrl,
 } from './steps/index.js';
 import type {
 	Booking,
@@ -122,12 +127,14 @@ const parseBody = async (req: IncomingMessage): Promise<unknown> => {
 // EFFECT RUNNER
 // =============================================================================
 
-const layer = BrowserServiceLive(browserConfig);
+const layer = Layer.merge(BrowserServiceLive(browserConfig), ServiceResolverLive).pipe(
+	Layer.provide(LoggerLive),
+);
 
 type Result<A> = { ok: true; value: A } | { ok: false; error: SchedulingError };
 
 const runEffect = async <A>(
-	effect: Effect.Effect<A, MiddlewareError, BrowserService | Scope.Scope>,
+	effect: Effect.Effect<A, MiddlewareError, BrowserService | ServiceResolver | Scope.Scope>,
 ): Promise<Result<A>> => {
 	const exit = await Effect.runPromiseExit(
 		Effect.scoped(effect.pipe(Effect.provide(layer))),
@@ -170,28 +177,53 @@ const STATIC_SERVICES: Service[] | null = (() => {
 	try {
 		return JSON.parse(raw) as Service[];
 	} catch (e) {
-		console.error('[middleware-server] Failed to parse SERVICES_JSON:', e);
+		ndjsonLog('ERROR', 'Failed to parse SERVICES_JSON', { error: String(e) });
 		return null;
 	}
 })();
 
 if (STATIC_SERVICES) {
 	cachedServices = STATIC_SERVICES;
-	console.log(`[middleware-server] Loaded ${STATIC_SERVICES.length} static services from SERVICES_JSON`);
+	ndjsonLog('INFO', 'Loaded static services from SERVICES_JSON', { count: STATIC_SERVICES.length });
 }
 
 // =============================================================================
 // ROUTE HANDLERS
 // =============================================================================
 
-const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
-	sendSuccess(res, {
+let requestCount = 0;
+const startedAt = new Date().toISOString();
+
+const handleHealth = async (req: IncomingMessage, res: ServerResponse) => {
+	const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
+	const depth = Number(url.searchParams.get('depth') ?? 0) as 0 | 1 | 2;
+
+	const baseHealth = {
 		status: 'ok',
 		baseUrl: ACUITY_BASE_URL,
 		hasCoupon: !!COUPON_CODE,
 		headless: browserConfig.headless,
 		staticServices: STATIC_SERVICES ? STATIC_SERVICES.length : 0,
+		uptime: process.uptime(),
+		startedAt,
+		requestCount,
 		timestamp: new Date().toISOString(),
+	};
+
+	if (depth === 0) {
+		return sendSuccess(res, baseHealth);
+	}
+
+	// Tiered selector health check (requires browser)
+	const result = await runEffect(selectorHealthCheck(ACUITY_BASE_URL, depth));
+	if (!result.ok) {
+		return sendSuccess(res, { ...baseHealth, selectorCheck: null, selectorError: 'probe failed' });
+	}
+
+	return sendSuccess(res, {
+		...baseHealth,
+		status: result.value.status,
+		selectorCheck: result.value,
 	});
 };
 
@@ -199,7 +231,7 @@ const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
 const handleGetServices = async (_req: IncomingMessage, res: ServerResponse) => {
 	// 1. Prefer static services from env (always reliable, no network needed)
 	if (STATIC_SERVICES) {
-		console.log('[services] source: SERVICES_JSON env');
+		ndjsonLog('INFO', 'Services source: SERVICES_JSON env');
 		cachedServices = STATIC_SERVICES;
 		return sendSuccess(res, STATIC_SERVICES);
 	}
@@ -210,18 +242,18 @@ const handleGetServices = async (_req: IncomingMessage, res: ServerResponse) => 
 		if (business) {
 			const services = businessToServices(business);
 			if (services.length > 0) {
-				console.log(`[services] source: BUSINESS object (${services.length} services)`);
+				ndjsonLog('INFO', 'Services source: BUSINESS object', { count: services.length });
 				cachedServices = services;
 				return sendSuccess(res, services);
 			}
-			console.warn('[services] BUSINESS object found but 0 active services');
+			ndjsonLog('WARN', 'BUSINESS object found but 0 active services');
 		}
 	} catch (e) {
-		console.warn('[services] BUSINESS extraction failed:', e instanceof Error ? e.message : e);
+		ndjsonLog('WARN', 'BUSINESS extraction failed', { error: e instanceof Error ? e.message : String(e) });
 	}
 
 	// No more fallbacks — return empty with warning
-	console.error('[services] all sources exhausted (SERVICES_JSON not set, BUSINESS extraction failed)');
+	ndjsonLog('ERROR', 'All service sources exhausted (SERVICES_JSON not set, BUSINESS extraction failed)');
 	sendSuccess(res, []);
 };
 
@@ -244,127 +276,21 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 	sendSuccess(res, found);
 };
 
-/**
- * Navigate directly to a service's calendar via URL param, bypassing
- * category-based click navigation (which breaks with collapseCategories).
- *
- * This is the approach the original scraper used — ?appointmentType={id}
- * goes straight to the calendar page for that service.
- */
-const readDatesViaUrl = (serviceId: string, targetMonth?: string) =>
-	Effect.gen(function* () {
-		const { acquirePage, config } = yield* BrowserService;
-		const page = yield* acquirePage;
-
-		const url = new URL(config.baseUrl);
-		url.searchParams.set('appointmentType', serviceId);
-		if (targetMonth) url.searchParams.set('month', targetMonth);
-
-		yield* Effect.tryPromise({
-			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
-			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-availability' as const, message: `Navigation failed: ${e}` }),
-		});
-
-		// Read enabled calendar tiles
-		const dates = yield* Effect.tryPromise({
-			try: async () => {
-				await page.waitForSelector('.react-calendar__tile, .scheduleday, [data-date]', { timeout: 10000 }).catch(() => {});
-				return page.evaluate(() => {
-					const results: Array<{ date: string; slots: number }> = [];
-					// React calendar tiles that are NOT disabled
-					document.querySelectorAll('.react-calendar__tile:not(:disabled):not(.react-calendar__tile--neighboringMonth)').forEach(tile => {
-						const abbr = tile.querySelector('abbr');
-						const date = abbr?.getAttribute('aria-label') || tile.getAttribute('data-date') || '';
-						if (date) {
-							// Parse "March 28, 2026" or "2026-03-28" format
-							const d = new Date(date);
-							if (!isNaN(d.getTime())) {
-								results.push({ date: d.toISOString().slice(0, 10), slots: 1 });
-							}
-						}
-					});
-					return results;
-				});
-			},
-			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-availability' as const, message: `Calendar read failed: ${e}` }),
-		});
-
-		return dates;
-	});
-
-const readSlotsViaUrl = (serviceId: string, date: string) =>
-	Effect.gen(function* () {
-		const { acquirePage, config } = yield* BrowserService;
-		const page = yield* acquirePage;
-
-		const url = new URL(config.baseUrl);
-		url.searchParams.set('appointmentType', serviceId);
-		url.searchParams.set('date', date);
-
-		yield* Effect.tryPromise({
-			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
-			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-slots' as const, message: `Navigation failed: ${e}` }),
-		});
-
-		// Click the target date on the calendar
-		yield* Effect.tryPromise({
-			try: async () => {
-				await page.waitForSelector('.react-calendar__tile, [data-date]', { timeout: 10000 }).catch(() => {});
-				// Find and click the tile for the target date
-				const tiles = await page.$$('.react-calendar__tile');
-				for (const tile of tiles) {
-					const abbr = await tile.$('abbr');
-					const label = await abbr?.getAttribute('aria-label');
-					if (label) {
-						const d = new Date(label);
-						if (d.toISOString().slice(0, 10) === date) {
-							await tile.click();
-							break;
-						}
-					}
-				}
-				await page.waitForTimeout(2000);
-			},
-			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-slots' as const, message: `Date click failed: ${e}` }),
-		});
-
-		// Read time slots
-		const slots = yield* Effect.tryPromise({
-			try: async () => {
-				await page.waitForSelector('button.time-selection, [data-time]', { timeout: 10000 }).catch(() => {});
-				return page.evaluate(() => {
-					const results: Array<{ datetime: string; available: boolean }> = [];
-					document.querySelectorAll('button.time-selection').forEach(btn => {
-						const time = btn.textContent?.trim() || '';
-						const disabled = btn.hasAttribute('disabled');
-						if (time) {
-							results.push({ datetime: time, available: !disabled });
-						}
-					});
-					return results;
-				});
-			},
-			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-slots' as const, message: `Slots read failed: ${e}` }),
-		});
-
-		return slots;
-	});
-
 const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
 	// Use Acuity numeric ID for direct URL navigation (bypasses collapsed categories)
 	const serviceId = body.serviceId;
-	console.log(`[availability/dates] serviceId="${serviceId}" startDate="${body.startDate}"`);
+	ndjsonLog('INFO', 'availability/dates', { serviceId, startDate: body.startDate });
 
 	const result = await runEffect(
 		readDatesViaUrl(serviceId, body.startDate?.slice(0, 7)),
 	);
 
 	if (!result.ok) {
-		console.error(`[availability/dates] error:`, result.error);
+		ndjsonLog('ERROR', 'availability/dates failed', { error: result.error });
 		return sendJson(res, 500, {
 			success: false,
-			error: { tag: 'InfrastructureError', code: 'AVAILABILITY_FAILED', message: result.error.message ?? 'Availability lookup failed' },
+			error: { tag: 'InfrastructureError', code: 'AVAILABILITY_FAILED', message: 'message' in result.error ? result.error.message : 'Availability lookup failed' },
 		});
 	}
 	sendSuccess(res, result.value);
@@ -372,17 +298,17 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) =
 
 const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; date: string };
-	console.log(`[availability/slots] serviceId="${body.serviceId}" date="${body.date}"`);
+	ndjsonLog('INFO', 'availability/slots', { serviceId: body.serviceId, date: body.date });
 
 	const result = await runEffect(
 		readSlotsViaUrl(body.serviceId, body.date),
 	);
 
 	if (!result.ok) {
-		console.error(`[availability/slots] error:`, result.error);
+		ndjsonLog('ERROR', 'availability/slots failed', { error: result.error });
 		return sendJson(res, 500, {
 			success: false,
-			error: { tag: 'InfrastructureError', code: 'SLOTS_FAILED', message: result.error.message ?? 'Slot lookup failed' },
+			error: { tag: 'InfrastructureError', code: 'SLOTS_FAILED', message: 'message' in result.error ? result.error.message : 'Slot lookup failed' },
 		});
 	}
 	sendSuccess(res, result.value);
@@ -399,7 +325,7 @@ const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
 	if (!result.ok) {
 		return sendJson(res, 500, {
 			success: false,
-			error: { tag: 'InfrastructureError', code: 'CHECK_FAILED', message: result.error.message ?? 'Slot check failed' },
+			error: { tag: 'InfrastructureError', code: 'CHECK_FAILED', message: 'message' in result.error ? result.error.message : 'Slot check failed' },
 		});
 	}
 	const available = result.value.some((s: { datetime: string; available: boolean }) =>
@@ -488,6 +414,7 @@ const server = createServer(async (req, res) => {
 	const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
 	const path = url.pathname;
 	const method = req.method?.toUpperCase() ?? 'GET';
+	requestCount++;
 
 	// Auth check (skip health endpoint)
 	if (AUTH_TOKEN && path !== '/health') {
@@ -533,7 +460,7 @@ const server = createServer(async (req, res) => {
 			error: { tag: 'InfrastructureError', code: 'NOT_FOUND', message: `Unknown route: ${method} ${path}` },
 		});
 	} catch (e) {
-		console.error(`[middleware-server] Unhandled error on ${method} ${path}:`, e);
+		ndjsonLog('ERROR', 'Unhandled error', { method, path, error: e instanceof Error ? e.message : String(e) });
 		sendJson(res, 500, {
 			success: false,
 			error: {
@@ -548,11 +475,13 @@ const server = createServer(async (req, res) => {
 // Only start listening when this file is executed directly (not imported)
 if (process.argv[1]?.match(/server\.(ts|js|mjs)$/)) {
 	server.listen(PORT, '0.0.0.0', () => {
-		console.log(`[middleware-server] Listening on port ${PORT}`);
-		console.log(`[middleware-server] Acuity URL: ${ACUITY_BASE_URL}`);
-		console.log(`[middleware-server] Coupon: ${COUPON_CODE ? 'configured' : 'NOT SET'}`);
-		console.log(`[middleware-server] Auth: ${AUTH_TOKEN ? 'enabled' : 'disabled'}`);
-		console.log(`[middleware-server] Headless: ${browserConfig.headless}`);
+		ndjsonLog('INFO', 'Middleware server started', {
+			port: PORT,
+			baseUrl: ACUITY_BASE_URL,
+			coupon: COUPON_CODE ? 'configured' : 'NOT SET',
+			auth: AUTH_TOKEN ? 'enabled' : 'disabled',
+			headless: browserConfig.headless,
+		});
 	});
 }
 

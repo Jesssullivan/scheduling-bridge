@@ -39,7 +39,13 @@ export class CouponError extends Data.TaggedError('CouponError')<{
 	readonly message: string;
 }> {}
 
-export type MiddlewareError = BrowserError | SelectorError | WizardStepError | CouponError;
+export class ServiceResolverError extends Data.TaggedError('ServiceResolverError')<{
+	readonly serviceName: string;
+	readonly strategies: readonly string[];
+	readonly message: string;
+}> {}
+
+export type MiddlewareError = BrowserError | SelectorError | WizardStepError | CouponError | ServiceResolverError;
 
 // =============================================================================
 // BRIDGE: Effect errors -> fp-ts SchedulingError
@@ -66,5 +72,7 @@ export const toSchedulingError = (error: MiddlewareError): SchedulingError => {
 			);
 		case 'CouponError':
 			return Errors.acuity('BOOKING_FAILED', `Coupon error: ${error.message}`);
+		case 'ServiceResolverError':
+			return Errors.acuity('NOT_FOUND', `Service not found: ${error.message}`);
 	}
 };
