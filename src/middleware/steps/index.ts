@@ -35,3 +35,9 @@ export {
 	type AcuityCalendar,
 	type AcuityBusinessData,
 } from './extract-business.js';
+export {
+	readDatesViaUrl,
+	readSlotsViaUrl,
+	type UrlDateResult,
+	type UrlSlotResult,
+} from './read-via-url.js';

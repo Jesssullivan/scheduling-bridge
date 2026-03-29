@@ -34,7 +34,7 @@ import { Effect, Exit, Cause, Layer, Scope } from 'effect';
 // Scraper removed — deprecated and caused esbuild bundling issues.
 // Services are served from SERVICES_JSON env or BUSINESS object extraction.
 import { BrowserService, BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from './browser-service.js';
-import { WizardStepError, toSchedulingError, type MiddlewareError } from './errors.js';
+import { toSchedulingError, type MiddlewareError } from './errors.js';
 import { ServiceResolver, ServiceResolverLive } from './service-resolver.js';
 import { LoggerLive, ndjsonLog } from './logger.js';
 import { selectorHealthCheck } from './selector-health.js';
@@ -48,6 +48,8 @@ import {
 	toBooking,
 	fetchBusinessData,
 	businessToServices,
+	readDatesViaUrl,
+	readSlotsViaUrl,
 } from './steps/index.js';
 import type {
 	Booking,
@@ -273,115 +275,6 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 	}
 	sendSuccess(res, found);
 };
-
-/**
- * Navigate directly to a service's calendar via URL param, bypassing
- * category-based click navigation (which breaks with collapseCategories).
- *
- * This is the approach the original scraper used — ?appointmentType={id}
- * goes straight to the calendar page for that service.
- */
-const readDatesViaUrl = (serviceId: string, targetMonth?: string) =>
-	Effect.gen(function* () {
-		const { acquirePage, config } = yield* BrowserService;
-		const page = yield* acquirePage;
-
-		const url = new URL(config.baseUrl);
-		url.searchParams.set('appointmentType', serviceId);
-		if (targetMonth) url.searchParams.set('month', targetMonth);
-
-		yield* Effect.tryPromise({
-			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
-			catch: (e) => new WizardStepError({ step: 'read-availability', message: `Navigation failed: ${e}` }),
-		});
-
-		// Read enabled calendar tiles
-		const dates = yield* Effect.tryPromise({
-			try: async () => {
-				await page.waitForSelector('.react-calendar__tile, .scheduleday, [data-date]', { timeout: 10000 }).catch(() => {});
-				return page.evaluate(() => {
-					const results: Array<{ date: string; slots: number }> = [];
-					// React calendar tiles that are NOT disabled
-					document.querySelectorAll('.react-calendar__tile:not(:disabled):not(.react-calendar__tile--neighboringMonth)').forEach(tile => {
-						const abbr = tile.querySelector('abbr');
-						const date = abbr?.getAttribute('aria-label') || tile.getAttribute('data-date') || '';
-						if (date) {
-							// Parse "March 28, 2026" or "2026-03-28" format
-							const d = new Date(date);
-							if (!isNaN(d.getTime())) {
-								results.push({ date: d.toISOString().slice(0, 10), slots: 1 });
-							}
-						}
-					});
-					return results;
-				});
-			},
-			catch: (e) => new WizardStepError({ step: 'read-availability', message: `Calendar read failed: ${e}` }),
-		});
-
-		return dates;
-	});
-
-const readSlotsViaUrl = (serviceId: string, date: string) =>
-	Effect.gen(function* () {
-		const { acquirePage, config } = yield* BrowserService;
-		const page = yield* acquirePage;
-
-		const url = new URL(config.baseUrl);
-		url.searchParams.set('appointmentType', serviceId);
-		url.searchParams.set('date', date);
-
-		yield* Effect.tryPromise({
-			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
-			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Navigation failed: ${e}` }),
-		});
-
-		// Click the target date on the calendar
-		yield* Effect.tryPromise({
-			try: async () => {
-				await page.waitForSelector('.react-calendar__tile, [data-date]', { timeout: 10000 }).catch(() => {});
-				// Find and click the tile for the target date
-				const tiles = await page.$$('.react-calendar__tile');
-				for (const tile of tiles) {
-					const abbr = await tile.$('abbr');
-					const label = await abbr?.getAttribute('aria-label');
-					if (label) {
-						const d = new Date(label);
-						if (d.toISOString().slice(0, 10) === date) {
-							await tile.click();
-							break;
-						}
-					}
-				}
-				await page.waitForTimeout(2000);
-			},
-			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Date click failed: ${e}` }),
-		});
-
-		// Read time slots
-		const slots = yield* Effect.tryPromise({
-			try: async () => {
-				await page.waitForSelector('button.time-selection, [data-time]', { timeout: 10000 }).catch(() => {});
-				return page.evaluate(() => {
-					const results: Array<{ datetime: string; available: boolean }> = [];
-					document.querySelectorAll('button.time-selection').forEach(btn => {
-						const raw = btn.textContent?.trim() || '';
-						const disabled = btn.hasAttribute('disabled');
-						// Extract just the time portion, stripping "1 spot left" etc.
-						const match = raw.match(/^(\d{1,2}:\d{2}\s*[AP]M)/i);
-						const time = match ? match[1] : raw;
-						if (time) {
-							results.push({ datetime: time, available: !disabled });
-						}
-					});
-					return results;
-				});
-			},
-			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Slots read failed: ${e}` }),
-		});
-
-		return slots;
-	});
 
 const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
