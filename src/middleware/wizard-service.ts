@@ -73,7 +73,14 @@ export const clickServiceBook = (
 			})),
 		);
 
-		console.log(`[${step}] Matched service "${resolution.matchedName}" via ${resolution.strategy} (confidence: ${resolution.confidence.toFixed(2)})`);
+		yield* Effect.logInfo('Service matched').pipe(
+			Effect.annotateLogs({
+				step,
+				matchedName: resolution.matchedName,
+				strategy: resolution.strategy,
+				confidence: resolution.confidence.toFixed(2),
+			}),
+		);
 
 		// Find and click the "Book" button within the matched element
 		const bookBtn = yield* Effect.tryPromise({
@@ -110,7 +117,9 @@ export const clickServiceBook = (
 
 		// Verify appointment type ID if expected
 		if (appointmentTypeId && aptMatch && aptMatch[1] !== appointmentTypeId) {
-			console.warn(`[${step}] Expected appointmentType=${appointmentTypeId} but got ${aptMatch[1]}`);
+			yield* Effect.logWarning('Appointment type ID mismatch').pipe(
+			Effect.annotateLogs({ step, expected: appointmentTypeId, actual: aptMatch[1] }),
+		);
 		}
 
 		return {
