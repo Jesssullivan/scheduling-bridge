@@ -30,11 +30,12 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { Effect, Exit, Cause, Scope } from 'effect';
+import { Effect, Exit, Cause, Layer, Scope } from 'effect';
 // Scraper removed — deprecated and caused esbuild bundling issues.
 // Services are served from SERVICES_JSON env or BUSINESS object extraction.
 import { BrowserService, BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from './browser-service.js';
-import { toSchedulingError, type MiddlewareError } from './errors.js';
+import { WizardStepError, toSchedulingError, type MiddlewareError } from './errors.js';
+import { ServiceResolver, ServiceResolverLive } from './service-resolver.js';
 import {
 	navigateToBooking,
 	fillFormFields,
@@ -122,12 +123,12 @@ const parseBody = async (req: IncomingMessage): Promise<unknown> => {
 // EFFECT RUNNER
 // =============================================================================
 
-const layer = BrowserServiceLive(browserConfig);
+const layer = Layer.merge(BrowserServiceLive(browserConfig), ServiceResolverLive);
 
 type Result<A> = { ok: true; value: A } | { ok: false; error: SchedulingError };
 
 const runEffect = async <A>(
-	effect: Effect.Effect<A, MiddlewareError, BrowserService | Scope.Scope>,
+	effect: Effect.Effect<A, MiddlewareError, BrowserService | ServiceResolver | Scope.Scope>,
 ): Promise<Result<A>> => {
 	const exit = await Effect.runPromiseExit(
 		Effect.scoped(effect.pipe(Effect.provide(layer))),
@@ -262,7 +263,7 @@ const readDatesViaUrl = (serviceId: string, targetMonth?: string) =>
 
 		yield* Effect.tryPromise({
 			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
-			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-availability' as const, message: `Navigation failed: ${e}` }),
+			catch: (e) => new WizardStepError({ step: 'read-availability', message: `Navigation failed: ${e}` }),
 		});
 
 		// Read enabled calendar tiles
@@ -286,7 +287,7 @@ const readDatesViaUrl = (serviceId: string, targetMonth?: string) =>
 					return results;
 				});
 			},
-			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-availability' as const, message: `Calendar read failed: ${e}` }),
+			catch: (e) => new WizardStepError({ step: 'read-availability', message: `Calendar read failed: ${e}` }),
 		});
 
 		return dates;
@@ -303,7 +304,7 @@ const readSlotsViaUrl = (serviceId: string, date: string) =>
 
 		yield* Effect.tryPromise({
 			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
-			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-slots' as const, message: `Navigation failed: ${e}` }),
+			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Navigation failed: ${e}` }),
 		});
 
 		// Click the target date on the calendar
@@ -325,7 +326,7 @@ const readSlotsViaUrl = (serviceId: string, date: string) =>
 				}
 				await page.waitForTimeout(2000);
 			},
-			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-slots' as const, message: `Date click failed: ${e}` }),
+			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Date click failed: ${e}` }),
 		});
 
 		// Read time slots
@@ -335,8 +336,11 @@ const readSlotsViaUrl = (serviceId: string, date: string) =>
 				return page.evaluate(() => {
 					const results: Array<{ datetime: string; available: boolean }> = [];
 					document.querySelectorAll('button.time-selection').forEach(btn => {
-						const time = btn.textContent?.trim() || '';
+						const raw = btn.textContent?.trim() || '';
 						const disabled = btn.hasAttribute('disabled');
+						// Extract just the time portion, stripping "1 spot left" etc.
+						const match = raw.match(/^(\d{1,2}:\d{2}\s*[AP]M)/i);
+						const time = match ? match[1] : raw;
 						if (time) {
 							results.push({ datetime: time, available: !disabled });
 						}
@@ -344,7 +348,7 @@ const readSlotsViaUrl = (serviceId: string, date: string) =>
 					return results;
 				});
 			},
-			catch: (e) => ({ _tag: 'WizardStepError' as const, step: 'read-slots' as const, message: `Slots read failed: ${e}` }),
+			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Slots read failed: ${e}` }),
 		});
 
 		return slots;
@@ -364,7 +368,7 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) =
 		console.error(`[availability/dates] error:`, result.error);
 		return sendJson(res, 500, {
 			success: false,
-			error: { tag: 'InfrastructureError', code: 'AVAILABILITY_FAILED', message: result.error.message ?? 'Availability lookup failed' },
+			error: { tag: 'InfrastructureError', code: 'AVAILABILITY_FAILED', message: 'message' in result.error ? result.error.message : 'Availability lookup failed' },
 		});
 	}
 	sendSuccess(res, result.value);
@@ -382,7 +386,7 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) =
 		console.error(`[availability/slots] error:`, result.error);
 		return sendJson(res, 500, {
 			success: false,
-			error: { tag: 'InfrastructureError', code: 'SLOTS_FAILED', message: result.error.message ?? 'Slot lookup failed' },
+			error: { tag: 'InfrastructureError', code: 'SLOTS_FAILED', message: 'message' in result.error ? result.error.message : 'Slot lookup failed' },
 		});
 	}
 	sendSuccess(res, result.value);
@@ -399,7 +403,7 @@ const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
 	if (!result.ok) {
 		return sendJson(res, 500, {
 			success: false,
-			error: { tag: 'InfrastructureError', code: 'CHECK_FAILED', message: result.error.message ?? 'Slot check failed' },
+			error: { tag: 'InfrastructureError', code: 'CHECK_FAILED', message: 'message' in result.error ? result.error.message : 'Slot check failed' },
 		});
 	}
 	const available = result.value.some((s: { datetime: string; available: boolean }) =>
