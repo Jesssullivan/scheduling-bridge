@@ -7,7 +7,7 @@ Tinyland Inc.
 [acuity-middleware-paper.tex](paper/acuity-middleware-paper.tex)
 ## Abstract
 
-Small-business SaaS platforms create vendor lock-in through API paywalls and proprietary data formats. When the vendor restricts programmatic access to premium pricing tiers, businesses face a choice between paying for API access they should already have or accepting that their own data is held hostage. We present a browser automation middleware architecture that implements a standardized 16-method scheduling adapter interface by puppeteering the vendor's public-facing web UI via headless Playwright, deployed as a containerized service on Modal Labs. A feature-flag-driven backend selector enables zero-downtime migration from the legacy vendor to a homegrown PostgreSQL backend, implementing the strangler fig pattern against a third-party SaaS dependency. The system has been deployed in production since March 2026, processing real appointment bookings across both backends simultaneously. We report on the architecture, the dual functional programming approach (Effect TS for browser lifecycle management, fp-ts for adapter composition), the reliability challenges of DOM automation against a React SPA with Emotion CSS, and the lessons learned from automating 604 legacy appointments across 62 weeks of calendar data. The middleware replaces 8 blocked REST API endpoints through DOM interaction alone, demonstrating that browser automation is a viable -- if intentionally temporary -- bridge pattern for escaping SaaS vendor lock-in.
+Small-business SaaS platforms create vendor lock-in through API paywalls and proprietary data formats. When the vendor restricts programmatic access to premium pricing tiers, businesses face a choice between paying for API access they should already have or accepting that their own data is held hostage. We present a browser automation middleware architecture that implements a standardized 16-method scheduling adapter interface by puppeteering the vendor's public-facing web UI via headless Playwright, deployed as a containerized service on Modal Labs. A feature-flag-driven backend selector enables zero-downtime migration from the legacy vendor to a homegrown PostgreSQL backend, implementing the strangler fig pattern against a third-party SaaS dependency. The system has been deployed in production since March 2026, processing real appointment bookings across both backends simultaneously. We report on the architecture, the unified Effect TS functional programming approach (covering browser lifecycle management, adapter composition, error handling, and resource management), the reliability challenges of DOM automation against a React SPA with Emotion CSS, and the lessons learned from automating 604 legacy appointments across 62 weeks of calendar data. The middleware replaces 8 blocked REST API endpoints through DOM interaction alone, demonstrating that browser automation is a viable -- if intentionally temporary -- bridge pattern for escaping SaaS vendor lock-in.
 
 ---
 
@@ -25,7 +25,7 @@ The key insight is that browser automation middleware is not the destination -- 
 
 This paper makes four contributions:
 
-1. A formal 16-method `SchedulingAdapter` interface that abstracts scheduling operations (services, availability, reservations, bookings, clients) across heterogeneous backends, with all methods returning monadic `TaskEither<SchedulingError, T>` for composable error handling.
+1. A formal 16-method `SchedulingAdapter` interface that abstracts scheduling operations (services, availability, reservations, bookings, clients) across heterogeneous backends, with all methods returning monadic `Effect<T, SchedulingError>` for composable error handling.
 
 2. An Effect TS middleware layer that implements this interface via headless browser automation, using typed effect programs for each wizard step, managed browser lifecycle via `acquireRelease`, and a CSS selector registry with fallback chains for resilience against DOM instability.
 
@@ -135,19 +135,15 @@ interface SchedulingAdapter {
 }
 ```
 
-All methods return `SchedulingResult<T>`, defined as `TaskEither<SchedulingError, T>` from fp-ts [18]. The `SchedulingError` type is a discriminated union with seven variants (`AcuityError`, `CalComError`, `PaymentError`, `ValidationError`, `ReservationError`, `IdempotencyError`, `InfrastructureError`), each carrying a `_tag` discriminant, a `code` string, and a human-readable `message`.
+All methods return `SchedulingResult<T>`, defined as `Effect<T, SchedulingError>` from Effect TS [19]. The `SchedulingError` type is a discriminated union with seven variants (`AcuityError`, `CalComError`, `PaymentError`, `ValidationError`, `ReservationError`, `IdempotencyError`, `InfrastructureError`), each carrying a `_tag` discriminant, a `code` string, and a human-readable `message`. (An earlier version used fp-ts [18] `TaskEither` for this type; this was replaced during a full unification migration to Effect.)
 
-This design forces all error handling to be explicit at the type level. Consumers cannot accidentally ignore errors -- they must fold over the `Either` to access the success value. The `TaskEither` wrapper (a thunk returning `Promise<Either<E, A>>`) enables lazy evaluation and composition via `pipe`, `chain`, and `map`.
+This design forces all error handling to be explicit at the type level. Consumers cannot accidentally ignore errors -- they must handle the error channel to access the success value. The `Effect` type enables lazy evaluation and composition via `pipe`, `map`, and `flatMap`.
 
-### C. Dual Functional Programming Architecture
+### C. Unified Effect TS Architecture
 
-The system uses two functional programming libraries simultaneously:
+The system uses Effect TS [19] as its sole functional programming library, providing a unified abstraction across all layers. Effect manages the browser middleware layer -- generator-based programs (`Effect.gen(function* () { ... })`), typed errors via `Data.TaggedError`, dependency injection via `Context.Tag`, and resource lifecycle management via `Layer.scoped` and `Effect.acquireRelease` -- and also provides the adapter interface return type (`Effect<T, SchedulingError>`) and composition operators (`pipe`, `map`, `flatMap`) used by consumers and the booking pipeline.
 
-**Effect TS** [19] manages the browser middleware layer. Effect programs are generator-based (`Effect.gen(function* () { ... })`), with typed errors, dependency injection via `Context.Tag`, and resource lifecycle management via `Layer.scoped` and `Effect.acquireRelease`. The browser and page are acquired resources that are guaranteed to close on scope exit, even if the wizard step programs fail.
-
-**fp-ts** [18] provides the adapter interface type (`TaskEither`) and the composition operators (`pipe`, `chain`, `map`, `tap`) used by consumers and the booking pipeline. The adapter interface is defined in fp-ts terms because it predates the middleware layer and because fp-ts `TaskEither` is simpler to consume than Effect for callers who do not need resource management.
-
-The bridge between the two is the `runEffect` function in the wizard adapter, which converts an Effect program to a `TaskEither` by running the Effect to an `Exit` value and mapping `Success` to `Right` and typed `Failure` to `Left` via the `toSchedulingError` bridge function.
+An earlier version used a dual-library approach: fp-ts [18] for the adapter interface (`TaskEither`) and Effect TS for the browser middleware, with a `runEffect` bridge function converting between the two by running Effect to an `Exit` value and mapping `Success` to `Right` and typed `Failure` to `Left`. This bridge was eliminated during a full unification migration to Effect.
 
 ### D. CSS Selector Registry
 
@@ -311,9 +307,9 @@ Browser automation against a third-party SPA is inherently fragile. Acuity can c
 2. **Disposability by design.** The wizard adapter is a migration bridge. Once the homegrown backend reaches full feature parity, the browser middleware layer is deleted entirely.
 3. **Fallback chains.** The selector registry tries multiple candidates per logical element, absorbing minor DOM restructuring without code changes.
 
-### B. Dual Effect System Complexity
+### B. Effect Unification
 
-Using both Effect TS and fp-ts introduces cognitive overhead. The `runEffect` bridge function is a source of subtle bugs -- incorrectly handling `FiberFailure` wrappers or `Cause` trees can swallow typed errors. In hindsight, a single effect system would be preferable. The dual approach emerged from the adapter interface (defined in fp-ts terms before the middleware layer was built) and the middleware layer (requiring Effect's resource management capabilities). A future version might unify on Effect TS throughout.
+An earlier version of the system used both Effect TS and fp-ts simultaneously, requiring a `runEffect` bridge function that was a source of subtle bugs -- incorrectly handling `FiberFailure` wrappers or `Cause` trees could swallow typed errors. The dual approach emerged from the adapter interface (defined in fp-ts terms before the middleware layer was built) and the middleware layer (requiring Effect's resource management capabilities). The system was subsequently unified on Effect TS throughout, eliminating the bridge function and the fp-ts dependency entirely. This reduced the mental model required of contributors and eliminated an entire class of error-boundary bugs.
 
 ### C. Ethical and Legal Considerations
 
