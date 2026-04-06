@@ -345,7 +345,8 @@ const advancePastForm = (page: Page): Effect.Effect<boolean, WizardStepError> =>
 			try: async () => {
 				await continueBtn.element.click();
 				// Wait for navigation to payment page (URL ends in /payment)
-				await page.waitForURL((url) => url.href.includes('/payment'), { timeout: 15000 });
+				// Increased timeout: Acuity's server-side validation can take 10-20s
+				await page.waitForURL((url) => url.href.includes('/payment'), { timeout: 30000 });
 			},
 			catch: (e) =>
 				new WizardStepError({
