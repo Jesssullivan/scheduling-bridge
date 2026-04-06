@@ -267,7 +267,9 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
 	// Use service name for wizard navigation (click-based, not URL param)
-	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
+	// Treat numeric-only serviceName as unresolved (remote adapter sends serviceId as fallback)
+	const resolvedName = body.serviceName && !/^\d+$/.test(body.serviceName) ? body.serviceName : undefined;
+	const serviceName = resolvedName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
 	console.log(`[availability/dates] serviceName="${serviceName}" from serviceId="${body.serviceId}"`);
 
 	const result = await runEffect(
@@ -291,7 +293,8 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) =
 
 const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; date: string };
-	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
+	const resolvedName = body.serviceName && !/^\d+$/.test(body.serviceName) ? body.serviceName : undefined;
+	const serviceName = resolvedName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
 	console.log(`[availability/slots] serviceName="${serviceName}" date="${body.date}"`);
 
 	const result = await runEffect(
@@ -315,7 +318,8 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) =
 const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; datetime: string };
 	const date = body.datetime.split('T')[0];
-	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
+	const resolvedName = body.serviceName && !/^\d+$/.test(body.serviceName) ? body.serviceName : undefined;
+	const serviceName = resolvedName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
 
 	const result = await runEffect(
 		readTimeSlots({
