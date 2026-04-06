@@ -22,11 +22,12 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "LICENSE",
     "README.md"
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "npm run build",
+    "prepublishOnly": "tsc",
     "start": "node dist/middleware/server.js",
     "dev": "tsx src/middleware/server.ts",
     "test": "vitest run",
