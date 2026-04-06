@@ -135,7 +135,7 @@ const layer = BrowserServiceLive(browserConfig);
 type Result<A> = { ok: true; value: A } | { ok: false; error: SchedulingError };
 
 const runEffect = async <A>(
-	effect: Effect.Effect<A, MiddlewareError, BrowserService | Scope.Scope>,
+	effect: Effect.Effect<A, MiddlewareError | undefined, BrowserService | Scope.Scope>,
 ): Promise<Result<A>> => {
 	const exit = await Effect.runPromiseExit(
 		Effect.scoped(effect.pipe(Effect.provide(layer))),
@@ -144,7 +144,7 @@ const runEffect = async <A>(
 		return { ok: true, value: exit.value };
 	}
 	const failure = Cause.failureOption(exit.cause);
-	if (failure._tag === 'Some') {
+	if (failure._tag === 'Some' && failure.value !== undefined) {
 		return { ok: false, error: toSchedulingError(failure.value) };
 	}
 	return { ok: false, error: { _tag: 'InfrastructureError', code: 'UNKNOWN', message: Cause.pretty(exit.cause) } };
