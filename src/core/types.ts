@@ -2,8 +2,7 @@
  * Re-export core types from @tummycrypt/scheduling-kit.
  *
  * We selectively re-export only the types module (not utils/pipelines)
- * to avoid pulling in fp-ts runtime code that has ESM import issues
- * in the published package.
+ * to keep the dependency surface minimal in the published package.
  */
 export type {
   AcuityError,
