@@ -227,13 +227,9 @@ export const extractBusinessServices = Effect.gen(function* () {
 	const services = businessToServices(business);
 
 	if (services.length === 0) {
-		yield* Effect.logWarning('BUSINESS object found but contained 0 active services').pipe(
-			Effect.annotateLogs({ step: 'extract-business' }),
-		);
+		console.warn('[extract-business] BUSINESS object found but contained 0 active services');
 	} else {
-		yield* Effect.logInfo('Extracted services from BUSINESS object').pipe(
-			Effect.annotateLogs({ step: 'extract-business', count: services.length }),
-		);
+		console.log(`[extract-business] Extracted ${services.length} services from BUSINESS object`);
 	}
 
 	return services;

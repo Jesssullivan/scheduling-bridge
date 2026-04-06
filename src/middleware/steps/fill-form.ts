@@ -82,22 +82,29 @@ export const fillFormFields = (params: FillFormParams) =>
 			}
 		}
 
+		// Fill any remaining required textareas that are still empty.
+		// This catches mandatory intake questions (e.g., "What would you like
+		// to work on?", "How many hours of restful sleep?") regardless of their
+		// field IDs, which change when Jen edits the Acuity intake form.
+		yield* fillRequiredTextareas(page, params.client.notes);
+		intakeFieldsCompleted.push('requiredTextareas');
+
 		// Fill intake radio buttons (yes/no questions)
 		const radioAnswer = params.intakeRadioAnswer ?? 'no';
 		yield* fillIntakeRadios(page, radioAnswer);
 		intakeFieldsCompleted.push('radioButtons');
 
-		// Fill "How did you hear" checkbox
+		// Fill "How did you hear" checkbox (may not exist on current form)
 		const hearOption = params.howDidYouHear ?? 'Internet search';
 		yield* fillHowDidYouHear(page, hearOption);
 		intakeFieldsCompleted.push('howDidYouHear');
 
-		// Fill medication textarea
+		// Fill medication textarea (may not exist on current form)
 		const medication = params.medication ?? 'None';
 		yield* fillMedication(page, medication);
 		intakeFieldsCompleted.push('medication');
 
-		// Fill terms checkbox
+		// Fill terms checkbox (may not exist on current form)
 		yield* fillTermsCheckbox(page);
 		intakeFieldsCompleted.push('termsCheckbox');
 
@@ -215,6 +222,48 @@ const fillCustomField = (
 
 		return true;
 	});
+
+/**
+ * Fill any required textareas that are still empty.
+ *
+ * Acuity intake forms have mandatory custom fields (aria-required="true")
+ * whose field IDs change when the practitioner edits the form. Instead of
+ * hardcoding IDs, we scan the page for any required textarea that hasn't
+ * been filled yet and provide a sensible default.
+ */
+const fillRequiredTextareas = (
+	page: Page,
+	clientNotes?: string,
+): Effect.Effect<void, never> =>
+	Effect.tryPromise({
+		try: async () => {
+			const textareas = await page.$$('textarea[aria-required="true"]');
+			for (const textarea of textareas) {
+				const currentValue = await textarea.evaluate(
+					(el) => (el as HTMLTextAreaElement).value,
+				);
+				if (currentValue.trim()) continue; // Already filled
+
+				// Use client notes for the first empty textarea, "N/A" for the rest
+				const label = await textarea.evaluate((el) => {
+					const container = el.closest('[class*="field"]') ?? el.parentElement;
+					const labelEl = container?.querySelector('label');
+					return labelEl?.textContent?.trim() ?? '';
+				});
+
+				let defaultValue = 'N/A';
+				if (label.toLowerCase().includes('work on') || label.toLowerCase().includes('session')) {
+					defaultValue = clientNotes?.trim() || 'General wellness';
+				} else if (label.toLowerCase().includes('sleep')) {
+					defaultValue = '7-8 hours';
+				}
+
+				await textarea.scrollIntoViewIfNeeded();
+				await textarea.fill(defaultValue);
+			}
+		},
+		catch: () => undefined,
+	}).pipe(Effect.orElseSucceed(() => undefined));
 
 /**
  * Fill intake radio buttons.
@@ -345,7 +394,8 @@ const advancePastForm = (page: Page): Effect.Effect<boolean, WizardStepError> =>
 			try: async () => {
 				await continueBtn.element.click();
 				// Wait for navigation to payment page (URL ends in /payment)
-				await page.waitForURL((url) => url.href.includes('/payment'), { timeout: 15000 });
+				// Increased timeout: Acuity's server-side validation can take 10-20s
+				await page.waitForURL((url) => url.href.includes('/payment'), { timeout: 30000 });
 			},
 			catch: (e) =>
 				new WizardStepError({

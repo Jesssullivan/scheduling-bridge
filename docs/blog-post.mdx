@@ -44,7 +44,7 @@ That advice is bad.
 
 Here is what I actually built:
 
-A 16-method `SchedulingAdapter` interface- services, providers, availability, reservations, bookings, clients- with every method returning `TaskEither<SchedulingError, T>` from fp-ts. Monadic composition all the way down. You cannot accidentally ignore an error because the type system won't let you access the success value without folding over the Either first.
+A 16-method `SchedulingAdapter` interface- services, providers, availability, reservations, bookings, clients- with every method returning `Effect<T, SchedulingError>` from Effect TS. Monadic composition all the way down. You cannot accidentally ignore an error because the type system won't let you access the success value without handling the error channel first.
 
 Then I implemented that interface twice.
 
@@ -65,37 +65,19 @@ That's the strangler fig. Both backends run simultaneously. Alpha gets the homeg
 
 ---
 
-## Effect TS and fp-ts Walk Into a Codebase
+## Effect TS All the Way Down
 
-I am not proud of this part.
+This part used to be embarrassing.
 
-The adapter interface was defined in fp-ts terms before the browser middleware existed. `TaskEither` is the right type for "a lazy async computation that might fail"- it composes beautifully via `pipe`, `chain`, `map`. Consumers of the scheduling adapter get clean monadic composition with explicit error handling. Good.
+The adapter interface was originally defined in fp-ts terms- `TaskEither` for "a lazy async computation that might fail," composing via `pipe`, `chain`, `map`. Then the browser middleware needed resource management (launch browser, create page, guarantee cleanup when step 4 throws), which fp-ts does not do. So the middleware layer used Effect TS, and a bridge function called `runEffect` converted between the two worlds.
 
-Then I needed to manage a Playwright browser lifecycle. Launch browser, create page, run 7 sequential wizard steps, guarantee cleanup even when step 4 throws because Acuity decided to rearrange their radio buttons this week. This is a resource management problem. fp-ts does not do resource management. Effect TS does.
+Two functional effect systems. One bridge function. It was a source of subtle bugs where `Effect.runPromise` would wrap typed errors in `FiberFailure`, destroying the discriminated union structure at the Promise boundary.
 
-So the middleware layer uses Effect. Generator syntax, `Context.Tag` for dependency injection, `Layer.scoped` with `acquireRelease` for the browser process and page instance. Each wizard step is an Effect program that yields the `BrowserService` from context, wraps Playwright calls in `Effect.tryPromise`, and returns typed errors (`WizardStepError`, `SelectorError`, `CouponError`, `BrowserError`).
+So I unified everything on Effect. The adapter interface now returns `Effect<T, SchedulingError>` directly. The browser middleware uses the same library- generator syntax, `Context.Tag` for dependency injection, `Layer.scoped` with `acquireRelease` for the browser process and page instance. Each wizard step is an Effect program that yields the `BrowserService` from context, wraps Playwright calls in `Effect.tryPromise`, and returns typed errors (`WizardStepError`, `SelectorError`, `CouponError`, `BrowserError`).
 
-The bridge between the two worlds is a function called `runEffect`:
+No more bridge. No more converting between two effect systems. The `runEffect` function still exists at the outermost boundary where Effect meets the HTTP handler, but it is a simple `Effect.runPromiseExit` call, not a translation layer between incompatible type systems.
 
-```typescript
-const runEffect = <A>(
-  effect: Effect.Effect<A, MiddlewareError>,
-): SchedulingResult<A> =>
-  () =>
-    Effect.runPromiseExit(effect.pipe(Effect.provide(layer))).then(
-      (exit) => {
-        if (Exit.isSuccess(exit)) return E.right(exit.value);
-        const failure = Cause.failureOption(exit.cause);
-        if (failure._tag === 'Some')
-          return E.left(toSchedulingError(failure.value));
-        return E.left(Errors.infrastructure('UNKNOWN', '...'));
-      },
-    );
-```
-
-That last paragraph is doing a tremendous amount of heavy lifting. We run the Effect to an `Exit` value (not a Promise- an Exit, so we get the typed error channel instead of a FiberFailure wrapper), extract the first failure from the Cause tree, convert it from Effect's tagged error type to fp-ts's discriminated union type via `toSchedulingError`, and wrap the whole thing in a thunk that returns `Promise<Either<SchedulingError, A>>`.
-
-Two functional effect systems. One bridge function. I have made my choices and I will live with them.
+One functional effect system. Zero bridge functions. I have made better choices.
 
 ---
 
@@ -214,7 +196,7 @@ The scheduling adapter interface is the stable contract. The browser middleware 
 
 The adapter interface stays. The availability engine stays. The booking schema, the email templates, the admin calendar, the payment integration- all of that stays. The browser automation was the scaffolding. You don't preserve scaffolding.
 
-Modal and Playwright and the selector registry and the coupon bypass and the `runEffect` bridge and the entire elaborate machinery for puppeteering a React SPA into pretending to be a REST API- all of it was built to be thrown away. That is the design. That is the point.
+Modal and Playwright and the selector registry and the coupon bypass and the entire elaborate machinery for puppeteering a React SPA into pretending to be a REST API- all of it was built to be thrown away. That is the design. That is the point.
 
 Why pay for an API to rebuild a closed-source wizard when you *are* a wizard?
 
@@ -224,7 +206,7 @@ Why pay for an API to rebuild a closed-source wizard when you *are* a wizard?
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| Adapter interface | fp-ts `TaskEither` | 16-method contract, monadic errors |
+| Adapter interface | Effect TS | 16-method contract, monadic errors |
 | Browser middleware | Effect TS + Playwright | Wizard step programs, resource management |
 | Container runtime | Modal Labs | Serverless Chromium, warm pools |
 | Selector registry | CSS fallback chains | DOM resilience against Emotion hash instability |

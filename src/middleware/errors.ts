@@ -73,6 +73,6 @@ export const toSchedulingError = (error: MiddlewareError): SchedulingError => {
 		case 'CouponError':
 			return Errors.acuity('BOOKING_FAILED', `Coupon error: ${error.message}`);
 		case 'ServiceResolverError':
-			return Errors.acuity('NOT_FOUND', `Service not found: ${error.message}`);
+			return Errors.acuity('SCRAPE_FAILED', `Service resolution failed: ${error.message}`);
 	}
 };

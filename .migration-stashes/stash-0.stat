@@ -1,0 +1,6 @@
+ src/adapters/acuity-scraper.ts   |  50 ++++++++++++----
+ src/middleware/acuity-wizard.ts  |   1 +
+ src/middleware/remote-adapter.ts |  59 ++++++++++++++----
+ src/middleware/server.ts         | 125 ++++++++++++++++++++++++++++++++++-----
+ src/middleware/steps/index.ts    |  10 ++++
+ 5 files changed, 206 insertions(+), 39 deletions(-)
