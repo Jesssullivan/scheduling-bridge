@@ -1,6 +1,6 @@
 {
   "name": "@tummycrypt/acuity-middleware",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Playwright-based Acuity booking middleware server",
   "type": "module",
   "license": "MIT",
@@ -20,8 +20,13 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepublishOnly": "npm run build",
     "start": "node dist/middleware/server.js",
     "dev": "tsx src/middleware/server.ts",
     "test": "vitest run",
@@ -31,19 +36,23 @@
     "paper:dev": "node docs/paper/watch.mjs"
   },
   "dependencies": {
-    "@tummycrypt/scheduling-kit": "^0.2.0",
-    "effect": "^3.19.14",
-    "playwright-core": "^1.58.1"
+    "@tummycrypt/scheduling-kit": "^0.4.0",
+    "playwright-core": "^1.58.1",
+    "effect": "^3.19.14"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "playwright": "^1.58.2",
-    "tsx": "^4.0.0",
     "typescript": "^5.9.0",
-    "vitest": "^4.0.0"
+    "tsx": "^4.0.0",
+    "vitest": "^4.0.0",
+    "@types/node": "^22.0.0"
   },
   "publishConfig": {
     "access": "public"
+  },
+  "pnpm": {
+    "overrides": {
+      "effect": "^3.19.14"
+    }
   },
   "engines": {
     "node": ">=20.0.0"

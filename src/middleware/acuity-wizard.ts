@@ -16,7 +16,7 @@
  * fp-ts (pipeline/adapter layer).
  */
 
-import { Effect, Layer, pipe } from 'effect';
+import { Effect, pipe } from 'effect';
 
 import type { SchedulingAdapter } from '../adapters/types.js';
 import { createScraperAdapter, type ScraperConfig } from '../adapters/acuity-scraper.js';
@@ -29,7 +29,6 @@ import type {
 import { Errors } from '../core/types.js';
 import { BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from './browser-service.js';
 import { toSchedulingError, type MiddlewareError } from './errors.js';
-import { ServiceResolverLive } from './service-resolver.js';
 import { createRemoteWizardAdapter, type RemoteAdapterConfig } from './remote-adapter.js';
 import {
 	navigateToBooking,
@@ -205,7 +204,7 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		...config,
 	};
 
-	const layer = Layer.merge(BrowserServiceLive(browserConfig), ServiceResolverLive);
+	const layer = BrowserServiceLive(browserConfig);
 
 	// Provide browser layer and map MiddlewareError → SchedulingError
 	const runWizard = <A>(

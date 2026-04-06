@@ -30,14 +30,10 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { Effect, Exit, Cause, Layer, Scope } from 'effect';
-// Scraper removed — deprecated and caused esbuild bundling issues.
-// Services are served from SERVICES_JSON env or BUSINESS object extraction.
+import { Effect, Exit, Cause, Scope } from 'effect';
+import { createScraperAdapter, type ScraperConfig } from '../adapters/acuity-scraper.js';
 import { BrowserService, BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from './browser-service.js';
 import { toSchedulingError, type MiddlewareError } from './errors.js';
-import { ServiceResolver, ServiceResolverLive } from './service-resolver.js';
-import { LoggerLive, ndjsonLog } from './logger.js';
-import { selectorHealthCheck } from './selector-health.js';
 import {
 	navigateToBooking,
 	fillFormFields,
@@ -46,10 +42,10 @@ import {
 	submitBooking,
 	extractConfirmation,
 	toBooking,
+	readAvailableDates,
+	readTimeSlots,
 	fetchBusinessData,
 	businessToServices,
-	readDatesViaUrl,
-	readSlotsViaUrl,
 } from './steps/index.js';
 import type {
 	Booking,
@@ -76,7 +72,14 @@ const browserConfig: BrowserConfig = {
 	launchArgs: process.env.CHROMIUM_LAUNCH_ARGS?.split(','),
 };
 
-// scraperConfig removed — scraper deprecated, BUSINESS extraction replaces it
+const scraperConfig: ScraperConfig = {
+	baseUrl: ACUITY_BASE_URL,
+	headless: browserConfig.headless,
+	timeout: browserConfig.timeout,
+	userAgent: browserConfig.userAgent,
+	executablePath: browserConfig.executablePath,
+	launchArgs: browserConfig.launchArgs ? [...browserConfig.launchArgs] : undefined,
+};
 
 // =============================================================================
 // RESPONSE HELPERS
@@ -127,14 +130,12 @@ const parseBody = async (req: IncomingMessage): Promise<unknown> => {
 // EFFECT RUNNER
 // =============================================================================
 
-const layer = Layer.merge(BrowserServiceLive(browserConfig), ServiceResolverLive).pipe(
-	Layer.provide(LoggerLive),
-);
+const layer = BrowserServiceLive(browserConfig);
 
 type Result<A> = { ok: true; value: A } | { ok: false; error: SchedulingError };
 
 const runEffect = async <A>(
-	effect: Effect.Effect<A, MiddlewareError, BrowserService | ServiceResolver | Scope.Scope>,
+	effect: Effect.Effect<A, MiddlewareError, BrowserService | Scope.Scope>,
 ): Promise<Result<A>> => {
 	const exit = await Effect.runPromiseExit(
 		Effect.scoped(effect.pipe(Effect.provide(layer))),
@@ -168,6 +169,15 @@ const runSchedulingEffect = async <A>(
 // SCRAPER (cached)
 // =============================================================================
 
+let scraper: ReturnType<typeof createScraperAdapter> | null = null;
+
+const getScraper = () => {
+	if (!scraper) {
+		scraper = createScraperAdapter(scraperConfig);
+	}
+	return scraper;
+};
+
 let cachedServices: Service[] | null = null;
 
 // Static services from SERVICES_JSON env var (avoids scraper dependency)
@@ -177,53 +187,28 @@ const STATIC_SERVICES: Service[] | null = (() => {
 	try {
 		return JSON.parse(raw) as Service[];
 	} catch (e) {
-		ndjsonLog('ERROR', 'Failed to parse SERVICES_JSON', { error: String(e) });
+		console.error('[middleware-server] Failed to parse SERVICES_JSON:', e);
 		return null;
 	}
 })();
 
 if (STATIC_SERVICES) {
 	cachedServices = STATIC_SERVICES;
-	ndjsonLog('INFO', 'Loaded static services from SERVICES_JSON', { count: STATIC_SERVICES.length });
+	console.log(`[middleware-server] Loaded ${STATIC_SERVICES.length} static services from SERVICES_JSON`);
 }
 
 // =============================================================================
 // ROUTE HANDLERS
 // =============================================================================
 
-let requestCount = 0;
-const startedAt = new Date().toISOString();
-
-const handleHealth = async (req: IncomingMessage, res: ServerResponse) => {
-	const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
-	const depth = Number(url.searchParams.get('depth') ?? 0) as 0 | 1 | 2;
-
-	const baseHealth = {
+const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
+	sendSuccess(res, {
 		status: 'ok',
 		baseUrl: ACUITY_BASE_URL,
 		hasCoupon: !!COUPON_CODE,
 		headless: browserConfig.headless,
 		staticServices: STATIC_SERVICES ? STATIC_SERVICES.length : 0,
-		uptime: process.uptime(),
-		startedAt,
-		requestCount,
 		timestamp: new Date().toISOString(),
-	};
-
-	if (depth === 0) {
-		return sendSuccess(res, baseHealth);
-	}
-
-	// Tiered selector health check (requires browser)
-	const result = await runEffect(selectorHealthCheck(ACUITY_BASE_URL, depth));
-	if (!result.ok) {
-		return sendSuccess(res, { ...baseHealth, selectorCheck: null, selectorError: 'probe failed' });
-	}
-
-	return sendSuccess(res, {
-		...baseHealth,
-		status: result.value.status,
-		selectorCheck: result.value,
 	});
 };
 
@@ -231,7 +216,7 @@ const handleHealth = async (req: IncomingMessage, res: ServerResponse) => {
 const handleGetServices = async (_req: IncomingMessage, res: ServerResponse) => {
 	// 1. Prefer static services from env (always reliable, no network needed)
 	if (STATIC_SERVICES) {
-		ndjsonLog('INFO', 'Services source: SERVICES_JSON env');
+		console.log('[services] source: SERVICES_JSON env');
 		cachedServices = STATIC_SERVICES;
 		return sendSuccess(res, STATIC_SERVICES);
 	}
@@ -242,31 +227,34 @@ const handleGetServices = async (_req: IncomingMessage, res: ServerResponse) => 
 		if (business) {
 			const services = businessToServices(business);
 			if (services.length > 0) {
-				ndjsonLog('INFO', 'Services source: BUSINESS object', { count: services.length });
+				console.log(`[services] source: BUSINESS object (${services.length} services)`);
 				cachedServices = services;
 				return sendSuccess(res, services);
 			}
-			ndjsonLog('WARN', 'BUSINESS object found but 0 active services');
+			console.warn('[services] BUSINESS object found but 0 active services');
 		}
 	} catch (e) {
-		ndjsonLog('WARN', 'BUSINESS extraction failed', { error: e instanceof Error ? e.message : String(e) });
+		console.warn('[services] BUSINESS extraction failed:', e instanceof Error ? e.message : e);
 	}
 
-	// No more fallbacks — return empty with warning
-	ndjsonLog('ERROR', 'All service sources exhausted (SERVICES_JSON not set, BUSINESS extraction failed)');
-	sendSuccess(res, []);
+	// 3. Deprecated fallback: DOM scraper (may return [] — Acuity is React SPA)
+	console.warn('[services] falling back to DOM scraper (deprecated)');
+	const result = await runSchedulingEffect(getScraper().getServices());
+	if (!result.ok) return sendError(res, 500, result.error);
+	if (result.value.length === 0) {
+		console.error('[services] all sources exhausted — returning empty []');
+	}
+	cachedServices = result.value;
+	sendSuccess(res, result.value);
 };
 
 const handleGetService = async (serviceId: string, res: ServerResponse) => {
 	if (!cachedServices) {
-		// Try BUSINESS extraction to populate cache
-		try {
-			const business = await fetchBusinessData(ACUITY_BASE_URL);
-			if (business) cachedServices = businessToServices(business);
-		} catch { /* ignore */ }
+		const result = await runSchedulingEffect(getScraper().getServices());
+		if (!result.ok) return sendError(res, 500, result.error);
+		cachedServices = result.value;
 	}
-	if (!cachedServices) cachedServices = [];
-	const found = cachedServices.find((s) => s.id === serviceId);
+	const found = cachedServices!.find((s) => s.id === serviceId);
 	if (!found) {
 		return sendJson(res, 404, {
 			success: false,
@@ -278,19 +266,24 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 
 const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
-	// Use Acuity numeric ID for direct URL navigation (bypasses collapsed categories)
-	const serviceId = body.serviceId;
-	ndjsonLog('INFO', 'availability/dates', { serviceId, startDate: body.startDate });
+	// Use service name for wizard navigation (click-based, not URL param)
+	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
+	console.log(`[availability/dates] serviceName="${serviceName}" from serviceId="${body.serviceId}"`);
 
 	const result = await runEffect(
-		readDatesViaUrl(serviceId, body.startDate?.slice(0, 7)),
+		readAvailableDates({
+			serviceName,
+			targetMonth: body.startDate?.slice(0, 7),
+			monthsToScan: 2,
+		}),
 	);
 
 	if (!result.ok) {
-		ndjsonLog('ERROR', 'availability/dates failed', { error: result.error });
+		const err = result.error;
+		console.error(`[availability/dates] error:`, err);
 		return sendJson(res, 500, {
 			success: false,
-			error: { tag: 'InfrastructureError', code: 'AVAILABILITY_FAILED', message: 'message' in result.error ? result.error.message : 'Availability lookup failed' },
+			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Availability lookup failed' },
 		});
 	}
 	sendSuccess(res, result.value);
@@ -298,17 +291,22 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) =
 
 const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; date: string };
-	ndjsonLog('INFO', 'availability/slots', { serviceId: body.serviceId, date: body.date });
+	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
+	console.log(`[availability/slots] serviceName="${serviceName}" date="${body.date}"`);
 
 	const result = await runEffect(
-		readSlotsViaUrl(body.serviceId, body.date),
+		readTimeSlots({
+			serviceName,
+			date: body.date,
+		}),
 	);
 
 	if (!result.ok) {
-		ndjsonLog('ERROR', 'availability/slots failed', { error: result.error });
+		const err = result.error;
+		console.error(`[availability/slots] error:`, err);
 		return sendJson(res, 500, {
 			success: false,
-			error: { tag: 'InfrastructureError', code: 'SLOTS_FAILED', message: 'message' in result.error ? result.error.message : 'Slot lookup failed' },
+			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot lookup failed' },
 		});
 	}
 	sendSuccess(res, result.value);
@@ -317,15 +315,20 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) =
 const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; datetime: string };
 	const date = body.datetime.split('T')[0];
+	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
 
 	const result = await runEffect(
-		readSlotsViaUrl(body.serviceId, date),
+		readTimeSlots({
+			serviceName,
+			date,
+		}),
 	);
 
 	if (!result.ok) {
+		const err = result.error;
 		return sendJson(res, 500, {
 			success: false,
-			error: { tag: 'InfrastructureError', code: 'CHECK_FAILED', message: 'message' in result.error ? result.error.message : 'Slot check failed' },
+			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot check failed' },
 		});
 	}
 	const available = result.value.some((s: { datetime: string; available: boolean }) =>
@@ -414,7 +417,6 @@ const server = createServer(async (req, res) => {
 	const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
 	const path = url.pathname;
 	const method = req.method?.toUpperCase() ?? 'GET';
-	requestCount++;
 
 	// Auth check (skip health endpoint)
 	if (AUTH_TOKEN && path !== '/health') {
@@ -460,7 +462,7 @@ const server = createServer(async (req, res) => {
 			error: { tag: 'InfrastructureError', code: 'NOT_FOUND', message: `Unknown route: ${method} ${path}` },
 		});
 	} catch (e) {
-		ndjsonLog('ERROR', 'Unhandled error', { method, path, error: e instanceof Error ? e.message : String(e) });
+		console.error(`[middleware-server] Unhandled error on ${method} ${path}:`, e);
 		sendJson(res, 500, {
 			success: false,
 			error: {
@@ -475,13 +477,11 @@ const server = createServer(async (req, res) => {
 // Only start listening when this file is executed directly (not imported)
 if (process.argv[1]?.match(/server\.(ts|js|mjs)$/)) {
 	server.listen(PORT, '0.0.0.0', () => {
-		ndjsonLog('INFO', 'Middleware server started', {
-			port: PORT,
-			baseUrl: ACUITY_BASE_URL,
-			coupon: COUPON_CODE ? 'configured' : 'NOT SET',
-			auth: AUTH_TOKEN ? 'enabled' : 'disabled',
-			headless: browserConfig.headless,
-		});
+		console.log(`[middleware-server] Listening on port ${PORT}`);
+		console.log(`[middleware-server] Acuity URL: ${ACUITY_BASE_URL}`);
+		console.log(`[middleware-server] Coupon: ${COUPON_CODE ? 'configured' : 'NOT SET'}`);
+		console.log(`[middleware-server] Auth: ${AUTH_TOKEN ? 'enabled' : 'disabled'}`);
+		console.log(`[middleware-server] Headless: ${browserConfig.headless}`);
 	});
 }
 
