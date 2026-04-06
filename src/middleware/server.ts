@@ -279,9 +279,22 @@ const handleGetServices = async (_req: IncomingMessage, res: ServerResponse) => 
 
 const handleGetService = async (serviceId: string, res: ServerResponse) => {
 	if (!cachedServices) {
-		const result = await runSchedulingEffect(getScraper().getServices());
-		if (!result.ok) return sendError(res, 500, result.error);
-		cachedServices = result.value;
+		// Prefer BUSINESS extraction (HTTP, no browser) over DOM scraper
+		try {
+			const business = await fetchBusinessData(ACUITY_BASE_URL);
+			if (business) {
+				cachedServices = businessToServices(business);
+				console.log(`[service] Warmed cache via BUSINESS: ${cachedServices.length} services`);
+			}
+		} catch (e) {
+			console.warn('[service] BUSINESS extraction failed:', e instanceof Error ? e.message : e);
+		}
+		// Fallback to scraper if BUSINESS failed
+		if (!cachedServices) {
+			const result = await runSchedulingEffect(getScraper().getServices());
+			if (!result.ok) return sendError(res, 500, result.error);
+			cachedServices = result.value;
+		}
 	}
 	const found = cachedServices!.find((s) => s.id === serviceId);
 	if (!found) {
