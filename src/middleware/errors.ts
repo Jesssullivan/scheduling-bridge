@@ -2,7 +2,7 @@
  * Middleware Error Types
  *
  * Effect TS error types for the Acuity wizard middleware.
- * Bridges to fp-ts SchedulingError at the adapter boundary.
+ * Bridges to adapter-layer SchedulingError at the adapter boundary.
  */
 
 import { Data } from 'effect';
@@ -48,11 +48,11 @@ export class ServiceResolverError extends Data.TaggedError('ServiceResolverError
 export type MiddlewareError = BrowserError | SelectorError | WizardStepError | CouponError | ServiceResolverError;
 
 // =============================================================================
-// BRIDGE: Effect errors -> fp-ts SchedulingError
+// BRIDGE: Effect middleware errors -> adapter-layer SchedulingError
 // =============================================================================
 
 /**
- * Convert Effect middleware errors to fp-ts SchedulingError
+ * Convert Effect middleware errors to adapter-layer SchedulingError
  * for compatibility with the existing booking pipeline.
  */
 export const toSchedulingError = (error: MiddlewareError): SchedulingError => {

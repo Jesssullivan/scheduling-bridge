@@ -12,8 +12,7 @@
  * Write operations:
  * - createBooking/createBookingWithPaymentRef: Effect TS middleware via Playwright
  *
- * This is the bridge between Effect TS (middleware layer) and
- * fp-ts (pipeline/adapter layer).
+ * This bridges Effect TS middleware errors to adapter-layer SchedulingError.
  */
 
 import { Effect, pipe } from 'effect';

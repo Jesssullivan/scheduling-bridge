@@ -7,7 +7,7 @@
  *
  * This adapter is the client-side counterpart to `middleware/server.ts`.
  * It serializes requests, sends them over HTTP, and deserializes
- * responses back into fp-ts TaskEither types.
+ * responses back into Effect types.
  *
  * @example
  * ```typescript
