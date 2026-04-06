@@ -198,6 +198,35 @@ if (STATIC_SERVICES) {
 }
 
 // =============================================================================
+// SERVICE NAME RESOLUTION
+// =============================================================================
+
+/**
+ * Resolve a service ID to its display name for wizard navigation.
+ * Ensures cachedServices is populated (via BUSINESS extraction) before lookup.
+ * Rejects numeric-only serviceName (remote adapter fallback) and resolves from cache.
+ */
+const resolveServiceName = async (serviceId: string, serviceName?: string): Promise<string> => {
+	// If caller provided a real (non-numeric) name, use it
+	if (serviceName && !/^\d+$/.test(serviceName)) return serviceName;
+
+	// Ensure services are cached
+	if (!cachedServices) {
+		try {
+			const business = await fetchBusinessData(ACUITY_BASE_URL);
+			if (business) {
+				cachedServices = businessToServices(business);
+				console.log(`[resolve] Warmed service cache: ${cachedServices.length} services`);
+			}
+		} catch (e) {
+			console.warn('[resolve] Service cache warm failed:', e instanceof Error ? e.message : e);
+		}
+	}
+
+	return cachedServices?.find((s) => s.id === serviceId)?.name ?? serviceId;
+};
+
+// =============================================================================
 // ROUTE HANDLERS
 // =============================================================================
 
@@ -266,10 +295,7 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 
 const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
-	// Use service name for wizard navigation (click-based, not URL param)
-	// Treat numeric-only serviceName as unresolved (remote adapter sends serviceId as fallback)
-	const resolvedName = body.serviceName && !/^\d+$/.test(body.serviceName) ? body.serviceName : undefined;
-	const serviceName = resolvedName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
+	const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
 	console.log(`[availability/dates] serviceName="${serviceName}" from serviceId="${body.serviceId}"`);
 
 	const result = await runEffect(
@@ -293,8 +319,7 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) =
 
 const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; date: string };
-	const resolvedName = body.serviceName && !/^\d+$/.test(body.serviceName) ? body.serviceName : undefined;
-	const serviceName = resolvedName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
+	const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
 	console.log(`[availability/slots] serviceName="${serviceName}" date="${body.date}"`);
 
 	const result = await runEffect(
@@ -318,8 +343,7 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) =
 const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; datetime: string };
 	const date = body.datetime.split('T')[0];
-	const resolvedName = body.serviceName && !/^\d+$/.test(body.serviceName) ? body.serviceName : undefined;
-	const serviceName = resolvedName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
+	const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
 
 	const result = await runEffect(
 		readTimeSlots({
@@ -345,20 +369,7 @@ const handleCreateBooking = async (req: IncomingMessage, res: ServerResponse) =>
 	const body = (await parseBody(req)) as { request: BookingRequest; couponCode?: string };
 	const { request } = body;
 
-	// Ensure services are cached before resolving name
-	if (!cachedServices) {
-		try {
-			const business = await fetchBusinessData(ACUITY_BASE_URL);
-			if (business) {
-				cachedServices = businessToServices(business);
-				console.log(`[booking] Warmed service cache: ${cachedServices.length} services`);
-			}
-		} catch (e) {
-			console.warn('[booking] Service cache warm failed:', e instanceof Error ? e.message : e);
-		}
-	}
-
-	const serviceName = cachedServices?.find((s) => s.id === request.serviceId)?.name;
+	const serviceName = await resolveServiceName(request.serviceId);
 
 	const result = await runEffect(
 		Effect.gen(function* () {
@@ -396,21 +407,8 @@ const handleCreateBookingWithPayment = async (req: IncomingMessage, res: ServerR
 		});
 	}
 
-	// Ensure services are cached before resolving name
-	if (!cachedServices) {
-		try {
-			const business = await fetchBusinessData(ACUITY_BASE_URL);
-			if (business) {
-				cachedServices = businessToServices(business);
-				console.log(`[booking] Warmed service cache: ${cachedServices.length} services`);
-			}
-		} catch (e) {
-			console.warn('[booking] Service cache warm failed:', e instanceof Error ? e.message : e);
-		}
-	}
-
+	const serviceName = await resolveServiceName(request.serviceId);
 	const service = cachedServices?.find((s) => s.id === request.serviceId);
-	const serviceName = service?.name ?? request.serviceId;
 
 	const result = await runEffect(
 		Effect.gen(function* () {
