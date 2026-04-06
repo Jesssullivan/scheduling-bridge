@@ -1,0 +1,390 @@
+diff --git a/src/adapters/acuity-scraper.ts b/src/adapters/acuity-scraper.ts
+index cf38224..0ba930e 100644
+--- a/src/adapters/acuity-scraper.ts
++++ b/src/adapters/acuity-scraper.ts
+@@ -1,12 +1,19 @@
+ /**
+  * Acuity Scraper Adapter
+- * Extracts scheduling data from public Acuity pages without API access
+  *
+- * Uses Playwright for reliable browser automation and handles:
+- * - Service (appointment type) extraction
+- * - Availability dates
+- * - Time slots
+- * - Provider information
++ * @deprecated DOM scraping is unreliable — Acuity migrated to a React SPA
++ * (Pylon/Squarespace) where services are loaded via JavaScript, not static HTML.
++ *
++ * Replacement:
++ * - For services: use `extractBusinessFromHtml()` or `fetchBusinessData()` from
++ *   `middleware/steps/extract-business.ts` — extracts the BUSINESS JS object
++ *   embedded in the page HTML without DOM interaction.
++ * - For availability/slots: use `readAvailableDates()` and `readTimeSlots()` from
++ *   `middleware/steps/` — these navigate the React SPA via click-based wizard
++ *   steps, not URL params.
++ *
++ * This file is kept only as a last-resort fallback in the Modal server's
++ * `/services` endpoint fallback chain. All new code should use the replacements.
+  */
+ 
+ import type { Browser, Page } from 'playwright-core';
+@@ -125,7 +132,11 @@ export class AcuityScraper {
+   }
+ 
+   /**
+-   * Extract all services (appointment types) from the scheduling page
++   * Extract all services (appointment types) from the scheduling page.
++   *
++   * @deprecated Always returns `[]` on Acuity's React SPA — the CSS selectors
++   * (`.select-item`, `.category-group`) don't exist in the static HTML.
++   * Use `fetchBusinessData()` from `extract-business.ts` instead.
+    */
+   async scrapeServices(): Promise<E.Either<AcuityError | InfrastructureError, ScrapedService[]>> {
+     let page: Page | null = null;
+@@ -249,7 +260,11 @@ export class AcuityScraper {
+   }
+ 
+   /**
+-   * Extract available dates for a specific service
++   * Extract available dates for a specific service.
++   *
++   * @deprecated Uses URL param navigation (`?appointmentType=`) which requires
++   * Acuity's numeric ID. Use `readAvailableDates()` from `middleware/steps/`
++   * which navigates by clicking the service name in the React SPA.
+    */
+   async scrapeAvailableDates(
+     serviceId: string,
+@@ -319,7 +334,10 @@ export class AcuityScraper {
+   }
+ 
+   /**
+-   * Extract available time slots for a specific date
++   * Extract available time slots for a specific date.
++   *
++   * @deprecated Uses URL param navigation. Use `readTimeSlots()` from
++   * `middleware/steps/` which navigates the React SPA via click interaction.
+    */
+   async scrapeTimeSlots(
+     serviceId: string,
+@@ -410,7 +428,10 @@ export class AcuityScraper {
+ // =============================================================================
+ 
+ /**
+- * Create a scraper instance with TaskEither wrapper
++ * Create a scraper instance with TaskEither wrapper.
++ *
++ * @deprecated Use `fetchBusinessData()` for services and Effect-based wizard
++ * steps (`readAvailableDates`, `readTimeSlots`) for availability/slots.
+  */
+ export const createScraperAdapter = (config: ScraperConfig) => {
+   const scraper = new AcuityScraper(config);
+@@ -507,7 +528,10 @@ export const createScraperAdapter = (config: ScraperConfig) => {
+ // =============================================================================
+ 
+ /**
+- * One-shot scrape of all services (opens and closes browser)
++ * One-shot scrape of all services (opens and closes browser).
++ *
++ * @deprecated Always returns `[]` on Acuity's React SPA.
++ * Use `fetchBusinessData()` from `extract-business.ts` instead.
+  */
+ export const scrapeServicesOnce = async (
+   baseUrl: string
+@@ -524,7 +548,9 @@ export const scrapeServicesOnce = async (
+ };
+ 
+ /**
+- * One-shot scrape of availability (opens and closes browser)
++ * One-shot scrape of availability (opens and closes browser).
++ *
++ * @deprecated Use Effect-based `readTimeSlots()` from `middleware/steps/`.
+  */
+ export const scrapeAvailabilityOnce = async (
+   baseUrl: string,
+diff --git a/src/middleware/acuity-wizard.ts b/src/middleware/acuity-wizard.ts
+index 0e93572..7f36496 100644
+--- a/src/middleware/acuity-wizard.ts
++++ b/src/middleware/acuity-wizard.ts
+@@ -197,6 +197,7 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
+ 		return createRemoteWizardAdapter({
+ 			...config.remote,
+ 			couponCode: config.remote.couponCode ?? config.couponCode,
++			services: config.services,
+ 		});
+ 	}
+ 
+diff --git a/src/middleware/remote-adapter.ts b/src/middleware/remote-adapter.ts
+index b0469a2..688b013 100644
+--- a/src/middleware/remote-adapter.ts
++++ b/src/middleware/remote-adapter.ts
+@@ -49,6 +49,12 @@ export interface RemoteAdapterConfig {
+ 	readonly timeout?: number;
+ 	/** Coupon code for payment bypass */
+ 	readonly couponCode?: string;
++	/**
++	 * Static service catalog. When provided, getServices()/getService() return
++	 * from this list without hitting the remote server. Avoids dependency on
++	 * the middleware's DOM scraper for service listing.
++	 */
++	readonly services?: readonly Service[];
+ }
+ 
+ // =============================================================================
+@@ -157,11 +163,22 @@ export const createRemoteWizardAdapter = (config: RemoteAdapterConfig): Scheduli
+ 	// Read operations - proxied to remote scraper
+ 	// ---------------------------------------------------------------------------
+ 
+-	getServices: () =>
+-		makeRequest<Service[]>(config, '/services', 'GET'),
+-
+-	getService: (serviceId) =>
+-		makeRequest<Service>(config, `/services/${encodeURIComponent(serviceId)}`, 'GET'),
++	getServices: () => {
++		if (config.services) {
++			return TE.right([...config.services]);
++		}
++		return makeRequest<Service[]>(config, '/services', 'GET');
++	},
++
++	getService: (serviceId) => {
++		if (config.services) {
++			const found = config.services.find((s) => s.id === serviceId);
++			return found
++				? TE.right(found)
++				: TE.left(Errors.acuity('NOT_FOUND', `Service ${serviceId} not found`));
++		}
++		return makeRequest<Service>(config, `/services/${encodeURIComponent(serviceId)}`, 'GET');
++	},
+ 
+ 	getProviders: () =>
+ 		TE.right([{
+@@ -190,14 +207,30 @@ export const createRemoteWizardAdapter = (config: RemoteAdapterConfig): Scheduli
+ 			timezone: 'America/New_York',
+ 		}]),
+ 
+-	getAvailableDates: (params) =>
+-		makeRequest<AvailableDate[]>(config, '/availability/dates', 'POST', params),
+-
+-	getAvailableSlots: (params) =>
+-		makeRequest<TimeSlot[]>(config, '/availability/slots', 'POST', params),
+-
+-	checkSlotAvailability: (params) =>
+-		makeRequest<boolean>(config, '/availability/check', 'POST', params),
++	getAvailableDates: (params) => {
++		// Resolve service name for wizard navigation (Acuity navigates by name, not ID)
++		const serviceName = config.services?.find((s) => s.id === params.serviceId)?.name;
++		return makeRequest<AvailableDate[]>(config, '/availability/dates', 'POST', {
++			...params,
++			serviceName: serviceName ?? params.serviceId,
++		});
++	},
++
++	getAvailableSlots: (params) => {
++		const serviceName = config.services?.find((s) => s.id === params.serviceId)?.name;
++		return makeRequest<TimeSlot[]>(config, '/availability/slots', 'POST', {
++			...params,
++			serviceName: serviceName ?? params.serviceId,
++		});
++	},
++
++	checkSlotAvailability: (params) => {
++		const serviceName = config.services?.find((s) => s.id === params.serviceId)?.name;
++		return makeRequest<boolean>(config, '/availability/check', 'POST', {
++			...params,
++			serviceName: serviceName ?? params.serviceId,
++		});
++	},
+ 
+ 	// ---------------------------------------------------------------------------
+ 	// Reservation - not supported (pipeline has graceful fallback)
+diff --git a/src/middleware/server.ts b/src/middleware/server.ts
+index d16a7db..5d8ea44 100644
+--- a/src/middleware/server.ts
++++ b/src/middleware/server.ts
+@@ -43,6 +43,10 @@ import {
+ 	submitBooking,
+ 	extractConfirmation,
+ 	toBooking,
++	readAvailableDates,
++	readTimeSlots,
++	fetchBusinessData,
++	businessToServices,
+ } from './steps/index.js';
+ import type {
+ 	Booking,
+@@ -157,6 +161,23 @@ const getScraper = () => {
+ 
+ let cachedServices: Service[] | null = null;
+ 
++// Static services from SERVICES_JSON env var (avoids scraper dependency)
++const STATIC_SERVICES: Service[] | null = (() => {
++	const raw = process.env.SERVICES_JSON;
++	if (!raw) return null;
++	try {
++		return JSON.parse(raw) as Service[];
++	} catch (e) {
++		console.error('[middleware-server] Failed to parse SERVICES_JSON:', e);
++		return null;
++	}
++})();
++
++if (STATIC_SERVICES) {
++	cachedServices = STATIC_SERVICES;
++	console.log(`[middleware-server] Loaded ${STATIC_SERVICES.length} static services from SERVICES_JSON`);
++}
++
+ // =============================================================================
+ // ROUTE HANDLERS
+ // =============================================================================
+@@ -167,14 +188,43 @@ const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
+ 		baseUrl: ACUITY_BASE_URL,
+ 		hasCoupon: !!COUPON_CODE,
+ 		headless: browserConfig.headless,
++		staticServices: STATIC_SERVICES ? STATIC_SERVICES.length : 0,
+ 		timestamp: new Date().toISOString(),
+ 	});
+ };
+ 
+ 
+ const handleGetServices = async (_req: IncomingMessage, res: ServerResponse) => {
++	// 1. Prefer static services from env (always reliable, no network needed)
++	if (STATIC_SERVICES) {
++		console.log('[services] source: SERVICES_JSON env');
++		cachedServices = STATIC_SERVICES;
++		return sendSuccess(res, STATIC_SERVICES);
++	}
++
++	// 2. Extract from BUSINESS object (HTTP fetch + regex, no browser)
++	try {
++		const business = await fetchBusinessData(ACUITY_BASE_URL);
++		if (business) {
++			const services = businessToServices(business);
++			if (services.length > 0) {
++				console.log(`[services] source: BUSINESS object (${services.length} services)`);
++				cachedServices = services;
++				return sendSuccess(res, services);
++			}
++			console.warn('[services] BUSINESS object found but 0 active services');
++		}
++	} catch (e) {
++		console.warn('[services] BUSINESS extraction failed:', e instanceof Error ? e.message : e);
++	}
++
++	// 3. Deprecated fallback: DOM scraper (may return [] — Acuity is React SPA)
++	console.warn('[services] falling back to DOM scraper (deprecated)');
+ 	const result = await getScraper().getServices()();
+ 	if (E.isLeft(result)) return sendError(res, 500, result.left);
++	if (result.right.length === 0) {
++		console.error('[services] all sources exhausted — returning empty []');
++	}
+ 	cachedServices = result.right;
+ 	sendSuccess(res, result.right);
+ };
+@@ -196,28 +246,75 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
+ };
+ 
+ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) => {
+-	const body = (await parseBody(req)) as { serviceId: string; startDate?: string };
+-	const result = await getScraper().getAvailableDates(
+-		body.serviceId,
+-		body.startDate?.slice(0, 7),
+-	)();
+-	if (E.isLeft(result)) return sendError(res, 500, result.left);
+-	sendSuccess(res, result.right.map((d) => ({ date: d, slots: 1 })));
++	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
++	// Use service name for wizard navigation (click-based, not URL param)
++	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
++	console.log(`[availability/dates] serviceName="${serviceName}" from serviceId="${body.serviceId}"`);
++
++	const result = await runEffect(
++		readAvailableDates({
++			serviceName,
++			targetMonth: body.startDate?.slice(0, 7),
++			monthsToScan: 2,
++		}),
++	);
++
++	if (E.isLeft(result)) {
++		const err = result.left;
++		console.error(`[availability/dates] error:`, err);
++		return sendJson(res, 500, {
++			success: false,
++			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Availability lookup failed' },
++		});
++	}
++	sendSuccess(res, result.right);
+ };
+ 
+ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) => {
+-	const body = (await parseBody(req)) as { serviceId: string; date: string };
+-	const result = await getScraper().getTimeSlots(body.serviceId, body.date)();
+-	if (E.isLeft(result)) return sendError(res, 500, result.left);
++	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; date: string };
++	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
++	console.log(`[availability/slots] serviceName="${serviceName}" date="${body.date}"`);
++
++	const result = await runEffect(
++		readTimeSlots({
++			serviceName,
++			date: body.date,
++		}),
++	);
++
++	if (E.isLeft(result)) {
++		const err = result.left;
++		console.error(`[availability/slots] error:`, err);
++		return sendJson(res, 500, {
++			success: false,
++			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot lookup failed' },
++		});
++	}
+ 	sendSuccess(res, result.right);
+ };
+ 
+ const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
+-	const body = (await parseBody(req)) as { serviceId: string; datetime: string };
++	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; datetime: string };
+ 	const date = body.datetime.split('T')[0];
+-	const result = await getScraper().getTimeSlots(body.serviceId, date)();
+-	if (E.isLeft(result)) return sendError(res, 500, result.left);
+-	const available = result.right.some((s) => s.datetime === body.datetime && s.available);
++	const serviceName = body.serviceName ?? cachedServices?.find((s) => s.id === body.serviceId)?.name ?? body.serviceId;
++
++	const result = await runEffect(
++		readTimeSlots({
++			serviceName,
++			date,
++		}),
++	);
++
++	if (E.isLeft(result)) {
++		const err = result.left;
++		return sendJson(res, 500, {
++			success: false,
++			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot check failed' },
++		});
++	}
++	const available = result.right.some((s: { datetime: string; available: boolean }) =>
++		s.datetime === body.datetime && s.available
++	);
+ 	sendSuccess(res, available);
+ };
+ 
+diff --git a/src/middleware/steps/index.ts b/src/middleware/steps/index.ts
+index c43032d..b89bee7 100644
+--- a/src/middleware/steps/index.ts
++++ b/src/middleware/steps/index.ts
+@@ -25,3 +25,13 @@ export {
+ 	type ReadSlotsParams,
+ 	type SlotResult,
+ } from './read-slots.js';
++export {
++	extractBusinessFromPage,
++	extractBusinessFromHtml,
++	extractBusinessServices,
++	fetchBusinessData,
++	businessToServices,
++	type AcuityAppointmentType,
++	type AcuityCalendar,
++	type AcuityBusinessData,
++} from './extract-business.js';

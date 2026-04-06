@@ -50,8 +50,9 @@ image = (
         " --bundle --platform=node --format=esm --outfile=dist/server.mjs"
         " --external:playwright-core --external:playwright"
         " --external:@playwright/test"
-        " --external:@tummycrypt/*"
-        " --external:@neondatabase/*"
+        " --external:@tummycrypt/tinyland-auth-pg"
+        " --external:@tummycrypt/tinyland-auth-pg/*"
+        " --external:@neondatabase/serverless"
         " --external:drizzle-orm --external:drizzle-orm/*"
         " --external:@skeletonlabs/* --external:svelte --external:svelte/*",
         "ls -la /app/dist/server.mjs",
