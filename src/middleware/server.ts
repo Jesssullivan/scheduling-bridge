@@ -341,6 +341,19 @@ const handleCreateBooking = async (req: IncomingMessage, res: ServerResponse) =>
 	const body = (await parseBody(req)) as { request: BookingRequest; couponCode?: string };
 	const { request } = body;
 
+	// Ensure services are cached before resolving name
+	if (!cachedServices) {
+		try {
+			const business = await fetchBusinessData(ACUITY_BASE_URL);
+			if (business) {
+				cachedServices = businessToServices(business);
+				console.log(`[booking] Warmed service cache: ${cachedServices.length} services`);
+			}
+		} catch (e) {
+			console.warn('[booking] Service cache warm failed:', e instanceof Error ? e.message : e);
+		}
+	}
+
 	const serviceName = cachedServices?.find((s) => s.id === request.serviceId)?.name;
 
 	const result = await runEffect(
@@ -379,7 +392,19 @@ const handleCreateBookingWithPayment = async (req: IncomingMessage, res: ServerR
 		});
 	}
 
-	// Try to get service details for richer booking data
+	// Ensure services are cached before resolving name
+	if (!cachedServices) {
+		try {
+			const business = await fetchBusinessData(ACUITY_BASE_URL);
+			if (business) {
+				cachedServices = businessToServices(business);
+				console.log(`[booking] Warmed service cache: ${cachedServices.length} services`);
+			}
+		} catch (e) {
+			console.warn('[booking] Service cache warm failed:', e instanceof Error ? e.message : e);
+		}
+	}
+
 	const service = cachedServices?.find((s) => s.id === request.serviceId);
 	const serviceName = service?.name ?? request.serviceId;
 
