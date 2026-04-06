@@ -70,6 +70,20 @@ export const navigateToBooking = (params: NavigateParams) =>
 				}),
 		});
 
+		// Step 1b: Bypass category view if present
+		// Acuity may show "Select Appointment Category" first. Click "SHOW ALL APPOINTMENTS"
+		// to expand all services, then proceed with normal service selection.
+		yield* Effect.tryPromise({
+			try: async () => {
+				const showAllBtn = await page.$('button:has-text("SHOW ALL APPOINTMENTS")');
+				if (showAllBtn) {
+					await showAllBtn.click();
+					await page.waitForTimeout(1000);
+				}
+			},
+			catch: () => undefined, // Ignore — page may not have categories
+		});
+
 		// Step 2: Find and click target service's "Book" button
 		const { appointmentTypeId, calendarId } = yield* selectService(
 			page,

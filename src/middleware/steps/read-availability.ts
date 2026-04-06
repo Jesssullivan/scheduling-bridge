@@ -63,6 +63,18 @@ export const readAvailableDates = (params: ReadAvailabilityParams) =>
 				}),
 		});
 
+		// Step 1b: Bypass category view if present
+		yield* Effect.tryPromise({
+			try: async () => {
+				const showAllBtn = await page.$('button:has-text("SHOW ALL APPOINTMENTS")');
+				if (showAllBtn) {
+					await showAllBtn.click();
+					await page.waitForTimeout(1000);
+				}
+			},
+			catch: () => undefined,
+		});
+
 		// Step 2: Click the target service's "Book" button
 		yield* clickServiceBook(page, params.serviceName, params.appointmentTypeId);
 
