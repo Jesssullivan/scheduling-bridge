@@ -1,4 +1,4 @@
-# Browser Automation Middleware for Zero-Downtime SaaS Migration: A Scheduling System Case Study
+# Typed Browser Automation as an Anti-Corruption Layer: Escaping SaaS Vendor Lock-in via the Strangler Fig Pattern
 
 **Jess Sullivan**
 Tinyland Inc.
@@ -7,7 +7,7 @@ Tinyland Inc.
 [acuity-middleware-paper.tex](paper/acuity-middleware-paper.tex)
 ## Abstract
 
-Small-business SaaS platforms create vendor lock-in through API paywalls and proprietary data formats. When the vendor restricts programmatic access to premium pricing tiers, businesses face a choice between paying for API access they should already have or accepting that their own data is held hostage. We present a browser automation middleware architecture that implements a standardized 16-method scheduling adapter interface by puppeteering the vendor's public-facing web UI via headless Playwright, deployed as a containerized service on Modal Labs. A feature-flag-driven backend selector enables zero-downtime migration from the legacy vendor to a homegrown PostgreSQL backend, implementing the strangler fig pattern against a third-party SaaS dependency. The system has been deployed in production since March 2026, processing real appointment bookings across both backends simultaneously. We report on the architecture, the unified Effect TS functional programming approach (covering browser lifecycle management, adapter composition, error handling, and resource management), the reliability challenges of DOM automation against a React SPA with Emotion CSS, and the lessons learned from automating 604 legacy appointments across 62 weeks of calendar data. The middleware replaces 8 blocked REST API endpoints through DOM interaction alone, demonstrating that browser automation is a viable -- if intentionally temporary -- bridge pattern for escaping SaaS vendor lock-in.
+Small-business SaaS platforms create vendor lock-in through API paywalls and proprietary data formats. We present a typed browser automation architecture that functions as an anti-corruption layer, implementing a standardized 17-method scheduling adapter interface by puppeteering the vendor's public-facing web UI via headless Playwright. The adapter interface is defined in a standalone library (`scheduling-kit`), while vendor-specific automation lives in a separate adapter hub (`scheduling-bridge`) -- establishing a pattern where each locked-in SaaS backend (Acuity, CalCom, GlossGenius) gets its own adapter package, giving small businesses a reusable FOSS offramp from proprietary scheduling services. A feature-flag-driven backend selector implements the strangler fig pattern, routing scheduling operations to either the legacy vendor (via browser automation on Modal Labs) or a homegrown PostgreSQL backend (via direct queries), enabling zero-downtime migration with instant rollback. The system has been deployed in production since March 2026, processing real appointment bookings across both backends simultaneously. We report on the architecture, the unified Effect TS functional programming approach (typed effect programs for browser lifecycle management, adapter composition, and structured error handling), the reliability challenges of DOM automation against a React SPA with Emotion CSS, and lessons learned from automating 604 legacy appointments across 62 weeks of calendar data. The middleware replaces 8 blocked REST API endpoints through DOM interaction alone, demonstrating that typed browser automation is a viable -- if intentionally temporary -- anti-corruption layer for escaping SaaS vendor lock-in.
 
 ---
 
@@ -23,15 +23,17 @@ The key insight is that browser automation middleware is not the destination -- 
 
 ### Contributions
 
-This paper makes four contributions:
+This paper makes five contributions:
 
-1. A formal 16-method `SchedulingAdapter` interface that abstracts scheduling operations (services, availability, reservations, bookings, clients) across heterogeneous backends, with all methods returning monadic `Effect<T, SchedulingError>` for composable error handling.
+1. A formal 17-method `SchedulingAdapter` interface that abstracts scheduling operations (services, providers, availability, reservations, bookings, clients) across heterogeneous backends, with all methods returning monadic `Effect<T, SchedulingError>` for composable error handling.
 
-2. An Effect TS middleware layer that implements this interface via headless browser automation, using typed effect programs for each wizard step, managed browser lifecycle via `acquireRelease`, and a CSS selector registry with fallback chains for resilience against DOM instability.
+2. An adapter hub architecture (`scheduling-bridge`) that separates the interface definition from vendor-specific implementations, enabling multiple SaaS backends to be wrapped as discrete packages -- a reusable FOSS offramp pattern for small businesses escaping proprietary scheduling services.
 
-3. A feature-flag-driven backend selection mechanism with hostname override, enabling both backends to serve production traffic simultaneously with instant rollback capability.
+3. An Effect TS browser automation layer that implements the adapter interface via headless Playwright, using typed effect programs for each wizard step, managed browser lifecycle via `acquireRelease`, and a CSS selector registry with fallback chains for resilience against DOM instability.
 
-4. Production deployment evidence from a real massage therapy practice, including reliability data from 604 automated legacy appointment operations and concurrent dual-backend operation.
+4. A feature-flag-driven backend selection mechanism implementing the strangler fig pattern, with branch-level override enabling both backends to serve production traffic simultaneously with instant rollback capability.
+
+5. Production deployment evidence from a real massage therapy practice, including reliability data from 604 automated legacy appointment operations and concurrent dual-backend operation.
 
 ---
 
@@ -43,7 +45,7 @@ The Carnegie Mellon Software Engineering Institute taxonomy [5] classifies moder
 
 ### B. Wrapper-Based Evolution
 
-Sneed [7] proposes wrapping legacy information systems with service-oriented interfaces, treating the wrapper as a translation layer between modern consumers and legacy implementations. Rahgozar and Oroumchian [8] identify three design patterns for wrapper interfaces: Lowest Common Denominator, Most Popular, and Negotiated. Our `SchedulingAdapter` interface follows the Negotiated pattern -- the 16 methods represent the intersection of capabilities needed by the application, not the full surface area of any single backend.
+Sneed [7] proposes wrapping legacy information systems with service-oriented interfaces, treating the wrapper as a translation layer between modern consumers and legacy implementations. Rahgozar and Oroumchian [8] identify three design patterns for wrapper interfaces: Lowest Common Denominator, Most Popular, and Negotiated. Our `SchedulingAdapter` interface follows the Negotiated pattern -- the 17 methods represent the intersection of capabilities needed by the application, not the full surface area of any single backend.
 
 Prior wrapper work focused on mainframe terminal interfaces (3270 screen scraping) and COBOL API wrapping [5]. This work wraps a modern React single-page application rendered with Emotion CSS-in-JS -- a qualitatively different challenge where DOM structure is dynamic, CSS class names are hash-unstable, and user interactions trigger asynchronous client-side state transitions rather than synchronous server round-trips.
 
@@ -89,27 +91,38 @@ The embedded iframe remains the dominant integration mechanism for SaaS scheduli
 
 ### A. Architecture Overview
 
+The system is distributed across three repositories, each with a distinct role:
+
+| Repository | npm Package | Role |
+|---|---|---|
+| `scheduling-kit` | `@tummycrypt/scheduling-kit` | Interface definition, homegrown PostgreSQL adapter, payment adapters, Svelte UI components |
+| `scheduling-bridge` | `@tummycrypt/scheduling-bridge` | Adapter hub: vendor-specific automation (Acuity via Playwright, future CalCom/GlossGenius) |
+| `MassageIthaca` | (application) | Backend selector, admin UI, booking pages |
+
+This separation enforces a key architectural principle: the adapter interface and the native replacement backend live in one package, while each vendor automation adapter lives in a separate package. Adding a new SaaS backend adapter means adding a new package to `scheduling-bridge` -- no changes to the interface or the application.
+
 The system consists of four layers:
 
 **Consumer Layer.** SvelteKit [17] API routes (`/api/schedule/*`) and admin pages that invoke scheduling operations through the adapter interface. Consumers are completely backend-agnostic.
 
-**Routing Layer.** The `resolveBackend()` function selects a backend based on environment variables (`SCHEDULING_BACKEND`) and hostname overrides (the `dev/main` branch forces Acuity for beta stability). The `getSchedulingKit()` singleton factory instantiates the selected adapter and wraps it with a `PaymentRegistry` for payment processor composition.
+**Routing Layer.** The `resolveBackend()` function selects a backend based on environment variables (`SCHEDULING_BACKEND`) and branch-level overrides (the `dev/main` branch forces Acuity for beta stability). The `getSchedulingKit()` singleton factory instantiates the selected adapter and wraps it with a `PaymentRegistry` for payment processor composition.
 
-**Adapter Layer.** Five concrete implementations of the `SchedulingAdapter` interface:
-- `HomegrownAdapter`: Direct PostgreSQL queries via Drizzle ORM against Neon serverless
-- `AcuityWizardAdapter`: Effect TS browser automation via Playwright
-- `AcuityScraperAdapter`: Read-only DOM scraping for service/availability data
-- `RemoteWizardAdapter`: HTTP proxy to a remote middleware server
-- `CalComAdapter`: Stub for potential future migration (all methods return NOT_IMPLEMENTED)
+**Adapter Layer.** Five concrete implementations of the `SchedulingAdapter` interface, spanning both packages:
+- `HomegrownAdapter` (scheduling-kit): Direct PostgreSQL queries via Drizzle ORM against Neon serverless
+- `AcuityWizardAdapter` (scheduling-bridge): Effect TS browser automation via Playwright
+- `AcuityScraperAdapter` (scheduling-bridge): Read-only BUSINESS object extraction for service/availability data
+- `RemoteWizardAdapter` (scheduling-bridge): HTTP proxy to a remote middleware server on Modal Labs
+- `CalComAdapter` (scheduling-kit): Stub for potential future migration (all methods return NOT_IMPLEMENTED)
 
-**Browser Middleware Layer.** Effect TS programs that drive individual wizard steps (navigate, fill form, bypass payment, submit, extract confirmation), managed by a `BrowserService` layer that handles Playwright lifecycle via `acquireRelease`.
+**Browser Automation Layer.** Effect TS programs that drive individual wizard steps (navigate, fill form, bypass payment, submit, extract confirmation), managed by a `BrowserService` layer that handles Playwright lifecycle via `acquireRelease`. These live in `scheduling-bridge/src/adapters/acuity/`, establishing the pattern for future vendor adapters.
 
 ### B. The SchedulingAdapter Interface
 
-The interface defines 16 methods across five categories:
+The interface defines 17 methods across six categories:
 
 ```typescript
 interface SchedulingAdapter {
+  readonly name: string;
   // Services (2)
   getServices(): SchedulingResult<Service[]>;
   getService(id: string): SchedulingResult<Service>;
@@ -124,11 +137,12 @@ interface SchedulingAdapter {
   // Reservations (2)
   createReservation(p: ReserveParams): SchedulingResult<SlotReservation>;
   releaseReservation(id: string): SchedulingResult<void>;
-  // Bookings (4)
+  // Bookings (5)
   createBooking(req: BookingRequest): SchedulingResult<Booking>;
   createBookingWithPaymentRef(req, ref, proc): SchedulingResult<Booking>;
   getBooking(id: string): SchedulingResult<Booking>;
   cancelBooking(id: string, reason?: string): SchedulingResult<void>;
+  rescheduleBooking(id: string, newDatetime: string): SchedulingResult<Booking>;
   // Clients (2)
   findOrCreateClient(c: ClientInfo): SchedulingResult<ClientInfo>;
   getClientByEmail(email: string): SchedulingResult<ClientInfo | null>;
@@ -176,9 +190,9 @@ The `resolveSelector` function tries each candidate with a configurable timeout,
 
 The booking creation flow is implemented as seven Effect programs, each targeting a distinct phase of the Acuity wizard:
 
-1. **Navigate** (537 LOC). Loads the service selection page, matches the target service by name, clicks "Book," navigates the react-calendar to the target month (up to 12 iterations), clicks the target day tile, selects the time slot, and clicks "Select and continue." The calendar month detection parses label text with the regex `([A-Za-z]+)\s*(\d{4})` to handle whitespace variation. Day tiles are filtered by checking for the `neighboringMonth` CSS class and the `disabled` property.
+1. **Navigate** (~550 LOC). Loads the service selection page, matches the target service by name, clicks "Book," navigates the react-calendar to the target month (up to 12 iterations), clicks the target day tile, selects the time slot, and clicks "Select and continue." The calendar month detection parses label text with the regex `([A-Za-z]+)\s*(\d{4})` to handle whitespace variation. Day tiles are filtered by checking for the `neighboringMonth` CSS class and the `disabled` property.
 
-2. **Fill Form** (359 LOC). Fills standard client fields (`firstName`, `lastName`, `email`, `phone`) using `input[name="client.X"]` selectors with smart-fill (checks current value, skips if correct). Handles React-controlled intake radio buttons that lack `name` or `id` attributes by clicking `<label>` elements via Playwright's `locator().nth()` API, dispatching OS-level mouse events that React's event delegation processes. Fills medication textarea and terms checkbox.
+2. **Fill Form** (~410 LOC). Fills standard client fields (`firstName`, `lastName`, `email`, `phone`) using `input[name="client.X"]` selectors with smart-fill (checks current value, skips if correct). Handles React-controlled intake radio buttons that lack `name` or `id` attributes by clicking `<label>` elements via Playwright's `locator().nth()` API, dispatching OS-level mouse events that React's event delegation processes. Fills medication textarea and terms checkbox.
 
 3. **Bypass Payment** (226 LOC). Clicks the "Package, gift, or coupon code" toggle, enters a 100% gift certificate code from the `ACUITY_BYPASS_COUPON` environment variable, clicks "Apply," and verifies the discount was applied by checking for "Gift certificate" text and a "-$" indicator. This decouples scheduling from Acuity's Square payment integration -- actual payment is handled externally via Stripe, Venmo, or cash.
 
@@ -208,12 +222,12 @@ The middleware is deployed on Modal Labs [3] using the official Playwright Docke
 
 - **Image**: `mcr.microsoft.com/playwright:v1.58.2-noble` with Node.js 22 LTS
 - **Resources**: 2 CPU cores, 2048 MB memory, no GPU
-- **Concurrency**: `max_inputs=1` per container (serialized requests prevent browser state conflicts)
+- **Concurrency**: `max_inputs=3` per container (each request gets an isolated browser context)
 - **Scaling**: `min_containers=1` for warm-pool latency reduction
 - **Timeout**: 300 seconds (wizard flows take 15-60 seconds depending on operation)
 - **Bundling**: esbuild produces a single `server.mjs` with all dependencies inlined except `playwright-core` (provided by base image), eliminating `node_modules` for faster cold starts
 
-The `max_inputs=1` serialization is a key architectural decision. Each browser session maintains page-level state (navigation history, cookies, form data). Concurrent requests on the same page instance would cause race conditions. Modal horizontally scales by spawning additional containers, each with its own isolated browser instance.
+The `max_inputs=3` concurrency allows multiple browser sessions per container, each with an isolated browser context. Modal horizontally scales by spawning additional containers when all contexts in a container are occupied. This was increased from `max_inputs=1` after production profiling showed that container cold starts dominated latency more than memory contention.
 
 ### D. Feature-Flag Backend Selection
 
@@ -230,7 +244,7 @@ The hostname override (`dev/main` forces Acuity) prevents accidental homegrown e
 
 ### E. The Homegrown Replacement
 
-The `HomegrownAdapter` implements all 16 `SchedulingAdapter` methods via direct PostgreSQL queries through Drizzle ORM [20] against Neon serverless [21]. Key design decisions:
+The `HomegrownAdapter` implements all 17 `SchedulingAdapter` methods via direct PostgreSQL queries through Drizzle ORM [20] against Neon serverless [21]. Key design decisions:
 
 - **Lazy database connection**: The adapter receives a `getDb` factory function, called per-operation. This avoids import-time connections critical for Vercel cold starts.
 - **Lazy schema imports**: Drizzle schema tables are dynamically imported inside each method, preventing the ORM runtime from being bundled into client-side code.
@@ -289,11 +303,11 @@ The browser middleware latency is acceptable only as a migration bridge. The two
 | Providers | 3 | 3/3 (hardcoded) | 3/3 |
 | Availability | 3 | 3/3 | 3/3 |
 | Reservations | 2 | 0/2 (graceful fail) | 2/2 |
-| Bookings | 4 | 2/4 | 4/4 |
+| Bookings | 5 | 2/5 | 5/5 |
 | Clients | 2 | 2/2 (pass-through) | 2/2 |
-| **Total** | **16** | **12/16** | **16/16** |
+| **Total** | **17** | **12/17** | **17/17** |
 
-The wizard adapter's incomplete coverage (no `getBooking`, `cancelBooking`, slot reservations) reflects the limitations of the public booking UI -- these operations require admin panel access. The homegrown adapter's full coverage demonstrates feature parity.
+The wizard adapter's incomplete coverage (no `getBooking`, `cancelBooking`, `rescheduleBooking`, slot reservations) reflects the limitations of the public booking UI -- these operations require admin panel access. The homegrown adapter's full coverage demonstrates feature parity.
 
 ---
 
@@ -315,19 +329,30 @@ An earlier version of the system used both Effect TS and fp-ts simultaneously, r
 
 Automating a vendor's UI to access data the business owns raises ethical questions. The Terms of Service may prohibit automated access, even to one's own data. We note that the data being accessed -- appointment schedules, client contact information, business hours -- belongs to the business, not the vendor. The automation accesses only the public booking wizard and the authenticated admin panel, never bypassing access controls. The coupon-based payment bypass is a legitimate use of Acuity's own gift certificate feature. Nevertheless, the approach should be understood as a temporary bridge during migration, not a permanent circumvention of vendor access controls.
 
-### D. Generalizability
+### D. Generalizability: The FOSS Offramp Pattern
 
-The pattern applies to any vertical SaaS vendor that provides a web UI but restricts programmatic access. The adapter interface + browser middleware + feature-flag routing architecture generalizes across domains: CRM, billing, inventory, email marketing, and other categories where small businesses accumulate data in vendor-controlled systems. The key prerequisite is that the vendor's web UI must be automatable -- single-page applications with predictable DOM structure are more tractable than server-rendered pages with CSRF tokens and captchas.
+The architecture generalizes beyond a single vendor escape. The three-repo structure -- interface package, adapter hub, application -- establishes a reusable pattern we call the *FOSS offramp*:
+
+1. **Define a domain-specific adapter interface** (`SchedulingAdapter`) in a standalone package (`scheduling-kit`). This interface becomes the anti-corruption layer contract.
+2. **Implement a native FOSS backend** (`HomegrownAdapter`) in the same package, proving that the interface is sufficient for full functionality.
+3. **Build vendor-specific adapters** in a separate adapter hub (`scheduling-bridge`), each wrapping a proprietary SaaS via browser automation, API scraping, or whatever mechanism the vendor permits.
+4. **Route via strangler fig** -- the application's backend selector gradually shifts traffic from the vendor adapter to the native backend.
+
+Each new vendor adapter gives another small business the same escape path. The Acuity adapter demonstrates the pattern; planned CalCom and GlossGenius adapters would extend it to other scheduling vendors. The approach applies to any vertical SaaS category where small businesses accumulate data behind vendor-controlled interfaces: CRM, billing, inventory, email marketing, appointment scheduling. The key prerequisite is that the vendor's web UI must be automatable -- single-page applications with predictable DOM structure are more tractable than server-rendered pages with CSRF tokens and captchas.
+
+The adapter hub uses Bazel as its build system, with each vendor adapter as a discrete build target (`:acuity_adapter`, future `:calcom_adapter`, `:glossgenius_adapter`). This enforces clean dependency boundaries between adapters and shared infrastructure (browser service, logging, remote proxy).
 
 ---
 
 ## VII. Conclusion
 
-We have presented a browser automation middleware architecture for zero-downtime migration away from a SaaS scheduling vendor that restricts API access. The architecture implements the strangler fig pattern with a 16-method adapter interface, an Effect TS browser middleware layer, and feature-flag-driven backend selection. The system has been deployed in production since March 2026, serving real appointment bookings across both the legacy vendor (via browser automation) and a homegrown PostgreSQL backend (via direct queries) simultaneously.
+We have presented a typed browser automation architecture that functions as an anti-corruption layer for escaping SaaS vendor lock-in. The system separates the adapter interface (`scheduling-kit`, 17 methods) from vendor-specific automation (`scheduling-bridge`), implementing the strangler fig pattern with feature-flag-driven backend selection. Deployed in production since March 2026, the system serves real appointment bookings across both the legacy vendor (via browser automation on Modal Labs) and a homegrown PostgreSQL backend (via direct queries) simultaneously.
 
-The browser middleware layer is intentionally temporary -- a bridge, not a destination. As the homegrown backend reaches full feature parity (currently 16/16 adapter methods), the middleware becomes disposable. The adapter interface ensures consumers are completely isolated from this transition. The strangler fig completes not with a dramatic cutover but with the quiet deletion of the browser automation code that made the migration possible.
+The browser automation layer is intentionally temporary -- a bridge, not a destination. As the homegrown backend reaches full feature parity (currently 17/17 adapter methods), the middleware becomes disposable. The adapter interface ensures consumers are completely isolated from this transition.
 
-Future work includes completing the Acuity sunset (removing the wizard adapter once dual-write reconciliation confirms data consistency), generalizing the middleware framework for other vertical SaaS categories, and investigating AI-assisted selector maintenance for longer-lived browser automation deployments.
+More broadly, the architecture establishes a reusable FOSS offramp pattern: define a domain-specific typed interface, implement a native backend, and wrap each proprietary vendor as a separate adapter package. The three-repo structure (interface, adapter hub, application) and Bazel-based build system make adding new vendor adapters a matter of implementing the interface, not modifying the application. The strangler fig completes not with a dramatic cutover but with the quiet deletion of the browser automation code that made the migration possible.
+
+Future work includes completing the Acuity sunset, extending the adapter hub with CalCom and GlossGenius adapters, automated service drift detection via reconciliation crons, and investigating AI-assisted selector maintenance for longer-lived browser automation deployments.
 
 ---
 
