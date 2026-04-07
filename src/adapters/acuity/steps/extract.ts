@@ -8,10 +8,10 @@
 
 import { Effect } from 'effect';
 import type { Page } from 'playwright-core';
-import { BrowserService } from '../browser-service.js';
+import { BrowserService } from '../../../shared/browser-service.js';
 import { WizardStepError } from '../errors.js';
 import { probe, Selectors } from '../selectors.js';
-import type { Booking, BookingRequest, ClientInfo } from '../../core/types.js';
+import type { Booking, BookingRequest, ClientInfo } from '../../../core/types.js';
 
 // =============================================================================
 // TYPES

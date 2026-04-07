@@ -24,17 +24,19 @@ export { Errors } from './core/types.js';
 // Adapter interface
 export type { SchedulingAdapter } from './adapters/types.js';
 
-// Middleware exports
+// Acuity adapter
 export {
 	createWizardAdapter,
 	type WizardAdapterConfig,
-} from './middleware/acuity-wizard.js';
+} from './adapters/acuity/wizard.js';
 
+// Shared: remote adapter (HTTP client for remote mode)
 export {
 	createRemoteWizardAdapter,
 	type RemoteAdapterConfig,
-} from './middleware/remote-adapter.js';
+} from './shared/remote-adapter.js';
 
+// Shared: browser service (Playwright lifecycle)
 export {
 	BrowserService,
 	BrowserServiceLive,
@@ -42,8 +44,9 @@ export {
 	defaultBrowserConfig,
 	type BrowserConfig,
 	type BrowserServiceShape,
-} from './middleware/browser-service.js';
+} from './shared/browser-service.js';
 
+// Acuity error types
 export {
 	BrowserError,
 	SelectorError,
@@ -51,8 +54,9 @@ export {
 	CouponError,
 	toSchedulingError,
 	type MiddlewareError,
-} from './middleware/errors.js';
+} from './adapters/acuity/errors.js';
 
+// Acuity selector registry
 export {
 	Selectors,
 	resolveSelector,
@@ -62,14 +66,14 @@ export {
 	healthCheck,
 	type SelectorKey,
 	type ResolvedSelector,
-} from './middleware/selectors.js';
+} from './adapters/acuity/selectors.js';
 
 // Scraper
 export {
 	createScraperAdapter,
 	AcuityScraper,
 	type ScraperConfig,
-} from './adapters/acuity-scraper.js';
+} from './adapters/acuity/scraper.js';
 
 // Server
-export { server } from './middleware/server.js';
+export { server } from './server/handler.js';

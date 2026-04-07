@@ -11,7 +11,7 @@ import type { Page } from 'playwright-core';
 import { WizardStepError } from './errors.js';
 import { resolveSelector, Selectors } from './selectors.js';
 import { ServiceResolver } from './service-resolver.js';
-import { BrowserService } from './browser-service.js';
+import { BrowserService } from '../../shared/browser-service.js';
 
 // =============================================================================
 // TYPES

@@ -13,7 +13,7 @@
 
 import { Effect, Scope } from 'effect';
 import type { Page } from 'playwright-core';
-import { BrowserService } from './browser-service.js';
+import { BrowserService } from '../../shared/browser-service.js';
 import { Selectors, type SelectorKey } from './selectors.js';
 import { fetchBusinessData } from './steps/extract-business.js';
 

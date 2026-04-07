@@ -17,18 +17,18 @@
 
 import { Effect, pipe } from 'effect';
 
-import type { SchedulingAdapter } from '../adapters/types.js';
-import { createScraperAdapter, type ScraperConfig } from '../adapters/acuity-scraper.js';
+import type { SchedulingAdapter } from '../types.js';
+import { createScraperAdapter, type ScraperConfig } from './scraper.js';
 import type {
 	Booking,
 	BookingRequest,
 	Service,
 	SchedulingResult,
-} from '../core/types.js';
-import { Errors } from '../core/types.js';
-import { BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from './browser-service.js';
+} from '../../core/types.js';
+import { Errors } from '../../core/types.js';
+import { BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from '../../shared/browser-service.js';
 import { toSchedulingError, type MiddlewareError } from './errors.js';
-import { createRemoteWizardAdapter, type RemoteAdapterConfig } from './remote-adapter.js';
+import { createRemoteWizardAdapter, type RemoteAdapterConfig } from '../../shared/remote-adapter.js';
 import {
 	navigateToBooking,
 	fillFormFields,

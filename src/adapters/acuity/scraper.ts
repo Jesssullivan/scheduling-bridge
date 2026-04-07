@@ -28,8 +28,8 @@ const getChromium = async () => {
   }
 };
 import { Effect } from 'effect';
-import type { Service, Provider, TimeSlot, AcuityError, InfrastructureError, SchedulingResult } from '../core/types.js';
-import { Errors } from '../core/types.js';
+import type { Service, Provider, TimeSlot, AcuityError, InfrastructureError, SchedulingResult } from '../../core/types.js';
+import { Errors } from '../../core/types.js';
 
 // Keep E for internal class methods (deprecated, not worth migrating)
 const E = {
