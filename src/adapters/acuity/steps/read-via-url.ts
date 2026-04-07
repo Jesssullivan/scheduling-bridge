@@ -10,7 +10,7 @@
  */
 
 import { Effect, Scope } from 'effect';
-import { BrowserService } from '../browser-service.js';
+import { BrowserService } from '../../../shared/browser-service.js';
 import { WizardStepError } from '../errors.js';
 import { Selectors } from '../selectors.js';
 import { parseSlotText, buildIsoDatetime } from '../slot-parser.js';

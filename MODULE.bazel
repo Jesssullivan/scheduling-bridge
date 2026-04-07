@@ -1,0 +1,99 @@
+"""
+scheduling-bridge - Bazel Module Configuration
+
+Backend-agnostic scheduling adapter hub. Currently provides Acuity adapter
+via Playwright automation. Future adapters: CalCom, GlossGenius, etc.
+
+Published as @tummycrypt/scheduling-bridge on npm.
+
+Build targets:
+  bazel build //:scheduling_bridge   # TypeScript compilation
+  bazel build //:pkg                 # npm-publishable package
+  bazel test //:test                 # Unit tests (vitest)
+  bazel build //:typecheck           # Type validation
+
+Adapter targets:
+  bazel build //src/adapters/acuity:acuity   # Acuity Playwright adapter
+  (future) bazel build //src/adapters/calcom:calcom
+  (future) bazel build //src/adapters/glossgenius:glossgenius
+"""
+
+module(
+    name = "tummycrypt_scheduling_bridge",
+    version = "0.2.0",
+    compatibility_level = 1,
+)
+
+# =============================================================================
+# Core Bazel dependencies
+# =============================================================================
+
+bazel_dep(name = "bazel_skylib", version = "1.8.1")
+bazel_dep(name = "platforms", version = "0.0.11")
+bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
+
+# =============================================================================
+# JavaScript / TypeScript toolchain (Aspect Build)
+# =============================================================================
+
+bazel_dep(name = "rules_nodejs", version = "6.7.3")
+bazel_dep(name = "aspect_rules_js", version = "2.9.1")
+bazel_dep(name = "aspect_rules_ts", version = "3.8.4")
+bazel_dep(name = "aspect_rules_swc", version = "2.6.1")
+
+# =============================================================================
+# Node.js toolchain
+# =============================================================================
+
+node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
+node.toolchain(node_version = "22.13.1")
+
+# =============================================================================
+# pnpm toolchain
+# =============================================================================
+
+pnpm = use_extension("@aspect_rules_js//npm:extensions.bzl", "pnpm")
+pnpm.pnpm(
+    name = "pnpm",
+    pnpm_version = "9.15.9",
+)
+use_repo(pnpm, "pnpm")
+
+# =============================================================================
+# npm dependency resolution from pnpm-lock.yaml
+# =============================================================================
+
+npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
+
+npm.npm_translate_lock(
+    name = "npm",
+    pnpm_lock = "//:pnpm-lock.yaml",
+    data = ["//:package.json"],
+)
+
+use_repo(npm, "npm")
+
+# =============================================================================
+# TypeScript toolchain
+# =============================================================================
+
+rules_ts_ext = use_extension("@aspect_rules_ts//ts:extensions.bzl", "ext")
+
+rules_ts_ext.deps(
+    ts_version = "5.9.3",
+)
+
+use_repo(rules_ts_ext, "npm_typescript")
+
+# =============================================================================
+# SWC toolchain
+# =============================================================================
+
+swc = use_extension("@aspect_rules_swc//swc:extensions.bzl", "swc")
+swc.toolchain(
+    name = "swc",
+    swc_version = "v1.10.12",
+)
+use_repo(swc, "swc_toolchains")
+
+register_toolchains("@swc_toolchains//:all")

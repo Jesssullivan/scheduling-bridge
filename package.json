@@ -1,7 +1,7 @@
 {
-  "name": "@tummycrypt/acuity-middleware",
+  "name": "@tummycrypt/scheduling-bridge",
   "version": "0.2.0",
-  "description": "Playwright-based Acuity booking middleware server",
+  "description": "Backend-agnostic scheduling adapter hub with Playwright automation",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -28,8 +28,8 @@
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "tsc",
-    "start": "node dist/middleware/server.js",
-    "dev": "tsx src/middleware/server.ts",
+    "start": "node dist/server/handler.js",
+    "dev": "tsx src/server/handler.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",

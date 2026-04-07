@@ -24,16 +24,16 @@
  *   PLAYWRIGHT_TIMEOUT   - Page timeout in ms (default: 30000)
  *
  * Usage:
- *   node --import tsx/esm src/middleware/server.ts
+ *   node --import tsx/esm src/server/handler.ts
  *   # or after build:
- *   node dist/middleware/server.js
+ *   node dist/server/handler.js
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Effect, Exit, Cause, Scope } from 'effect';
-import { createScraperAdapter, type ScraperConfig } from '../adapters/acuity-scraper.js';
-import { BrowserService, BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from './browser-service.js';
-import { toSchedulingError, type MiddlewareError } from './errors.js';
+import { createScraperAdapter, type ScraperConfig } from '../adapters/acuity/scraper.js';
+import { BrowserService, BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from '../shared/browser-service.js';
+import { toSchedulingError, type MiddlewareError } from '../adapters/acuity/errors.js';
 import {
 	navigateToBooking,
 	fillFormFields,
@@ -46,7 +46,7 @@ import {
 	readTimeSlots,
 	fetchBusinessData,
 	businessToServices,
-} from './steps/index.js';
+} from '../adapters/acuity/steps/index.js';
 import type {
 	Booking,
 	BookingRequest,
@@ -515,7 +515,7 @@ const server = createServer(async (req, res) => {
 });
 
 // Only start listening when this file is executed directly (not imported)
-if (process.argv[1]?.match(/server\.(ts|js|mjs)$/)) {
+if (process.argv[1]?.match(/handler\.(ts|js|mjs)$/)) {
 	server.listen(PORT, '0.0.0.0', () => {
 		console.log(`[middleware-server] Listening on port ${PORT}`);
 		console.log(`[middleware-server] Acuity URL: ${ACUITY_BASE_URL}`);

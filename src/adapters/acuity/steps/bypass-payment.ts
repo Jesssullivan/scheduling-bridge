@@ -25,7 +25,7 @@
 
 import { Effect } from 'effect';
 import type { Page } from 'playwright-core';
-import { BrowserService } from '../browser-service.js';
+import { BrowserService } from '../../../shared/browser-service.js';
 import { CouponError } from '../errors.js';
 import { resolveSelector, Selectors } from '../selectors.js';
 

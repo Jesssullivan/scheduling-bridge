@@ -8,7 +8,7 @@
 
 import { Context, Effect, Layer, Scope } from 'effect';
 import type { Browser, Page } from 'playwright-core';
-import { BrowserError } from './errors.js';
+import { BrowserError } from '../adapters/acuity/errors.js';
 
 // =============================================================================
 // CONFIGURATION

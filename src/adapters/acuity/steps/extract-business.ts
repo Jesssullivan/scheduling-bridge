@@ -17,9 +17,9 @@
  */
 
 import { Effect } from 'effect';
-import { BrowserService } from '../browser-service.js';
+import { BrowserService } from '../../../shared/browser-service.js';
 import { WizardStepError } from '../errors.js';
-import type { Service } from '../../core/types.js';
+import type { Service } from '../../../core/types.js';
 
 // =============================================================================
 // TYPES — Acuity's BUSINESS object shape

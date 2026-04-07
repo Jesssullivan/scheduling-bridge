@@ -6,7 +6,7 @@
  */
 
 import { Data } from 'effect';
-import { Errors, type SchedulingError } from '../core/types.js';
+import { Errors, type SchedulingError } from '../../core/types.js';
 
 // =============================================================================
 // ERROR CLASSES

@@ -1,10 +1,12 @@
-# acuity-middleware
+# scheduling-bridge
 
-Playwright-based Acuity Scheduling booking middleware. Proxies booking operations through browser automation, enabling programmatic access to Acuity's scheduling wizard without API access.
+Backend-agnostic scheduling adapter hub. Currently bridges Acuity Scheduling via Playwright browser automation, with architecture designed to support additional scheduling backends.
+
+> Formerly `acuity-middleware`. The GitHub repo and npm package history retain the old name.
 
 ## Architecture
 
-An HTTP server wrapping Playwright wizard flows that automate the Acuity booking UI. The middleware uses Effect TS for resource lifecycle management (browser/page acquisition and release) and fp-ts for composable error handling.
+An HTTP server wrapping Playwright wizard flows that automate the Acuity booking UI. The bridge uses Effect TS for resource lifecycle management (browser/page acquisition and release).
 
 ```
 HTTP Request
@@ -64,12 +66,12 @@ pnpm build && pnpm start  # Production
 ### Docker
 
 ```bash
-docker build -t acuity-middleware .
+docker build -t scheduling-bridge .
 docker run -p 3001:3001 \
   -e AUTH_TOKEN=your-secret-token \
   -e ACUITY_BASE_URL=https://YourBusiness.as.me \
   -e ACUITY_BYPASS_COUPON=your-coupon-code \
-  acuity-middleware
+  scheduling-bridge
 ```
 
 ### Modal Labs
