@@ -53,14 +53,10 @@ ts_project(
 ts_project(
     name = "acuity_adapter",
     srcs = glob(
-        [
-            "src/middleware/**/*.ts",
-            "src/adapters/**/*.ts",
-        ],
+        ["src/adapters/**/*.ts"],
         exclude = [
-            "src/middleware/__tests__/**",
-            "src/middleware/steps/__tests__/**",
-            "src/middleware/server.ts",
+            "src/adapters/acuity/__tests__/**",
+            "src/adapters/acuity/steps/__tests__/**",
         ],
     ),
     declaration = True,
@@ -69,6 +65,7 @@ ts_project(
     validate = False,
     deps = [
         ":core",
+        ":shared",
         ":node_modules",
         ":node_modules/effect",
         ":node_modules/playwright-core",
@@ -82,9 +79,25 @@ ts_project(
 # =============================================================================
 
 ts_project(
+    name = "shared",
+    srcs = glob(["src/shared/**/*.ts"]),
+    declaration = True,
+    tsconfig = ":tsconfig.json",
+    transpiler = "tsc",
+    validate = False,
+    deps = [
+        ":core",
+        ":node_modules",
+        ":node_modules/effect",
+        ":node_modules/playwright-core",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+ts_project(
     name = "server",
     srcs = [
-        "src/middleware/server.ts",
+        "src/server/handler.ts",
         "src/server.ts",
     ],
     declaration = True,
@@ -94,6 +107,7 @@ ts_project(
     deps = [
         ":core",
         ":acuity_adapter",
+        ":shared",
         ":node_modules",
         ":node_modules/effect",
         ":node_modules/@tummycrypt/scheduling-kit",
