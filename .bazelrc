@@ -1,0 +1,46 @@
+# =============================================================================
+# scheduling-bridge - Bazel Configuration
+# =============================================================================
+
+common --enable_bzlmod
+
+# Build performance
+build --jobs=auto
+build --worker_sandboxing
+build --disk_cache=~/.cache/bazel-scheduling-bridge
+build --keep_going
+build --show_timestamps
+
+# TypeScript settings
+build --@aspect_rules_ts//ts:skipLibCheck=always
+build --spawn_strategy=sandboxed,worker,local
+build --local_ram_resources=HOST_RAM*.75
+
+# Test configuration
+test --test_output=errors
+test --test_verbose_timeout_warnings
+test --test_timeout=120,600,1800,3600
+
+# CI configuration (bazel build --config=ci //...)
+build:ci --jobs=auto
+build:ci --color=no
+build:ci --curses=no
+build:ci --show_progress_rate_limit=30
+build:ci --noshow_loading_progress
+test:ci --test_output=errors
+test:ci --test_summary=detailed
+
+# Local development (bazel build --config=local //...)
+build:local --disk_cache=~/.cache/bazel-scheduling-bridge
+
+# Debug configuration (bazel build --config=debug //...)
+build:debug --compilation_mode=dbg
+build:debug --strip=never
+build:debug -s
+test:debug --test_output=streamed
+
+# Release configuration (bazel build --config=release //...)
+build:release --compilation_mode=opt
+build:release --strip=always
+
+try-import %workspace%/user.bazelrc

@@ -1,0 +1,206 @@
+"""
+BUILD.bazel for @tummycrypt/scheduling-bridge.
+
+Backend-agnostic scheduling adapter hub. Dual-mode build.
+  Standalone: pnpm build     (tsc)
+  Bazel:      bazel build //:pkg
+
+Architecture:
+  //:core               - Re-exported types from scheduling-kit
+  //:server             - HTTP server (auth, health, routing)
+  //:acuity_adapter     - Acuity Playwright adapter (wizard steps, selectors, BUSINESS extraction)
+  //:scraper            - Read-only BUSINESS object extraction
+  (future) //:calcom_adapter
+  (future) //:glossgenius_adapter
+"""
+
+load("@aspect_rules_js//npm:defs.bzl", "npm_package")
+load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+load("@npm//:vitest/package_json.bzl", vitest_bin = "bin")
+
+# =============================================================================
+# npm link
+# =============================================================================
+
+npm_link_all_packages(name = "node_modules")
+
+# =============================================================================
+# Core types (re-exports from scheduling-kit)
+# =============================================================================
+
+ts_project(
+    name = "core",
+    srcs = glob(["src/core/**/*.ts"]),
+    declaration = True,
+    tsconfig = ":tsconfig.json",
+    transpiler = "tsc",
+    validate = False,
+    deps = [
+        ":node_modules",
+        ":node_modules/@tummycrypt/scheduling-kit",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# =============================================================================
+# Acuity adapter - Playwright wizard automation
+#
+# This is the first backend adapter. Future adapters (CalCom, GlossGenius)
+# follow the same pattern: ts_project with deps on :core.
+# =============================================================================
+
+ts_project(
+    name = "acuity_adapter",
+    srcs = glob(
+        [
+            "src/middleware/**/*.ts",
+            "src/adapters/**/*.ts",
+        ],
+        exclude = [
+            "src/middleware/__tests__/**",
+            "src/middleware/steps/__tests__/**",
+            "src/middleware/server.ts",
+        ],
+    ),
+    declaration = True,
+    tsconfig = ":tsconfig.json",
+    transpiler = "tsc",
+    validate = False,
+    deps = [
+        ":core",
+        ":node_modules",
+        ":node_modules/effect",
+        ":node_modules/playwright-core",
+        ":node_modules/@tummycrypt/scheduling-kit",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# =============================================================================
+# HTTP server (endpoints, auth, health checks)
+# =============================================================================
+
+ts_project(
+    name = "server",
+    srcs = [
+        "src/middleware/server.ts",
+        "src/server.ts",
+    ],
+    declaration = True,
+    tsconfig = ":tsconfig.json",
+    transpiler = "tsc",
+    validate = False,
+    deps = [
+        ":core",
+        ":acuity_adapter",
+        ":node_modules",
+        ":node_modules/effect",
+        ":node_modules/@tummycrypt/scheduling-kit",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# =============================================================================
+# Full library build (all targets combined)
+# =============================================================================
+
+ts_project(
+    name = "scheduling_bridge",
+    srcs = glob(
+        ["src/**/*.ts"],
+        exclude = [
+            "src/**/*.test.ts",
+            "src/**/__tests__/**",
+        ],
+    ),
+    declaration = True,
+    tsconfig = ":tsconfig.json",
+    transpiler = "tsc",
+    out_dir = "dist",
+    root_dir = "src",
+    validate = False,
+    deps = [
+        ":node_modules",
+        ":node_modules/effect",
+        ":node_modules/playwright-core",
+        ":node_modules/@tummycrypt/scheduling-kit",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# =============================================================================
+# npm package - publishable artifact
+# =============================================================================
+
+npm_package(
+    name = "pkg",
+    srcs = [
+        "package.json",
+        "README.md",
+        "LICENSE",
+        ":scheduling_bridge",
+    ],
+    package = "@tummycrypt/scheduling-bridge",
+    tags = ["manual"],
+    version = "0.2.0",
+    visibility = ["//visibility:public"],
+)
+
+# =============================================================================
+# Tests
+# =============================================================================
+
+vitest_bin.vitest_test(
+    name = "test",
+    tags = ["manual"],
+    data = [
+        ":node_modules",
+        "tsconfig.json",
+        ":node_modules/vitest",
+        "vitest.config.ts",
+    ] + glob(["src/**/*.ts"]),
+    args = [
+        "run",
+        "--reporter=verbose",
+        "--config",
+        "$(rootpath vitest.config.ts)",
+    ],
+    log_level = "info",
+    visibility = ["//visibility:public"],
+)
+
+# =============================================================================
+# Typecheck
+# =============================================================================
+
+ts_project(
+    name = "typecheck",
+    srcs = glob(["src/**/*.ts"]),
+    declaration = False,
+    no_emit = True,
+    tsconfig = ":tsconfig.json",
+    transpiler = "tsc",
+    validate = False,
+    deps = [
+        ":node_modules",
+        ":node_modules/effect",
+        ":node_modules/playwright-core",
+        ":node_modules/@tummycrypt/scheduling-kit",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# =============================================================================
+# Exported files
+# =============================================================================
+
+exports_files(
+    [
+        "package.json",
+        "tsconfig.json",
+        "vitest.config.ts",
+        "modal-app.py",
+    ],
+    visibility = ["//visibility:public"],
+)

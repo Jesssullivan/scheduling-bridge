@@ -1,7 +1,7 @@
 {
-  "name": "@tummycrypt/acuity-middleware",
+  "name": "@tummycrypt/scheduling-bridge",
   "version": "0.2.0",
-  "description": "Playwright-based Acuity booking middleware server",
+  "description": "Backend-agnostic scheduling adapter hub with Playwright automation",
   "type": "module",
   "license": "MIT",
   "repository": {

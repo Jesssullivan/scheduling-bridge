@@ -1,8 +1,8 @@
 /**
- * @tummycrypt/acuity-middleware
+ * @tummycrypt/scheduling-bridge
  *
- * Playwright-based Acuity booking middleware server.
- * Proxies booking operations through browser automation.
+ * Backend-agnostic scheduling adapter hub.
+ * Currently bridges Acuity Scheduling via Playwright automation.
  */
 
 // Core types

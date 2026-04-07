@@ -84,7 +84,7 @@ jobs:
           # Rewrite package name for GitHub Packages only
           node -e "
             const pkg = require('./package.json');
-            pkg.name = '@jesssullivan/acuity-middleware';
+            pkg.name = '@jesssullivan/scheduling-bridge';
             require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
           npm publish --registry https://npm.pkg.github.com --access public || echo "May already exist at this version"
