@@ -12,8 +12,8 @@ importers:
   .:
     dependencies:
       '@tummycrypt/scheduling-kit':
-        specifier: ^0.4.0
-        version: 0.4.0(@neondatabase/serverless@0.10.4)(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)(svelte@5.55.1)
+        specifier: ^0.6.1
+        version: 0.6.1(@neondatabase/serverless@0.10.4)(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)(svelte@5.55.1)
       effect:
         specifier: ^3.19.14
         version: 3.21.0
@@ -347,8 +347,8 @@ packages:
     peerDependencies:
       acorn: ^8.9.0
 
-  '@tummycrypt/scheduling-kit@0.4.0':
-    resolution: {integrity: sha512-VuhIbCx7+DtjajjuDZwK498IiDDQeOp6NZJL1cNN+9UzaexFbbxOEKBLiQm/U5p+QS5DeXU950Og8sM7GDk36Q==}
+  '@tummycrypt/scheduling-kit@0.6.1':
+    resolution: {integrity: sha512-5Plq6GMmeKjIFE/BqCOXfHBExVSLtrk0QpYws2rL2hRJWo+d4OPzMMO9MaVzgJdB33kDA5FBvInNG4fXe7T65g==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@skeletonlabs/skeleton': ^4.0.0
@@ -1221,7 +1221,7 @@ snapshots:
     dependencies:
       acorn: 8.16.0
 
-  '@tummycrypt/scheduling-kit@0.4.0(@neondatabase/serverless@0.10.4)(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)(svelte@5.55.1)':
+  '@tummycrypt/scheduling-kit@0.6.1(@neondatabase/serverless@0.10.4)(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)(svelte@5.55.1)':
     dependencies:
       '@tummycrypt/tinyland-auth-pg': 0.1.0(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)
       drizzle-orm: 0.39.3(@neondatabase/serverless@0.10.4)(@types/pg@8.11.6)

@@ -24,17 +24,17 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
 WORKDIR /app
 
 # Copy package files for dependency install
-COPY package.json ./
+COPY package.json pnpm-lock.yaml ./
 
-# Install production dependencies only (playwright comes from base image)
-RUN pnpm install --no-frozen-lockfile --prod
+# Install dependencies needed to build the dist/server/handler.js artifact
+RUN pnpm install --frozen-lockfile
 
 # Copy source
 COPY src/ ./src/
 COPY tsconfig.json ./
 
-# Pre-compile with tsx for faster startup
-RUN pnpm add tsx
+# Build the production server artifact, then prune devDependencies
+RUN pnpm build && pnpm prune --prod
 
 # Non-root user for security
 RUN useradd -m -s /bin/bash middleware
@@ -50,4 +50,4 @@ ENV PLAYWRIGHT_TIMEOUT=30000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3001/health', (r) => r.statusCode === 200 ? process.exit(0) : process.exit(1))"
 
-CMD ["node", "--import", "tsx/esm", "src/middleware/server.ts"]
+CMD ["node", "dist/server/handler.js"]

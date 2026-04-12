@@ -1,12 +1,13 @@
 {
   "name": "@tummycrypt/scheduling-bridge",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Backend-agnostic scheduling adapter hub with Playwright automation",
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Jesssullivan/acuity-middleware.git"
+    "url": "git+https://github.com/Jesssullivan/acuity-middleware.git"
   },
   "exports": {
     ".": {
@@ -37,7 +38,7 @@
     "paper:dev": "node docs/paper/watch.mjs"
   },
   "dependencies": {
-    "@tummycrypt/scheduling-kit": "^0.4.0",
+    "@tummycrypt/scheduling-kit": "^0.6.1",
     "playwright-core": "1.58.1",
     "effect": "^3.19.14"
   },
@@ -56,6 +57,6 @@
     }
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20 <25"
   }
 }

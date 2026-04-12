@@ -18,15 +18,17 @@
 import { Effect, pipe } from 'effect';
 
 import type { SchedulingAdapter } from '../types.js';
-import { createScraperAdapter, type ScraperConfig } from './scraper.js';
+import type { ScraperConfig } from './scraper.js';
 import type {
 	Booking,
 	BookingRequest,
 	Service,
+	SchedulingError,
 	SchedulingResult,
 } from '../../core/types.js';
 import { Errors } from '../../core/types.js';
 import { BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from '../../shared/browser-service.js';
+import { createAcuityServiceCatalog } from '../../shared/acuity-service-catalog.js';
 import { toSchedulingError, type MiddlewareError } from './errors.js';
 import { createRemoteWizardAdapter, type RemoteAdapterConfig } from '../../shared/remote-adapter.js';
 import {
@@ -174,6 +176,17 @@ const createBookingProgram = (request: BookingRequest, serviceName?: string) =>
 		}),
 	);
 
+const isSchedulingError = (error: unknown): error is SchedulingError =>
+	typeof error === 'object' && error !== null && '_tag' in error;
+
+const toCatalogError = (error: unknown): SchedulingError =>
+	isSchedulingError(error)
+		? error
+		: Errors.infrastructure(
+				'UNKNOWN',
+				error instanceof Error ? error.message : 'Service catalog lookup failed',
+			);
+
 // =============================================================================
 // ADAPTER FACTORY
 // =============================================================================
@@ -181,7 +194,7 @@ const createBookingProgram = (request: BookingRequest, serviceName?: string) =>
 /**
  * Create a full SchedulingAdapter that puppeteers the Acuity wizard.
  *
- * Read operations delegate to the existing scraper.
+ * Read operations resolve through the shared Acuity service catalog.
  * Write operations use Effect TS middleware via Playwright.
  */
 export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdapter => {
@@ -215,10 +228,8 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 			Effect.mapError(toSchedulingError),
 		);
 
-	// Static services from config (avoids browser launch for service listing)
 	const staticServices: Service[] | null = config.services ? [...config.services] : null;
 
-	// Scraper fallback for services if no static list provided
 	const scraperConfig: ScraperConfig = {
 		baseUrl: config.baseUrl,
 		headless: browserConfig.headless,
@@ -227,14 +238,12 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		executablePath: browserConfig.executablePath,
 		launchArgs: browserConfig.launchArgs ? [...browserConfig.launchArgs] : undefined,
 	};
-	const scraper = createScraperAdapter(scraperConfig);
-
-	// Cache services for getService lookups
-	let cachedServices: Service[] | null = staticServices;
-
-	// Helper: resolve service name from ID using cached services
-	const resolveServiceName = (serviceId: string): string | undefined =>
-		cachedServices?.find((s) => s.id === serviceId)?.name;
+	const serviceCatalog = createAcuityServiceCatalog({
+		baseUrl: config.baseUrl,
+		staticServices,
+		scraperConfig,
+		logger: console,
+	});
 
 	return {
 		name: 'acuity-wizard',
@@ -243,39 +252,24 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		// Read operations
 		// -----------------------------------------------------------------------
 
-		getServices: () => {
-			if (staticServices) {
-				return Effect.succeed(staticServices);
-			}
-			// Fallback to scraper (may fail with broken selectors)
-			return pipe(
-				scraper.getServices(),
-				Effect.tap((services) =>
-					Effect.sync(() => {
-						cachedServices = services;
-					}),
-				),
-			);
-		},
+		getServices: () =>
+			Effect.tryPromise({
+				try: () => serviceCatalog.getServices(),
+				catch: toCatalogError,
+			}),
 
-		getService: (serviceId: string) => {
-			if (cachedServices) {
-				const found = cachedServices.find((s) => s.id === serviceId);
-				return found
-					? Effect.succeed(found)
-					: Effect.fail(Errors.acuity('NOT_FOUND', `Service ${serviceId} not found`));
-			}
-			return pipe(
-				scraper.getServices(),
-				Effect.flatMap((services) => {
-					cachedServices = services;
-					const found = services.find((s) => s.id === serviceId);
-					return found
-						? Effect.succeed(found)
-						: Effect.fail(Errors.acuity('NOT_FOUND', `Service ${serviceId} not found`));
+		getService: (serviceId: string) =>
+			pipe(
+				Effect.tryPromise({
+					try: () => serviceCatalog.getService(serviceId),
+					catch: toCatalogError,
 				}),
-			);
-		},
+				Effect.flatMap((found) =>
+					found
+						? Effect.succeed(found)
+						: Effect.fail(Errors.acuity('NOT_FOUND', `Service ${serviceId} not found`)),
+				),
+			),
 
 		getProviders: () =>
 			Effect.succeed([
@@ -309,56 +303,59 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 			]),
 
 		getAvailableDates: (params) => {
-			const serviceName = resolveServiceName(params.serviceId);
-			if (!serviceName) {
-				return Effect.fail(
-					Errors.acuity('NOT_FOUND', `Cannot resolve service name for ID ${params.serviceId}. Provide static services in config.`),
-				);
-			}
-			return runWizard(
-				Effect.scoped(
-					readAvailableDates({
-						serviceName,
-						// Don't pass appointmentTypeId — our internal IDs don't match Acuity URL IDs
-						targetMonth: params.startDate?.slice(0, 7),
-						monthsToScan: 2,
-					}),
-				) as Effect.Effect<Array<{ date: string; slots: number }>, MiddlewareError>,
+			return pipe(
+				Effect.tryPromise({
+					try: () => serviceCatalog.resolveServiceName(params.serviceId),
+					catch: toCatalogError,
+				}),
+				Effect.flatMap((serviceName) =>
+					runWizard(
+						Effect.scoped(
+							readAvailableDates({
+								serviceName,
+								targetMonth: params.startDate?.slice(0, 7),
+								monthsToScan: 2,
+							}),
+						) as Effect.Effect<Array<{ date: string; slots: number }>, MiddlewareError>,
+					),
+				),
 			);
 		},
 
 		getAvailableSlots: (params) => {
-			const serviceName = resolveServiceName(params.serviceId);
-			if (!serviceName) {
-				return Effect.fail(
-					Errors.acuity('NOT_FOUND', `Cannot resolve service name for ID ${params.serviceId}. Provide static services in config.`),
-				);
-			}
-			return runWizard(
-				Effect.scoped(
-					readTimeSlots({
-						serviceName,
-						date: params.date,
-					}),
-				) as Effect.Effect<Array<{ datetime: string; available: boolean }>, MiddlewareError>,
+			return pipe(
+				Effect.tryPromise({
+					try: () => serviceCatalog.resolveServiceName(params.serviceId),
+					catch: toCatalogError,
+				}),
+				Effect.flatMap((serviceName) =>
+					runWizard(
+						Effect.scoped(
+							readTimeSlots({
+								serviceName,
+								date: params.date,
+							}),
+						) as Effect.Effect<Array<{ datetime: string; available: boolean }>, MiddlewareError>,
+					),
+				),
 			);
 		},
 
 		checkSlotAvailability: (params) => {
-			const serviceName = resolveServiceName(params.serviceId);
-			if (!serviceName) {
-				return Effect.fail(
-					Errors.acuity('NOT_FOUND', `Cannot resolve service name for ID ${params.serviceId}`),
-				);
-			}
 			return pipe(
-				runWizard(
-					Effect.scoped(
-						readTimeSlots({
-							serviceName,
-							date: params.datetime.split('T')[0],
-						}),
-					) as Effect.Effect<Array<{ datetime: string; available: boolean }>, MiddlewareError>,
+				Effect.tryPromise({
+					try: () => serviceCatalog.resolveServiceName(params.serviceId),
+					catch: toCatalogError,
+				}),
+				Effect.flatMap((serviceName) =>
+					runWizard(
+						Effect.scoped(
+							readTimeSlots({
+								serviceName,
+								date: params.datetime.split('T')[0],
+							}),
+						) as Effect.Effect<Array<{ datetime: string; available: boolean }>, MiddlewareError>,
+					),
 				),
 				Effect.map((slots) => {
 					// Slots return local time (no TZ suffix: "2026-03-07T14:00:00").
@@ -390,7 +387,7 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		// -----------------------------------------------------------------------
 
 		createBooking: (request) => {
-			const serviceName = cachedServices?.find((s) => s.id === request.serviceId)?.name;
+			const serviceName = serviceCatalog.getCachedService(request.serviceId)?.name;
 			return runWizard(
 				createBookingProgram(request, serviceName) as Effect.Effect<Booking, MiddlewareError>,
 			);
@@ -398,7 +395,7 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 
 		createBookingWithPaymentRef: (request, paymentRef, paymentProcessor) => {
 			const coupon = config.couponCode ?? generateCouponCode(paymentRef, paymentProcessor);
-			const service = cachedServices?.find((s) => s.id === request.serviceId);
+			const service = serviceCatalog.getCachedService(request.serviceId);
 
 			return runWizard(
 				createBookingWithPaymentRefProgram(

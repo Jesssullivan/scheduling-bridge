@@ -7,7 +7,7 @@
  *
  * Endpoints:
  *   GET  /health                    - Health check
- *   GET  /services                  - List services (scraper)
+ *   GET  /services                  - List services (static/BUSINESS/scraper)
  *   GET  /services/:id              - Get service by ID
  *   POST /availability/dates        - Available dates for a service
  *   POST /availability/slots        - Time slots for a date
@@ -31,8 +31,12 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Effect, Exit, Cause, Scope } from 'effect';
-import { createScraperAdapter, type ScraperConfig } from '../adapters/acuity/scraper.js';
+import type { ScraperConfig } from '../adapters/acuity/scraper.js';
 import { BrowserService, BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from '../shared/browser-service.js';
+import {
+	createAcuityServiceCatalog,
+	parseStaticServicesJson,
+} from '../shared/acuity-service-catalog.js';
 import { toSchedulingError, type MiddlewareError } from '../adapters/acuity/errors.js';
 import {
 	navigateToBooking,
@@ -44,8 +48,6 @@ import {
 	toBooking,
 	readAvailableDates,
 	readTimeSlots,
-	fetchBusinessData,
-	businessToServices,
 } from '../adapters/acuity/steps/index.js';
 import type {
 	Booking,
@@ -150,80 +152,26 @@ const runEffect = async <A>(
 	return { ok: false, error: { _tag: 'InfrastructureError', code: 'UNKNOWN', message: Cause.pretty(exit.cause) } };
 };
 
-/** Run a SchedulingResult (Effect) and return Result */
-const runSchedulingEffect = async <A>(
-	effect: Effect.Effect<A, SchedulingError>,
-): Promise<Result<A>> => {
-	const exit = await Effect.runPromiseExit(effect);
-	if (Exit.isSuccess(exit)) {
-		return { ok: true, value: exit.value };
-	}
-	const failure = Cause.failureOption(exit.cause);
-	if (failure._tag === 'Some') {
-		return { ok: false, error: failure.value };
-	}
-	return { ok: false, error: { _tag: 'InfrastructureError', code: 'UNKNOWN', message: Cause.pretty(exit.cause) } };
-};
+const serviceCatalog = createAcuityServiceCatalog({
+	baseUrl: ACUITY_BASE_URL,
+	staticServices: parseStaticServicesJson(process.env.SERVICES_JSON),
+	scraperConfig,
+	logger: console,
+});
 
-// =============================================================================
-// SCRAPER (cached)
-// =============================================================================
+const isSchedulingError = (error: unknown): error is SchedulingError =>
+	typeof error === 'object' && error !== null && '_tag' in error;
 
-let scraper: ReturnType<typeof createScraperAdapter> | null = null;
-
-const getScraper = () => {
-	if (!scraper) {
-		scraper = createScraperAdapter(scraperConfig);
-	}
-	return scraper;
-};
-
-let cachedServices: Service[] | null = null;
-
-// Static services from SERVICES_JSON env var (avoids scraper dependency)
-const STATIC_SERVICES: Service[] | null = (() => {
-	const raw = process.env.SERVICES_JSON;
-	if (!raw) return null;
-	try {
-		return JSON.parse(raw) as Service[];
-	} catch (e) {
-		console.error('[middleware-server] Failed to parse SERVICES_JSON:', e);
-		return null;
-	}
-})();
-
-if (STATIC_SERVICES) {
-	cachedServices = STATIC_SERVICES;
-	console.log(`[middleware-server] Loaded ${STATIC_SERVICES.length} static services from SERVICES_JSON`);
-}
-
-// =============================================================================
-// SERVICE NAME RESOLUTION
-// =============================================================================
-
-/**
- * Resolve a service ID to its display name for wizard navigation.
- * Ensures cachedServices is populated (via BUSINESS extraction) before lookup.
- * Rejects numeric-only serviceName (remote adapter fallback) and resolves from cache.
- */
 const resolveServiceName = async (serviceId: string, serviceName?: string): Promise<string> => {
-	// If caller provided a real (non-numeric) name, use it
-	if (serviceName && !/^\d+$/.test(serviceName)) return serviceName;
-
-	// Ensure services are cached
-	if (!cachedServices) {
-		try {
-			const business = await fetchBusinessData(ACUITY_BASE_URL);
-			if (business) {
-				cachedServices = businessToServices(business);
-				console.log(`[resolve] Warmed service cache: ${cachedServices.length} services`);
-			}
-		} catch (e) {
-			console.warn('[resolve] Service cache warm failed:', e instanceof Error ? e.message : e);
-		}
+	try {
+		return await serviceCatalog.resolveServiceName(serviceId, serviceName);
+	} catch (error) {
+		console.warn(
+			`[middleware-server] Service name resolution failed for ${serviceId}:`,
+			error,
+		);
+		return serviceName && !/^\d+$/.test(serviceName) ? serviceName : serviceId;
 	}
-
-	return cachedServices?.find((s) => s.id === serviceId)?.name ?? serviceId;
 };
 
 // =============================================================================
@@ -236,74 +184,54 @@ const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
 		baseUrl: ACUITY_BASE_URL,
 		hasCoupon: !!COUPON_CODE,
 		headless: browserConfig.headless,
-		staticServices: STATIC_SERVICES ? STATIC_SERVICES.length : 0,
+		staticServices: serviceCatalog.staticServicesCount,
 		timestamp: new Date().toISOString(),
 	});
 };
 
 
 const handleGetServices = async (_req: IncomingMessage, res: ServerResponse) => {
-	// 1. Prefer static services from env (always reliable, no network needed)
-	if (STATIC_SERVICES) {
-		console.log('[services] source: SERVICES_JSON env');
-		cachedServices = STATIC_SERVICES;
-		return sendSuccess(res, STATIC_SERVICES);
-	}
-
-	// 2. Extract from BUSINESS object (HTTP fetch + regex, no browser)
 	try {
-		const business = await fetchBusinessData(ACUITY_BASE_URL);
-		if (business) {
-			const services = businessToServices(business);
-			if (services.length > 0) {
-				console.log(`[services] source: BUSINESS object (${services.length} services)`);
-				cachedServices = services;
-				return sendSuccess(res, services);
-			}
-			console.warn('[services] BUSINESS object found but 0 active services');
+		const services = await serviceCatalog.getServices();
+		sendSuccess(res, services);
+	} catch (error) {
+		if (isSchedulingError(error)) {
+			return sendError(res, 500, error);
 		}
-	} catch (e) {
-		console.warn('[services] BUSINESS extraction failed:', e instanceof Error ? e.message : e);
+		return sendJson(res, 500, {
+			success: false,
+			error: {
+				tag: 'InfrastructureError',
+				code: 'UNKNOWN',
+				message: error instanceof Error ? error.message : 'Service lookup failed',
+			},
+		});
 	}
-
-	// 3. Deprecated fallback: DOM scraper (may return [] — Acuity is React SPA)
-	console.warn('[services] falling back to DOM scraper (deprecated)');
-	const result = await runSchedulingEffect(getScraper().getServices());
-	if (!result.ok) return sendError(res, 500, result.error);
-	if (result.value.length === 0) {
-		console.error('[services] all sources exhausted — returning empty []');
-	}
-	cachedServices = result.value;
-	sendSuccess(res, result.value);
 };
 
 const handleGetService = async (serviceId: string, res: ServerResponse) => {
-	if (!cachedServices) {
-		// Prefer BUSINESS extraction (HTTP, no browser) over DOM scraper
-		try {
-			const business = await fetchBusinessData(ACUITY_BASE_URL);
-			if (business) {
-				cachedServices = businessToServices(business);
-				console.log(`[service] Warmed cache via BUSINESS: ${cachedServices.length} services`);
-			}
-		} catch (e) {
-			console.warn('[service] BUSINESS extraction failed:', e instanceof Error ? e.message : e);
+	try {
+		const found = await serviceCatalog.getService(serviceId);
+		if (!found) {
+			return sendJson(res, 404, {
+				success: false,
+				error: { tag: 'AcuityError', code: 'NOT_FOUND', message: `Service ${serviceId} not found` },
+			});
 		}
-		// Fallback to scraper if BUSINESS failed
-		if (!cachedServices) {
-			const result = await runSchedulingEffect(getScraper().getServices());
-			if (!result.ok) return sendError(res, 500, result.error);
-			cachedServices = result.value;
+		sendSuccess(res, found);
+	} catch (error) {
+		if (isSchedulingError(error)) {
+			return sendError(res, 500, error);
 		}
-	}
-	const found = cachedServices!.find((s) => s.id === serviceId);
-	if (!found) {
-		return sendJson(res, 404, {
+		return sendJson(res, 500, {
 			success: false,
-			error: { tag: 'AcuityError', code: 'NOT_FOUND', message: `Service ${serviceId} not found` },
+			error: {
+				tag: 'InfrastructureError',
+				code: 'UNKNOWN',
+				message: error instanceof Error ? error.message : 'Service lookup failed',
+			},
 		});
 	}
-	sendSuccess(res, found);
 };
 
 const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) => {
@@ -421,7 +349,7 @@ const handleCreateBookingWithPayment = async (req: IncomingMessage, res: ServerR
 	}
 
 	const serviceName = await resolveServiceName(request.serviceId);
-	const service = cachedServices?.find((s) => s.id === request.serviceId);
+	const service = serviceCatalog.getCachedService(request.serviceId);
 
 	const result = await runEffect(
 		Effect.gen(function* () {

@@ -1,7 +1,7 @@
 """
-Modal Labs deployment for the scheduling middleware server.
+Modal Labs deployment for the scheduling bridge server.
 
-Runs the Node.js middleware server with Playwright + Chromium
+Runs the Node.js bridge server with Playwright + Chromium
 inside a Modal container with GPU-free compute.
 
 Usage:
@@ -38,24 +38,14 @@ image = (
         "apt-get clean && rm -rf /var/lib/apt/lists/*",
     )
     .add_local_file("package.json", "/app/package.json", copy=True)
+    .add_local_file("pnpm-lock.yaml", "/app/pnpm-lock.yaml", copy=True)
     .add_local_dir("src", "/app/src", copy=True)
     .add_local_file("tsconfig.json", "/app/tsconfig.json", copy=True)
     .run_commands(
-        # Install all deps then compile TS → JS with esbuild (bundler handles fp-ts resolution)
-        "cd /app && pnpm install --no-frozen-lockfile",
-        "cd /app && pnpm add esbuild",
-        # Bundle middleware server to a single JS file with all deps inlined
-        # External: playwright (runtime dep), tinyland-auth-pg (not used by middleware)
-        "cd /app && npx esbuild src/middleware/server.ts"
-        " --bundle --platform=node --format=esm --outfile=dist/server.mjs"
-        " --external:playwright-core --external:playwright"
-        " --external:@playwright/test"
-        " --external:@tummycrypt/tinyland-auth-pg"
-        " --external:@tummycrypt/tinyland-auth-pg/*"
-        " --external:@neondatabase/serverless"
-        " --external:drizzle-orm --external:drizzle-orm/*"
-        " --external:@skeletonlabs/* --external:svelte --external:svelte/*",
-        "ls -la /app/dist/server.mjs",
+        # Build the same dist/server/handler.js artifact used by pnpm start.
+        "cd /app && pnpm install --frozen-lockfile",
+        "cd /app && pnpm build",
+        "ls -la /app/dist/server/handler.js",
     )
 )
 
@@ -77,7 +67,7 @@ def server():
     import subprocess
 
     subprocess.Popen(
-        ["node", "dist/server.mjs"],
+        ["node", "dist/server/handler.js"],
         cwd="/app",
         env={
             **__import__("os").environ,
