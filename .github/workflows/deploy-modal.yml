@@ -1,0 +1,77 @@
+name: Deploy Modal
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'modal-app.py'
+      - 'src/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'tsconfig.json'
+      - '.github/workflows/deploy-modal.yml'
+  workflow_dispatch:
+    inputs:
+      modal_environment:
+        description: 'Modal environment name (optional)'
+        required: false
+        type: string
+        default: ''
+      deployment_name:
+        description: 'Modal app name override'
+        required: false
+        type: string
+        default: 'scheduling-middleware'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: modal-deploy-${{ github.ref_name }}-${{ github.event.inputs.modal_environment || 'default' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Modal CLI
+        run: python -m pip install --upgrade pip modal
+
+      - name: Resolve deploy target
+        run: |
+          echo "MODAL_APP_NAME=${INPUT_DEPLOYMENT_NAME:-scheduling-middleware}" >> "$GITHUB_ENV"
+          if [ -n "${INPUT_MODAL_ENVIRONMENT}" ]; then
+            echo "MODAL_ENVIRONMENT=${INPUT_MODAL_ENVIRONMENT}" >> "$GITHUB_ENV"
+          fi
+        env:
+          INPUT_DEPLOYMENT_NAME: ${{ github.event.inputs.deployment_name }}
+          INPUT_MODAL_ENVIRONMENT: ${{ github.event.inputs.modal_environment }}
+
+      - name: Authenticate Modal
+        run: |
+          modal token set \
+            --token-id "$MODAL_TOKEN_ID" \
+            --token-secret "$MODAL_TOKEN_SECRET" \
+            --activate
+        env:
+          MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+          MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+
+      - name: Deploy Modal app
+        run: |
+          DEPLOY_ARGS=(modal deploy modal-app.py --name "$MODAL_APP_NAME" --tag "$GITHUB_SHA")
+          if [ -n "${MODAL_ENVIRONMENT:-}" ]; then
+            DEPLOY_ARGS+=(--env "$MODAL_ENVIRONMENT")
+          fi
+          "${DEPLOY_ARGS[@]}"
+        env:
+          MODAL_APP_NAME: ${{ env.MODAL_APP_NAME }}
+          MODAL_ENVIRONMENT: ${{ env.MODAL_ENVIRONMENT }}
+          MIDDLEWARE_RELEASE_SHA: ${{ github.sha }}
+          MIDDLEWARE_RELEASE_REF: ${{ github.ref_name }}

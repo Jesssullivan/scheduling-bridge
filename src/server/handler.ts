@@ -55,6 +55,10 @@ import {
 	readAvailableDates,
 	readTimeSlots,
 } from '../adapters/acuity/steps/index.js';
+import {
+	readDatesViaUrl,
+	readSlotsViaUrl,
+} from '../adapters/acuity/steps/read-via-url.js';
 import type {
 	Booking,
 	BookingRequest,
@@ -185,6 +189,8 @@ const resolveServiceName = async (serviceId: string, serviceName?: string): Prom
 	}
 };
 
+const isAcuityAppointmentTypeId = (serviceId: string): boolean => /^\d+$/.test(serviceId);
+
 // =============================================================================
 // ROUTE HANDLERS
 // =============================================================================
@@ -197,6 +203,9 @@ const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
 		headless: browserConfig.headless,
 		staticServices: serviceCatalog.staticServicesCount,
 		serviceCacheTtlMs: SERVICE_CACHE_TTL_MS,
+		releaseSha: process.env.MIDDLEWARE_RELEASE_SHA ?? 'unknown',
+		releaseRef: process.env.MIDDLEWARE_RELEASE_REF ?? 'unknown',
+		modalEnvironment: process.env.MODAL_ENVIRONMENT ?? null,
 		timestamp: new Date().toISOString(),
 	});
 };
@@ -248,16 +257,19 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 
 const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
-	const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
-	console.log(`[availability/dates] serviceName="${serviceName}" from serviceId="${body.serviceId}"`);
-
-	const result = await runEffect(
-		readAvailableDates({
-			serviceName,
-			targetMonth: body.startDate?.slice(0, 7),
-			monthsToScan: 2,
-		}),
-	);
+	const result = isAcuityAppointmentTypeId(body.serviceId)
+		? await runEffect(readDatesViaUrl(body.serviceId, body.startDate?.slice(0, 7)))
+		: await (async () => {
+				const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
+				console.log(`[availability/dates] serviceName="${serviceName}" from serviceId="${body.serviceId}"`);
+				return runEffect(
+					readAvailableDates({
+						serviceName,
+						targetMonth: body.startDate?.slice(0, 7),
+						monthsToScan: 2,
+					}),
+				);
+			})();
 
 	if (!result.ok) {
 		const err = result.error;
@@ -272,15 +284,18 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) =
 
 const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; date: string };
-	const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
-	console.log(`[availability/slots] serviceName="${serviceName}" date="${body.date}"`);
-
-	const result = await runEffect(
-		readTimeSlots({
-			serviceName,
-			date: body.date,
-		}),
-	);
+	const result = isAcuityAppointmentTypeId(body.serviceId)
+		? await runEffect(readSlotsViaUrl(body.serviceId, body.date))
+		: await (async () => {
+				const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
+				console.log(`[availability/slots] serviceName="${serviceName}" date="${body.date}"`);
+				return runEffect(
+					readTimeSlots({
+						serviceName,
+						date: body.date,
+					}),
+				);
+			})();
 
 	if (!result.ok) {
 		const err = result.error;
@@ -296,14 +311,17 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) =
 const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; datetime: string };
 	const date = body.datetime.split('T')[0];
-	const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
-
-	const result = await runEffect(
-		readTimeSlots({
-			serviceName,
-			date,
-		}),
-	);
+	const result = isAcuityAppointmentTypeId(body.serviceId)
+		? await runEffect(readSlotsViaUrl(body.serviceId, date))
+		: await (async () => {
+				const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
+				return runEffect(
+					readTimeSlots({
+						serviceName,
+						date,
+					}),
+				);
+			})();
 
 	if (!result.ok) {
 		const err = result.error;

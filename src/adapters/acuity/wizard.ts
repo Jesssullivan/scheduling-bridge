@@ -44,6 +44,7 @@ import {
 	type NavigateResult,
 	type ConfirmationData,
 } from './steps/index.js';
+import { readDatesViaUrl, readSlotsViaUrl } from './steps/read-via-url.js';
 
 // =============================================================================
 // CONFIGURATION
@@ -140,6 +141,8 @@ const createBookingWithPaymentRefProgram = (
 			);
 		}),
 	);
+
+const isAcuityAppointmentTypeId = (serviceId: string): boolean => /^\d+$/.test(serviceId);
 
 /**
  * Simple booking creation (no payment bypass needed).
@@ -303,6 +306,14 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 			]),
 
 		getAvailableDates: (params) => {
+			if (isAcuityAppointmentTypeId(params.serviceId)) {
+				return runWizard(
+					Effect.scoped(
+						readDatesViaUrl(params.serviceId, params.startDate?.slice(0, 7)),
+					) as Effect.Effect<Array<{ date: string; slots: number }>, MiddlewareError>,
+				);
+			}
+
 			return pipe(
 				Effect.tryPromise({
 					try: () => serviceCatalog.resolveServiceName(params.serviceId),
@@ -323,6 +334,14 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		},
 
 		getAvailableSlots: (params) => {
+			if (isAcuityAppointmentTypeId(params.serviceId)) {
+				return runWizard(
+					Effect.scoped(
+						readSlotsViaUrl(params.serviceId, params.date),
+					) as Effect.Effect<Array<{ datetime: string; available: boolean }>, MiddlewareError>,
+				);
+			}
+
 			return pipe(
 				Effect.tryPromise({
 					try: () => serviceCatalog.resolveServiceName(params.serviceId),
@@ -342,6 +361,21 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		},
 
 		checkSlotAvailability: (params) => {
+			if (isAcuityAppointmentTypeId(params.serviceId)) {
+				return pipe(
+					runWizard(
+						Effect.scoped(
+							readSlotsViaUrl(params.serviceId, params.datetime.split('T')[0]),
+						) as Effect.Effect<Array<{ datetime: string; available: boolean }>, MiddlewareError>,
+					),
+					Effect.map((slots) => {
+						const normalize = (dt: string) => dt.replace(/([+-]\d{2}:\d{2}|Z)$/, '');
+						const requestNorm = normalize(params.datetime);
+						return slots.some((s) => s.available && normalize(s.datetime) === requestNorm);
+					}),
+				);
+			}
+
 			return pipe(
 				Effect.tryPromise({
 					try: () => serviceCatalog.resolveServiceName(params.serviceId),
