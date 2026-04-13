@@ -10,6 +10,7 @@
  */
 
 import { Effect, Scope } from 'effect';
+import type { Page } from 'playwright-core';
 import { BrowserService } from '../../../shared/browser-service.js';
 import { WizardStepError } from '../errors.js';
 import { Selectors } from '../selectors.js';
@@ -28,6 +29,32 @@ export interface UrlSlotResult {
 	readonly datetime: string; // time string like "4:00 PM"
 	readonly available: boolean;
 }
+
+const readEnabledCalendarDates = (
+	page: Page,
+	tileSelector: string,
+): Effect.Effect<UrlDateResult[], WizardStepError> =>
+	Effect.tryPromise({
+		try: () => page.evaluate((sel) => {
+			const results: Array<{ date: string; slots: number }> = [];
+			const neighboringClass = 'react-calendar__tile--neighboringMonth';
+			document.querySelectorAll(sel).forEach(tile => {
+				if ((tile as HTMLButtonElement).disabled) return;
+				if (tile.classList.contains(neighboringClass)) return;
+
+				const abbr = tile.querySelector('abbr');
+				const label = abbr?.getAttribute('aria-label') || tile.getAttribute('data-date') || '';
+				if (label) {
+					const d = new Date(label);
+					if (!isNaN(d.getTime())) {
+						results.push({ date: d.toISOString().slice(0, 10), slots: 1 });
+					}
+				}
+			});
+			return results;
+		}, tileSelector),
+		catch: (e) => new WizardStepError({ step: 'read-availability', message: `Calendar read failed: ${e}` }),
+	});
 
 // =============================================================================
 // READ DATES VIA URL PARAM
@@ -66,31 +93,36 @@ export const readDatesViaUrl = (
 			catch: () => null,
 		}).pipe(Effect.ignore);
 
-		// Read enabled calendar tiles
 		const tileSelector = Selectors.calendarDay[0]; // .react-calendar__tile
-		const dates = yield* Effect.tryPromise({
-			try: () => page.evaluate((sel) => {
-				const results: Array<{ date: string; slots: number }> = [];
-				const neighboringClass = 'react-calendar__tile--neighboringMonth';
-				document.querySelectorAll(sel).forEach(tile => {
-					if ((tile as HTMLButtonElement).disabled) return;
-					if (tile.classList.contains(neighboringClass)) return;
+		let dates = yield* readEnabledCalendarDates(page, tileSelector);
+		if (dates.length > 0) {
+			return dates;
+		}
 
-					const abbr = tile.querySelector('abbr');
-					const label = abbr?.getAttribute('aria-label') || tile.getAttribute('data-date') || '';
-					if (label) {
-						const d = new Date(label);
-						if (!isNaN(d.getTime())) {
-							results.push({ date: d.toISOString().slice(0, 10), slots: 1 });
-						}
-					}
-				});
-				return results;
-			}, tileSelector),
-			catch: (e) => new WizardStepError({ step: 'read-availability', message: `Calendar read failed: ${e}` }),
+		// Acuity occasionally paints the calendar shell before enabled dates are attached.
+		// Give the same page a short second chance before treating the month as empty.
+		yield* Effect.tryPromise({
+			try: () => page.waitForTimeout(750),
+			catch: () => null,
+		}).pipe(Effect.ignore);
+
+		dates = yield* readEnabledCalendarDates(page, tileSelector);
+		if (dates.length > 0) {
+			return dates;
+		}
+
+		// Final fallback: reload once and retry the DOM read. This is still cheaper
+		// than returning a false-empty month to the app and stranding the calendar.
+		yield* Effect.tryPromise({
+			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
+			catch: (e) => new WizardStepError({ step: 'read-availability', message: `Retry navigation failed: ${e}` }),
 		});
+		yield* Effect.tryPromise({
+			try: () => page.waitForSelector(calendarSelector, { timeout: 10000 }),
+			catch: () => null,
+		}).pipe(Effect.ignore);
 
-		return dates;
+		return yield* readEnabledCalendarDates(page, tileSelector);
 	});
 
 // =============================================================================
