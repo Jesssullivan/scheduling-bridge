@@ -21,7 +21,7 @@ HTTP Request
 
 - **server/handler.ts** -- Standalone Node.js HTTP server with Bearer token auth
 - **acuity-service-catalog.ts** -- Shared service source order and cache for static config, BUSINESS extraction, and scraper fallback
-- **browser-service.ts** -- Effect TS Layer managing Playwright browser/page lifecycle
+- **browser-service.ts** -- Effect TS Layers for a warm shared browser process plus request-scoped page sessions
 - **acuity-wizard.ts** -- Full `SchedulingAdapter` implementation (local Playwright or remote HTTP proxy)
 - **remote-adapter.ts** -- HTTP client adapter for proxying to a remote middleware instance
 - **selectors.ts** -- Single source of truth for all Acuity DOM selectors
@@ -54,6 +54,7 @@ HTTP Request
 | `CHROMIUM_EXECUTABLE_PATH` | No | -- | Custom Chromium path (for Lambda/serverless) |
 | `CHROMIUM_LAUNCH_ARGS` | No | -- | Comma-separated Chromium args |
 | `SERVICES_JSON` | No | -- | Optional static service catalog to bypass live Acuity reads |
+| `ACUITY_SERVICE_CACHE_TTL_MS` | No | `300000` | TTL for cached live service catalogs before BUSINESS/scraper refresh |
 
 ## Deployment
 

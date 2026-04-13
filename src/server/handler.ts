@@ -30,9 +30,15 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { Effect, Exit, Cause, Scope } from 'effect';
+import { Effect, Exit, Cause, ManagedRuntime, Scope } from 'effect';
 import type { ScraperConfig } from '../adapters/acuity/scraper.js';
-import { BrowserService, BrowserServiceLive, type BrowserConfig, defaultBrowserConfig } from '../shared/browser-service.js';
+import {
+	BrowserProcessLive,
+	BrowserService,
+	BrowserSessionLive,
+	type BrowserConfig,
+	defaultBrowserConfig,
+} from '../shared/browser-service.js';
 import {
 	createAcuityServiceCatalog,
 	parseStaticServicesJson,
@@ -64,6 +70,10 @@ const PORT = Number(process.env.PORT ?? 3001);
 const AUTH_TOKEN = process.env.AUTH_TOKEN;
 const ACUITY_BASE_URL = process.env.ACUITY_BASE_URL ?? 'https://MassageIthaca.as.me';
 const COUPON_CODE = process.env.ACUITY_BYPASS_COUPON;
+const SERVICE_CACHE_TTL_MS = (() => {
+	const parsed = Number(process.env.ACUITY_SERVICE_CACHE_TTL_MS ?? 5 * 60_000);
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : 5 * 60_000;
+})();
 
 const browserConfig: BrowserConfig = {
 	...defaultBrowserConfig,
@@ -132,15 +142,15 @@ const parseBody = async (req: IncomingMessage): Promise<unknown> => {
 // EFFECT RUNNER
 // =============================================================================
 
-const layer = BrowserServiceLive(browserConfig);
+const browserRuntime = ManagedRuntime.make(BrowserProcessLive(browserConfig));
 
 type Result<A> = { ok: true; value: A } | { ok: false; error: SchedulingError };
 
 const runEffect = async <A>(
 	effect: Effect.Effect<A, MiddlewareError | undefined, BrowserService | Scope.Scope>,
 ): Promise<Result<A>> => {
-	const exit = await Effect.runPromiseExit(
-		Effect.scoped(effect.pipe(Effect.provide(layer))),
+	const exit = await browserRuntime.runPromiseExit(
+		Effect.scoped(effect.pipe(Effect.provide(BrowserSessionLive))),
 	);
 	if (Exit.isSuccess(exit)) {
 		return { ok: true, value: exit.value };
@@ -154,6 +164,7 @@ const runEffect = async <A>(
 
 const serviceCatalog = createAcuityServiceCatalog({
 	baseUrl: ACUITY_BASE_URL,
+	cacheTtlMs: SERVICE_CACHE_TTL_MS,
 	staticServices: parseStaticServicesJson(process.env.SERVICES_JSON),
 	scraperConfig,
 	logger: console,
@@ -185,6 +196,7 @@ const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
 		hasCoupon: !!COUPON_CODE,
 		headless: browserConfig.headless,
 		staticServices: serviceCatalog.staticServicesCount,
+		serviceCacheTtlMs: SERVICE_CACHE_TTL_MS,
 		timestamp: new Date().toISOString(),
 	});
 };
@@ -441,6 +453,18 @@ const server = createServer(async (req, res) => {
 		});
 	}
 });
+
+let browserRuntimeDisposed = false;
+
+const disposeBrowserRuntime = () => {
+	if (browserRuntimeDisposed) return;
+	browserRuntimeDisposed = true;
+	void browserRuntime.dispose().catch((error) => {
+		console.error('[middleware-server] Failed to dispose browser runtime:', error);
+	});
+};
+
+server.on('close', disposeBrowserRuntime);
 
 // Only start listening when this file is executed directly (not imported)
 if (process.argv[1]?.match(/handler\.(ts|js|mjs)$/)) {
