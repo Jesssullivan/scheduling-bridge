@@ -17,9 +17,15 @@ Environment variables (set in Modal dashboard or .env):
     PLAYWRIGHT_TIMEOUT   - Page timeout in ms (default: 30000)
 """
 
+import os
+
 import modal
 
-app = modal.App("scheduling-middleware")
+APP_NAME = os.environ.get("MODAL_APP_NAME", "scheduling-middleware")
+RELEASE_SHA = os.environ.get("MIDDLEWARE_RELEASE_SHA", "local")
+RELEASE_REF = os.environ.get("MIDDLEWARE_RELEASE_REF", "local")
+
+app = modal.App(APP_NAME)
 
 # Base image: Playwright's official image with Chromium pre-installed
 image = (
@@ -27,6 +33,10 @@ image = (
         "mcr.microsoft.com/playwright:v1.58.2-noble",
         add_python="3.12",
     )
+    .env({
+        "MIDDLEWARE_RELEASE_SHA": RELEASE_SHA,
+        "MIDDLEWARE_RELEASE_REF": RELEASE_REF,
+    })
     .run_commands(
         # Remove Node 24 from Playwright image, install Node 22 LTS
         "apt-get remove -y nodejs || true",

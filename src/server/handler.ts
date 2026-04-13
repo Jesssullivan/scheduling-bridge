@@ -203,6 +203,9 @@ const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
 		headless: browserConfig.headless,
 		staticServices: serviceCatalog.staticServicesCount,
 		serviceCacheTtlMs: SERVICE_CACHE_TTL_MS,
+		releaseSha: process.env.MIDDLEWARE_RELEASE_SHA ?? 'unknown',
+		releaseRef: process.env.MIDDLEWARE_RELEASE_REF ?? 'unknown',
+		modalEnvironment: process.env.MODAL_ENVIRONMENT ?? null,
 		timestamp: new Date().toISOString(),
 	});
 };
