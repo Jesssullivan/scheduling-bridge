@@ -61,47 +61,56 @@ export class BrowserService extends Context.Tag('scheduling-kit/BrowserService')
 	BrowserServiceShape
 >() {}
 
+export interface BrowserProcessShape {
+	readonly browser: Browser;
+	readonly config: BrowserConfig;
+}
+
+export class BrowserProcess extends Context.Tag('scheduling-kit/BrowserProcess')<
+	BrowserProcess,
+	BrowserProcessShape
+>() {}
+
 // =============================================================================
 // LIVE IMPLEMENTATION
 // =============================================================================
 
+const loadChromium = Effect.tryPromise({
+	try: async (): Promise<typeof import('playwright-core').chromium> => {
+		try {
+			const pw = await import('playwright-core');
+			return pw.chromium;
+		} catch {
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const pw = await (import('playwright-core') as any);
+			return pw.chromium;
+		}
+	},
+	catch: () =>
+		new BrowserError({
+			reason: 'PLAYWRIGHT_MISSING',
+			cause: new Error(
+				'playwright-core or playwright is required for the wizard middleware. ' +
+					'Install with: pnpm add playwright-core',
+			),
+		}),
+});
+
 /**
- * Create a live BrowserService layer backed by Playwright Chromium.
- * The browser is launched once when the layer is created and closed
- * when the layer scope ends.
+ * Launch and hold a browser process for the lifetime of the surrounding runtime.
+ * This is the expensive part of the Playwright lifecycle and is safe to reuse
+ * across requests as long as pages remain request-scoped.
  */
-export const BrowserServiceLive = (
+export const BrowserProcessLive = (
 	config: Partial<BrowserConfig> = {},
-): Layer.Layer<BrowserService, BrowserError> => {
+): Layer.Layer<BrowserProcess, BrowserError> => {
 	const cfg: BrowserConfig = { ...defaultBrowserConfig, ...config };
 
 	return Layer.scoped(
-		BrowserService,
+		BrowserProcess,
 		Effect.gen(function* () {
-			// Dynamic import - try playwright-core first (lighter, no bundled browsers),
-			// fall back to full playwright which includes its own Chromium
-			const chromium = yield* Effect.tryPromise({
-				try: async (): Promise<typeof import('playwright-core').chromium> => {
-					try {
-						const pw = await import('playwright-core');
-						return pw.chromium;
-					} catch {
-						// eslint-disable-next-line @typescript-eslint/no-explicit-any
-						const pw = await (import('playwright-core') as any);
-						return pw.chromium;
-					}
-				},
-				catch: () =>
-					new BrowserError({
-						reason: 'PLAYWRIGHT_MISSING',
-						cause: new Error(
-							'playwright-core or playwright is required for the wizard middleware. ' +
-								'Install with: pnpm add playwright-core',
-						),
-					}),
-			});
+			const chromium = yield* loadChromium;
 
-			// Launch browser (released when scope ends)
 			const browser: Browser = yield* Effect.acquireRelease(
 				Effect.tryPromise({
 					try: () =>
@@ -112,52 +121,67 @@ export const BrowserServiceLive = (
 						}),
 					catch: (e) => new BrowserError({ reason: 'LAUNCH_FAILED', cause: e }),
 				}),
-				(browser) =>
-					Effect.promise(() => browser.close()).pipe(Effect.ignoreLogged),
+				(browser) => Effect.promise(() => browser.close()).pipe(Effect.ignoreLogged),
 			);
 
-			// Create a single managed page for the layer's lifetime.
-			// All step programs share this page within a scope.
-			const page: Page = yield* Effect.acquireRelease(
-				Effect.tryPromise({
-					try: async () => {
-						const p = await browser.newPage({ userAgent: cfg.userAgent });
-						p.setDefaultTimeout(cfg.timeout);
-						return p;
-					},
-					catch: (e) => new BrowserError({ reason: 'PAGE_FAILED', cause: e }),
-				}),
-				(p) =>
-					Effect.promise(() => p.close()).pipe(Effect.ignoreLogged),
-			);
-
-			// acquirePage returns the singleton page — cleanup is handled by the
-			// layer scope above. The no-op release keeps the Scope type requirement
-			// so callers still need Effect.scoped.
-			const acquirePage = Effect.acquireRelease(
-				Effect.succeed(page),
-				() => Effect.void,
-			);
-
-			const screenshot = (label: string) =>
-				Effect.tryPromise({
-					try: async () => {
-						if (page.isClosed()) {
-							throw new Error('No active page for screenshot');
-						}
-						const buffer = await page.screenshot({
-							path: `${cfg.screenshotDir}/${label}-${Date.now()}.png`,
-							fullPage: true,
-						});
-						return buffer;
-					},
-					catch: (e) => new BrowserError({ reason: 'SCREENSHOT_FAILED', cause: e }),
-				});
-
-			return { acquirePage, screenshot, config: cfg };
+			return { browser, config: cfg };
 		}),
 	);
 };
+
+/**
+ * Create a request-scoped BrowserService from a shared browser process.
+ * Each scope gets its own page, while the underlying Chromium process can stay warm.
+ */
+export const BrowserSessionLive = Layer.scoped(
+	BrowserService,
+	Effect.gen(function* () {
+		const { browser, config } = yield* BrowserProcess;
+
+		const page: Page = yield* Effect.acquireRelease(
+			Effect.tryPromise({
+				try: async () => {
+					const p = await browser.newPage({ userAgent: config.userAgent });
+					p.setDefaultTimeout(config.timeout);
+					return p;
+				},
+				catch: (e) => new BrowserError({ reason: 'PAGE_FAILED', cause: e }),
+			}),
+			(p) => Effect.promise(() => p.close()).pipe(Effect.ignoreLogged),
+		);
+
+		const acquirePage = Effect.acquireRelease(
+			Effect.succeed(page),
+			() => Effect.void,
+		);
+
+		const screenshot = (label: string) =>
+			Effect.tryPromise({
+				try: async () => {
+					if (page.isClosed()) {
+						throw new Error('No active page for screenshot');
+					}
+					const buffer = await page.screenshot({
+						path: `${config.screenshotDir}/${label}-${Date.now()}.png`,
+						fullPage: true,
+					});
+					return buffer;
+				},
+				catch: (e) => new BrowserError({ reason: 'SCREENSHOT_FAILED', cause: e }),
+			});
+
+		return { acquirePage, screenshot, config };
+	}),
+);
+
+/**
+ * Standalone BrowserService layer for call sites that do not manage a shared runtime.
+ * This keeps the existing API intact by composing a browser process + request session.
+ */
+export const BrowserServiceLive = (
+	config: Partial<BrowserConfig> = {},
+): Layer.Layer<BrowserService, BrowserError> =>
+	Layer.provide(BrowserSessionLive, BrowserProcessLive(config));
 
 // =============================================================================
 // TEST IMPLEMENTATION

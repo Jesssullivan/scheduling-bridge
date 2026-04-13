@@ -92,6 +92,40 @@ describe('createAcuityServiceCatalog', () => {
 		expect(catalog.getCachedService('svc-1')).toEqual(services[0]);
 	});
 
+	it('reuses the cached catalog within the TTL window', async () => {
+		const fetchBusinessData = vi.fn(async () => ({} as AcuityBusinessData));
+		const businessToServices = vi.fn(() => services);
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://example.com',
+			cacheTtlMs: 60_000,
+			fetchBusinessData,
+			businessToServices,
+			logger: makeLogger(),
+		});
+
+		await expect(catalog.getServices()).resolves.toEqual(services);
+		await expect(catalog.getServices()).resolves.toEqual(services);
+		expect(fetchBusinessData).toHaveBeenCalledTimes(1);
+		expect(businessToServices).toHaveBeenCalledTimes(1);
+	});
+
+	it('refreshes the catalog immediately when TTL is zero', async () => {
+		const fetchBusinessData = vi.fn(async () => ({} as AcuityBusinessData));
+		const businessToServices = vi.fn(() => services);
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://example.com',
+			cacheTtlMs: 0,
+			fetchBusinessData,
+			businessToServices,
+			logger: makeLogger(),
+		});
+
+		await expect(catalog.getServices()).resolves.toEqual(services);
+		await expect(catalog.getServices()).resolves.toEqual(services);
+		expect(fetchBusinessData).toHaveBeenCalledTimes(2);
+		expect(businessToServices).toHaveBeenCalledTimes(2);
+	});
+
 	it('falls back to scraper services when BUSINESS is unavailable', async () => {
 		const loadScraperServices = vi.fn(async () => services);
 		const catalog = createAcuityServiceCatalog({

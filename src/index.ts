@@ -38,11 +38,15 @@ export {
 
 // Shared: browser service (Playwright lifecycle)
 export {
+	BrowserProcess,
+	BrowserProcessLive,
 	BrowserService,
+	BrowserSessionLive,
 	BrowserServiceLive,
 	BrowserServiceTest,
 	defaultBrowserConfig,
 	type BrowserConfig,
+	type BrowserProcessShape,
 	type BrowserServiceShape,
 } from './shared/browser-service.js';
 

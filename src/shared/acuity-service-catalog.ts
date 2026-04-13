@@ -24,11 +24,13 @@ export interface AcuityServiceCatalog {
 export interface AcuityServiceCatalogConfig {
 	readonly baseUrl: string;
 	readonly staticServices?: readonly Service[] | null;
+	readonly cacheTtlMs?: number;
 	readonly scraperConfig?: ScraperConfig;
 	readonly logger?: ServiceCatalogLogger;
 	readonly fetchBusinessData?: (baseUrl: string) => Promise<AcuityBusinessData | null>;
 	readonly businessToServices?: (business: AcuityBusinessData) => Service[];
 	readonly loadScraperServices?: () => Promise<readonly Service[]>;
+	readonly now?: () => number;
 }
 
 const cloneService = (service: Service): Service => ({ ...service });
@@ -65,10 +67,13 @@ export const createAcuityServiceCatalog = (
 	const fetchBusinessDataImpl = config.fetchBusinessData ?? fetchBusinessData;
 	const businessToServicesImpl = config.businessToServices ?? businessToServices;
 	const injectedScraperLoader = config.loadScraperServices;
+	const now = config.now ?? Date.now;
+	const cacheTtlMs = Math.max(0, config.cacheTtlMs ?? 5 * 60_000);
 
 	let scraper: ReturnType<typeof createScraperAdapter> | null = null;
 	let cachedServices: Service[] | null = staticServices;
 	let loadInFlight: Promise<Service[]> | null = null;
+	let cacheUpdatedAt = staticServices ? now() : 0;
 
 	if (staticServices) {
 		logger.log?.(
@@ -78,8 +83,12 @@ export const createAcuityServiceCatalog = (
 
 	const setCachedServices = (services: readonly Service[]): Service[] => {
 		cachedServices = cloneServices(services);
+		cacheUpdatedAt = now();
 		return cachedServices;
 	};
+
+	const hasFreshCache = (): boolean =>
+		cachedServices !== null && (staticServices !== null || now() - cacheUpdatedAt < cacheTtlMs);
 
 	const loadBusinessServices = async (): Promise<Service[] | null> => {
 		try {
@@ -162,11 +171,11 @@ export const createAcuityServiceCatalog = (
 	};
 
 	const ensureServices = async (): Promise<Service[]> =>
-		cachedServices ? cloneServices(cachedServices) : runRefresh();
+		hasFreshCache() ? cloneServices(cachedServices ?? []) : runRefresh();
 
 	return {
 		staticServicesCount: staticServices?.length ?? 0,
-		getServices: () => runRefresh(),
+		getServices: () => ensureServices(),
 		getService: async (serviceId) => {
 			const services = await ensureServices();
 			return services.find((service) => service.id === serviceId) ?? null;
