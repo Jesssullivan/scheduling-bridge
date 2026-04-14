@@ -1,0 +1,48 @@
+acuity-middleware publishes as `@tummycrypt/scheduling-bridge`.
+
+Purpose:
+- remote Acuity browser automation
+- Effect-based browser/page lifecycle management
+- HTTP bridge endpoints for services, availability, slots, and booking
+- migration bridge between Acuity and future homegrown scheduling
+
+Boundary:
+- owns Playwright automation and remote deployment
+- does not own Vercel app deployment
+- does not own application-specific admin UI
+- does not own reusable scheduling UI components
+
+Deployment truth:
+- Modal is the primary remote deployment surface
+- Docker should mirror the same built server entrypoint
+- app deploys and bridge deploys are separate release surfaces
+- promotion analysis must check both app revision and bridge revision
+
+Current tracking:
+- milestone: Sprint T: Remote Acuity Performance & Release Control
+- issues:
+  - #20 tail latency and remaining performance work
+  - #21 release control / deploy coordination
+
+Architecture rails:
+- prefer warm browser reuse with request-scoped pages
+- prefer URL-based direct reads when possible
+- retry false-empty Acuity reads carefully
+- keep shared service catalog logic centralized
+- use Effect where resource lifecycle correctness matters
+
+Important commands:
+- pnpm typecheck
+- pnpm test
+- pnpm build
+
+Files to inspect first:
+- src/server/handler.ts
+- src/shared/browser-service.ts
+- src/shared/acuity-service-catalog.ts
+- src/adapters/acuity/wizard.ts
+- src/adapters/acuity/steps/**
+- modal-app.py
+- Dockerfile
+- .github/workflows/ci.yml
+- .github/workflows/publish.yml
