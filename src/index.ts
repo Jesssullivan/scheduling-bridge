@@ -81,3 +81,6 @@ export {
 
 // Server
 export { server } from './server/handler.js';
+
+// Payment capabilities extraction
+export { extractCapabilities } from './capabilities.js';
