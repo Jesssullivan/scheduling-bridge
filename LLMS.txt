@@ -1,0 +1,17 @@
+acuity-middleware / @tummycrypt/scheduling-bridge owns Acuity automation.
+
+Authoritative boundary:
+- Owns Acuity service/date/slot/booking automation semantics.
+- Owns the remote bridge protocol and Modal runtime behavior.
+- Does not own the homegrown backend or adopter-specific payment policy.
+
+Critical anti-duplication rules:
+- Do not let adopter apps redefine Acuity flow semantics.
+- Do not let Bazel metadata drift from package metadata.
+- Make runtime release truth visible enough for downstream rollout checks.
+
+Current reset state:
+- Package version is `0.3.1`.
+- Bazel metadata was aligned back to `0.3.1`.
+- Modal deployment is still separate from app deploy and must become part of a
+  truthful release tuple.

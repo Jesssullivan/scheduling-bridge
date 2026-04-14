@@ -1,6 +1,6 @@
 {
   "name": "@tummycrypt/scheduling-bridge",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Backend-agnostic scheduling adapter hub with Playwright automation",
   "type": "module",
   "packageManager": "pnpm@9.15.9",
@@ -38,9 +38,9 @@
     "paper:dev": "node docs/paper/watch.mjs"
   },
   "dependencies": {
-    "@tummycrypt/scheduling-kit": "^0.6.1",
+    "@tummycrypt/scheduling-kit": "^0.6.2",
     "playwright-core": "1.58.1",
-    "effect": "^3.19.14"
+    "effect": "^3.21.0"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
@@ -53,7 +53,7 @@
   },
   "pnpm": {
     "overrides": {
-      "effect": "^3.19.14"
+      "effect": "^3.21.0"
     }
   },
   "engines": {

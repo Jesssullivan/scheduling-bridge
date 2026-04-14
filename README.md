@@ -4,6 +4,26 @@ Backend-agnostic scheduling adapter hub. Currently bridges Acuity Scheduling via
 
 > Formerly `acuity-middleware`. The GitHub repo and npm package history retain the old name.
 
+## Ownership Boundary
+
+`@tummycrypt/scheduling-bridge` is the canonical owner of the Acuity path:
+
+- Acuity browser automation
+- service/date/slot/booking semantics for the Acuity backend
+- remote bridge protocol
+- Modal runtime behavior and release metadata
+
+It does **not** own:
+
+- the homegrown backend
+- adopter-specific payment policy
+- site-specific booking UX
+
+Those belong to:
+
+- `@tummycrypt/scheduling-kit` for the reusable homegrown scheduling platform
+- adopter apps such as `MassageIthaca` for explicit site policy and composition
+
 ## Architecture
 
 An HTTP server wrapping Playwright wizard flows that automate the Acuity booking UI. The bridge uses Effect TS for resource lifecycle management (browser/page acquisition and release).
@@ -85,6 +105,15 @@ docker run -p 3001:3001 \
 # The Modal image builds the same dist/server/handler.js artifact used by pnpm start.
 modal deploy modal-app.py
 ```
+
+Current truth: Modal deploy is still a separate release lane from package
+publish and adopter app deploy. Downstream apps must treat the live system as a
+release tuple:
+
+- app commit
+- consumed package versions
+- bridge package version
+- Modal release SHA
 
 ### Nix
 
