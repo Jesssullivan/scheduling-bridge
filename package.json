@@ -52,6 +52,9 @@
     "access": "public"
   },
   "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
     "overrides": {
       "effect": "^3.19.14"
     }
