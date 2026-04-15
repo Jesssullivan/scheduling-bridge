@@ -39,6 +39,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Validate Bazel package artifact
         run: npx --yes @bazel/bazelisk build //:pkg
+      - name: Validate Bazel npm package contents
+        run: npm pack --dry-run ./bazel-bin/pkg
+      - name: Archive Bazel package artifact
+        run: tar -czf bazel-pkg.tgz -C bazel-bin pkg
+      - name: Upload Bazel package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bazel-pkg
+          path: bazel-pkg.tgz
+          if-no-files-found: error
       - run: pnpm typecheck
       - run: pnpm build
 
@@ -51,29 +61,22 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.DEFAULT_NODE_VERSION }}
           package-manager-cache: false
           registry-url: 'https://registry.npmjs.org'
           scope: '@tummycrypt'
-      - run: corepack enable
-      - name: Resolve pnpm store path
-        id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v5
+      - name: Download Bazel package artifact
+        uses: actions/download-artifact@v4
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-node-${{ env.DEFAULT_NODE_VERSION }}-pnpm-${{ env.PNPM_VERSION }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-node-${{ env.DEFAULT_NODE_VERSION }}-pnpm-${{ env.PNPM_VERSION }}-
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+          name: bazel-pkg
+      - name: Extract Bazel package artifact
+        run: tar -xzf bazel-pkg.tgz
       - name: Publish to npmjs.com
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance || echo "May already exist at this version"
+        run: npm publish ./pkg --access public --provenance || echo "May already exist at this version"
 
   publish-github:
     name: Publish → GitHub Packages
@@ -84,23 +87,16 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.DEFAULT_NODE_VERSION }}
           package-manager-cache: false
-      - run: corepack enable
-      - name: Resolve pnpm store path
-        id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v5
+      - name: Download Bazel package artifact
+        uses: actions/download-artifact@v4
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: ${{ runner.os }}-node-${{ env.DEFAULT_NODE_VERSION }}-pnpm-${{ env.PNPM_VERSION }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-node-${{ env.DEFAULT_NODE_VERSION }}-pnpm-${{ env.PNPM_VERSION }}-
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+          name: bazel-pkg
+      - name: Extract Bazel package artifact
+        run: tar -xzf bazel-pkg.tgz
       - name: Configure GitHub Packages auth
         run: echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> ~/.npmrc
       - name: Publish to GitHub Packages as @jesssullivan
@@ -110,8 +106,8 @@ jobs:
           # GitHub Packages requires scope to match the GitHub owner
           # Rewrite package name for GitHub Packages only
           node -e "
-            const pkg = require('./package.json');
+            const pkg = require('./pkg/package.json');
             pkg.name = '@jesssullivan/scheduling-bridge';
-            require('fs').writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+            require('fs').writeFileSync('./pkg/package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
-          npm publish --registry https://npm.pkg.github.com --access public || echo "May already exist at this version"
+          npm publish ./pkg --registry https://npm.pkg.github.com --access public || echo "May already exist at this version"
