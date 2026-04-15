@@ -95,6 +95,29 @@ pnpm install
 pnpm dev
 ```
 
+## Release Authority
+
+Current reality:
+
+- the functional release repo is `Jesssullivan/acuity-middleware`
+- npm publication targets `@tummycrypt/scheduling-bridge`
+- GitHub Packages publication targets `@jesssullivan/scheduling-bridge`
+
+Current convergence work:
+
+- local branch `fix/bridge-kit-070`
+- package metadata bump to `0.4.1`
+- dependency alignment to `@tummycrypt/scheduling-kit ^0.7.0`
+
+Longer term, the intended publish shape is:
+
+1. release metadata declared once
+2. Bazel validates/builds the publishable artifact
+3. GitHub Actions publishes that artifact
+4. downstream apps consume only the published package
+
+That is not fully true yet. Today the publish lane is still pnpm/npm-first.
+
 ## Development
 
 ```bash
