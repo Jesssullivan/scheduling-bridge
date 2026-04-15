@@ -33,11 +33,17 @@ That makes this repo central to the migration paper and to the operational beta-
 
 ## Current Tracking
 
-As of `2026-04-13`, the open production-focused work here is:
+As of `2026-04-15`, the active structural work here is:
 
-- milestone: `Sprint T: Remote Acuity Performance & Release Control`
-- issue: `#20` remaining tail-latency/perf follow-through
-- issue: `#21` Modal release control in app promotion flow
+- `TIN-101` mini sprint: toolchain authority and hermetic package convergence
+- `TIN-104` adopt Bazel-built artifact truth in package publish lanes
+- package dependency convergence with `@tummycrypt/scheduling-kit 0.7.x`
+
+Operationally relevant truth:
+
+- the current published bridge line is `0.4.0`
+- the local convergence branch `fix/bridge-kit-070` bumps metadata to `0.4.1`
+- that branch aligns the bridge dependency on `@tummycrypt/scheduling-kit ^0.7.0`
 
 ## Deployment Truth
 
@@ -67,6 +73,11 @@ That means:
 - a new bridge release can affect beta without any matching app deploy
 
 Any promotion analysis must explicitly check bridge release identity and health.
+
+Package graph rule:
+
+- do not let bridge metadata lag behind the `scheduling-kit` version actually
+  required by downstream apps
 
 ## Architecture Notes
 
@@ -133,6 +144,10 @@ Current publish flow targets:
 
 The repo name is still `acuity-middleware`, but the package name is `scheduling-bridge`. Preserve that distinction.
 
+Today, the publish lane is still pnpm/npm-first. Bazel metadata exists, but it
+is not yet the artifact authority. `TIN-104` exists to change that deliberately
+rather than by implication.
+
 ## Important Files
 
 - `src/server/handler.ts`
@@ -151,3 +166,5 @@ The repo name is still `acuity-middleware`, but the package name is `scheduling-
 - Do not reintroduce singleton-page contention without a compelling measured reason.
 - Do not hide false-empty availability behavior behind silent caches.
 - Do not confuse this repo with the reusable UI/package layer.
+- Do not let the bridge package declare stale `scheduling-kit` dependencies
+  while downstream apps have already moved on.

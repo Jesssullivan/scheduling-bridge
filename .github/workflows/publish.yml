@@ -37,6 +37,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-node-${{ env.DEFAULT_NODE_VERSION }}-pnpm-${{ env.PNPM_VERSION }}-
       - run: pnpm install --frozen-lockfile
+      - name: Validate Bazel package artifact
+        run: npx --yes @bazel/bazelisk build //:pkg
       - run: pnpm typecheck
       - run: pnpm build
 

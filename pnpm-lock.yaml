@@ -12,8 +12,8 @@ importers:
   .:
     dependencies:
       '@tummycrypt/scheduling-kit':
-        specifier: ^0.6.1
-        version: 0.6.1(@neondatabase/serverless@0.10.4)(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)(svelte@5.55.1)
+        specifier: ^0.7.0
+        version: 0.7.0(@neondatabase/serverless@0.10.4)(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)(svelte@5.55.1)
       effect:
         specifier: ^3.19.14
         version: 3.21.0
@@ -347,9 +347,9 @@ packages:
     peerDependencies:
       acorn: ^8.9.0
 
-  '@tummycrypt/scheduling-kit@0.6.1':
-    resolution: {integrity: sha512-5Plq6GMmeKjIFE/BqCOXfHBExVSLtrk0QpYws2rL2hRJWo+d4OPzMMO9MaVzgJdB33kDA5FBvInNG4fXe7T65g==}
-    engines: {node: '>=20.0.0'}
+  '@tummycrypt/scheduling-kit@0.7.0':
+    resolution: {integrity: sha512-+WE3UrzL7Gam2sJOLF34evxsBszcUkGJodzQbUIOipz9Jgar3G3I518Jgy22cHWxhDa4ZKpXDwJ3Pj6HpiscNw==}
+    engines: {node: '>=20 <25'}
     peerDependencies:
       '@skeletonlabs/skeleton': ^4.0.0
       '@skeletonlabs/skeleton-svelte': ^4.0.0
@@ -360,8 +360,8 @@ packages:
       '@skeletonlabs/skeleton-svelte':
         optional: true
 
-  '@tummycrypt/tinyland-auth-pg@0.1.0':
-    resolution: {integrity: sha512-FH+2xb/yXOFXVxGB59xpzkttkuxdAcB9A3PDWoihRaj8s5ljrbwzBH8JO/vK8zBxifFx/z/6yUqp3KsofKJ2Wg==}
+  '@tummycrypt/tinyland-auth-pg@0.1.1':
+    resolution: {integrity: sha512-ASAeuCRKptgt6c0piTq32FahJgErwo1iQLwcGN3Pzh1EDZh9IB8BEaXHpg5KwaGcM5klrjdgW/hH47agmcC5FQ==}
     peerDependencies:
       '@tummycrypt/tinyland-auth': ^0.2.0
 
@@ -1221,9 +1221,9 @@ snapshots:
     dependencies:
       acorn: 8.16.0
 
-  '@tummycrypt/scheduling-kit@0.6.1(@neondatabase/serverless@0.10.4)(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)(svelte@5.55.1)':
+  '@tummycrypt/scheduling-kit@0.7.0(@neondatabase/serverless@0.10.4)(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)(svelte@5.55.1)':
     dependencies:
-      '@tummycrypt/tinyland-auth-pg': 0.1.0(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)
+      '@tummycrypt/tinyland-auth-pg': 0.1.1(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)
       drizzle-orm: 0.39.3(@neondatabase/serverless@0.10.4)(@types/pg@8.11.6)
       effect: 3.21.0
       svelte: 5.55.1
@@ -1258,7 +1258,7 @@ snapshots:
       - sql.js
       - sqlite3
 
-  '@tummycrypt/tinyland-auth-pg@0.1.0(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)':
+  '@tummycrypt/tinyland-auth-pg@0.1.1(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)':
     dependencies:
       '@neondatabase/serverless': 0.10.4
       '@tummycrypt/tinyland-auth': 0.2.0(svelte@5.55.1)
