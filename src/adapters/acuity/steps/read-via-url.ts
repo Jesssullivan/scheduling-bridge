@@ -15,6 +15,12 @@ import { BrowserService } from '../../../shared/browser-service.js';
 import { WizardStepError } from '../errors.js';
 import { Selectors } from '../selectors.js';
 import { parseSlotText, buildIsoDatetime } from '../slot-parser.js';
+import {
+	createSlotReadProfile,
+	formatSlotReadProfileLog,
+	getSlotReadProfileConfig,
+	shouldLogSlotReadProfile,
+} from './slot-read-profile.js';
 
 // =============================================================================
 // TYPES
@@ -143,37 +149,60 @@ export const readSlotsViaUrl = (
 ): Effect.Effect<UrlSlotResult[], WizardStepError, BrowserService | Scope.Scope> =>
 	Effect.gen(function* () {
 		const { acquirePage, config } = yield* BrowserService;
+		const profileConfig = getSlotReadProfileConfig();
 		const page = yield* acquirePage.pipe(
 			Effect.mapError((e) => new WizardStepError({ step: 'read-slots', message: `Browser error: ${e._tag}` })),
 		);
+
+		let navigationMs = 0;
+		let calendarReadyMs = 0;
+		let dateSelectMs = 0;
+		let postClickSettleMs = 0;
+		let slotWaitMs = 0;
+		let slotDomReadMs = 0;
+		let parseMs = 0;
+		let calendarTileCount = 0;
+		let matchedDateFound = false;
 
 		const url = new URL(config.baseUrl);
 		url.searchParams.set('appointmentType', serviceId);
 		url.searchParams.set('date', date);
 
+		const navigationStartedAt = Date.now();
 		yield* Effect.tryPromise({
 			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
 			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Navigation failed: ${e}` }),
 		});
+		navigationMs = Date.now() - navigationStartedAt;
 
 		// Click the target date on the calendar
 		const tileSelector = Selectors.calendarDay[0];
 		yield* Effect.tryPromise({
 			try: async () => {
+				const calendarReadyStartedAt = Date.now();
 				await page.waitForSelector(tileSelector, { timeout: 10000 }).catch(() => {});
+				calendarReadyMs = Date.now() - calendarReadyStartedAt;
+
+				const dateSelectStartedAt = Date.now();
 				const tiles = await page.$$(tileSelector);
+				calendarTileCount = tiles.length;
 				for (const tile of tiles) {
 					const abbr = await tile.$('abbr');
 					const label = await abbr?.getAttribute('aria-label');
 					if (label) {
 						const d = new Date(label);
 						if (d.toISOString().slice(0, 10) === date) {
+							matchedDateFound = true;
 							await tile.click();
 							break;
 						}
 					}
 				}
+				dateSelectMs = Date.now() - dateSelectStartedAt;
+
+				const settleStartedAt = Date.now();
 				await page.waitForTimeout(2000);
+				postClickSettleMs = Date.now() - settleStartedAt;
 			},
 			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Date click failed: ${e}` }),
 		});
@@ -181,11 +210,14 @@ export const readSlotsViaUrl = (
 		// Read time slots using the Selectors registry
 		const slotSelector = Selectors.timeSlot[0]; // button.time-selection
 		const fallbackSelector = Selectors.timeSlot.join(', ');
+		const slotWaitStartedAt = Date.now();
 		yield* Effect.tryPromise({
 			try: () => page.waitForSelector(fallbackSelector, { timeout: 10000 }),
 			catch: () => null,
 		}).pipe(Effect.ignore);
+		slotWaitMs = Date.now() - slotWaitStartedAt;
 
+		const slotDomReadStartedAt = Date.now();
 		const slots = yield* Effect.tryPromise({
 			try: () => page.evaluate((sel) => {
 				const results: Array<{ datetime: string; available: boolean }> = [];
@@ -200,13 +232,42 @@ export const readSlotsViaUrl = (
 			}, slotSelector),
 			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Slots read failed: ${e}` }),
 		});
+		slotDomReadMs = Date.now() - slotDomReadStartedAt;
 
 		// Parse slot text and build full ISO datetime (e.g., "4:00 PM" → "2026-04-01T16:00:00")
-		return slots.map(s => {
+		const parseStartedAt = Date.now();
+		let parsedSlotCount = 0;
+		const parsedSlots = slots.map(s => {
 			const parsed = parseSlotText(s.datetime);
+			if (parsed) parsedSlotCount += 1;
 			return {
 				datetime: parsed ? buildIsoDatetime(date, parsed.time) : s.datetime,
 				available: s.available,
 			};
 		});
+		parseMs = Date.now() - parseStartedAt;
+		const profile = createSlotReadProfile({
+			serviceId,
+			date,
+			thresholdMs: profileConfig.thresholdMs,
+			calendarTileCount,
+			matchedDateFound,
+			slotCount: slots.length,
+			parsedSlotCount,
+			phases: {
+				navigationMs,
+				calendarReadyMs,
+				dateSelectMs,
+				postClickSettleMs,
+				slotWaitMs,
+				slotDomReadMs,
+				parseMs,
+			},
+		});
+
+		if (shouldLogSlotReadProfile(profile, profileConfig)) {
+			console.log(formatSlotReadProfileLog(profile));
+		}
+
+		return parsedSlots;
 	});
