@@ -24,6 +24,8 @@ import modal
 APP_NAME = os.environ.get("MODAL_APP_NAME", "scheduling-middleware")
 RELEASE_SHA = os.environ.get("MIDDLEWARE_RELEASE_SHA", "local")
 RELEASE_REF = os.environ.get("MIDDLEWARE_RELEASE_REF", "local")
+RELEASE_VERSION = os.environ.get("MIDDLEWARE_RELEASE_VERSION", "local")
+RELEASE_BUILT_AT = os.environ.get("MIDDLEWARE_RELEASE_BUILT_AT", "")
 
 app = modal.App(APP_NAME)
 
@@ -36,6 +38,8 @@ image = (
     .env({
         "MIDDLEWARE_RELEASE_SHA": RELEASE_SHA,
         "MIDDLEWARE_RELEASE_REF": RELEASE_REF,
+        "MIDDLEWARE_RELEASE_VERSION": RELEASE_VERSION,
+        "MIDDLEWARE_RELEASE_BUILT_AT": RELEASE_BUILT_AT,
     })
     .run_commands(
         # Remove Node 24 from Playwright image, install Node 22 LTS
