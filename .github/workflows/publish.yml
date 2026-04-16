@@ -76,7 +76,13 @@ jobs:
       - name: Publish to npmjs.com
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish ./pkg --access public --provenance || echo "May already exist at this version"
+          RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          if [ "$RUNNER_ENVIRONMENT" = "self-hosted" ]; then
+            npm publish ./pkg --access public
+          else
+            npm publish ./pkg --access public --provenance
+          fi
 
   publish-github:
     name: Publish → GitHub Packages
@@ -97,6 +103,8 @@ jobs:
           name: bazel-pkg
       - name: Extract Bazel package artifact
         run: tar -xzf bazel-pkg.tgz
+      - name: Prepare GitHub Packages publish directory
+        run: cp -R pkg pkg-github
       - name: Configure GitHub Packages auth
         run: echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> ~/.npmrc
       - name: Publish to GitHub Packages as @jesssullivan
@@ -106,8 +114,8 @@ jobs:
           # GitHub Packages requires scope to match the GitHub owner
           # Rewrite package name for GitHub Packages only
           node -e "
-            const pkg = require('./pkg/package.json');
+            const pkg = require('./pkg-github/package.json');
             pkg.name = '@jesssullivan/scheduling-bridge';
-            require('fs').writeFileSync('./pkg/package.json', JSON.stringify(pkg, null, 2) + '\n');
+            require('fs').writeFileSync('./pkg-github/package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
-          npm publish ./pkg --registry https://npm.pkg.github.com --access public || echo "May already exist at this version"
+          npm publish ./pkg-github --registry https://npm.pkg.github.com --access public
