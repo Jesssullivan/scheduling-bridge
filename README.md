@@ -65,6 +65,10 @@ In addition to basic runtime data, it now publishes:
 Downstream apps should use this tuple to assert which bridge release and protocol
 surface they are talking to during beta validation and rollout claims.
 
+This tuple is the supported runtime truth surface for adopters. Downstream apps
+should not infer bridge ownership from package metadata, branch names, or Modal
+dashboard state when `/health` is available.
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
@@ -116,6 +120,22 @@ docker run -p 3001:3001 \
 modal deploy modal-app.py
 ```
 
+#### Supported deployment path
+
+The supported deployment path for the live Acuity bridge is:
+
+1. merge to `main`
+2. let `.github/workflows/deploy-modal.yml` deploy `modal-app.py`
+3. inject `MIDDLEWARE_RELEASE_SHA`, `MIDDLEWARE_RELEASE_REF`,
+   `MIDDLEWARE_RELEASE_VERSION`, and `MIDDLEWARE_RELEASE_BUILT_AT`
+4. verify the resulting bridge tuple via `GET /health`
+
+Operationally, this means:
+
+- Modal deployment is part of release truth, not a side channel
+- the live bridge should be identified by the `/health` release + protocol tuple
+- downstream apps should validate the tuple they expect before making rollout claims
+
 ### Nix
 
 ```bash
@@ -126,27 +146,24 @@ pnpm dev
 
 ## Release Authority
 
-Current reality:
+Current release authority:
 
-- the functional release repo is `Jesssullivan/acuity-middleware`
-- npm publication targets `@tummycrypt/scheduling-bridge`
-- GitHub Packages publication targets `@jesssullivan/scheduling-bridge`
+- canonical repo: `Jesssullivan/acuity-middleware`
+- npm package: `@tummycrypt/scheduling-bridge`
+- GitHub Packages mirror: `@jesssullivan/scheduling-bridge`
 
-Current convergence work:
-
-- local branch `fix/bridge-kit-070`
-- package metadata bump to `0.4.2`
-- dependency alignment to `@tummycrypt/scheduling-kit ^0.7.1`
-
-The current publish shape is now:
+The current publish + deploy shape is:
 
 1. release metadata declared once
 2. Bazel validates/builds the publishable artifact
 3. CI dry-runs the extracted Bazel package surface before release
 4. GitHub Actions publishes that extracted artifact
-5. downstream apps consume only the published package
+5. GitHub Actions deploys the Modal runtime from `main`
+6. downstream apps consume the published package and verify the live runtime tuple via `/health`
 
-The remaining risk is operational, not structural: release truth still depends on disciplined tag/release handling in GitHub Actions.
+This repo is the sole owner of Acuity automation concerns. App repos and shared
+packages may consume the bridge and assert its runtime tuple, but they should
+not duplicate bridge runtime ownership or release truth logic.
 
 ## Development
 
