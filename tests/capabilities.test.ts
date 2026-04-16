@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { extractCapabilities } from '../src/capabilities.js';
+import type { PaymentCapabilities } from '@tummycrypt/scheduling-kit/payments';
 
 describe('extractCapabilities', () => {
   it('should return empty capabilities when nothing is configured', () => {
-    const caps = extractCapabilities({}, {});
+    const caps: PaymentCapabilities = extractCapabilities({}, {});
     expect(caps.methods).toEqual([]);
     expect(caps.stripe).toBeNull();
     expect(caps.venmo).toBeNull();

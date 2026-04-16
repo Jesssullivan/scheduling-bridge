@@ -4,37 +4,12 @@
  * This is the canonical extraction logic used by downstream booking surfaces
  * to produce consistent payment method availability.
  */
-
-// TODO: import from @tummycrypt/scheduling-kit/payments once 0.7.0 is published
-interface PaymentMethodOption {
-  readonly id: string;
-  readonly name: string;
-  readonly displayName: string;
-  readonly icon?: string;
-  readonly description?: string;
-  readonly available: boolean;
-  readonly processingFee?: number;
-  readonly processingFeePercent?: number;
-}
-
-interface StripeCapability {
-  readonly available: boolean;
-  readonly publishableKey: string;
-  readonly connectedAccountId?: string;
-}
-
-interface VenmoCapability {
-  readonly available: boolean;
-  readonly clientId: string;
-  readonly environment: 'sandbox' | 'production';
-}
-
-interface PaymentCapabilities {
-  readonly methods: PaymentMethodOption[];
-  readonly stripe: StripeCapability | null;
-  readonly venmo: VenmoCapability | null;
-  readonly cash: false;
-}
+import type {
+  PaymentCapabilities,
+  PaymentMethodOption,
+  StripeCapability,
+  VenmoCapability,
+} from '@tummycrypt/scheduling-kit/payments';
 
 /**
  * Extract payment capabilities from practitioner settings and platform env vars.
