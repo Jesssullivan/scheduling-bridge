@@ -16,7 +16,7 @@ describe('bridge health payload', () => {
 			serviceCacheTtlMs: 300000,
 			releaseSha: 'abc123',
 			releaseRef: 'refs/heads/main',
-			releaseVersion: '0.4.1',
+			releaseVersion: '0.4.2',
 			releaseBuiltAt: '2026-04-16T12:00:00.000Z',
 			modalEnvironment: 'main',
 			timestamp: '2026-04-16T12:34:56.000Z',
@@ -26,7 +26,7 @@ describe('bridge health payload', () => {
 		expect(payload.release).toEqual({
 			sha: 'abc123',
 			ref: 'refs/heads/main',
-			version: '0.4.1',
+			version: '0.4.2',
 			builtAt: '2026-04-16T12:00:00.000Z',
 			modalEnvironment: 'main',
 		});

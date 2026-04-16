@@ -135,7 +135,7 @@ Current reality:
 Current convergence work:
 
 - local branch `fix/bridge-kit-070`
-- package metadata bump to `0.4.1`
+- package metadata bump to `0.4.2`
 - dependency alignment to `@tummycrypt/scheduling-kit ^0.7.0`
 
 Longer term, the intended publish shape is:

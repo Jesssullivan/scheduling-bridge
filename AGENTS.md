@@ -41,8 +41,8 @@ As of `2026-04-15`, the active structural work here is:
 
 Operationally relevant truth:
 
-- the current published bridge line is `0.4.0`
-- the local convergence branch `fix/bridge-kit-070` bumps metadata to `0.4.1`
+- the current published bridge line is `0.4.1`
+- the current ESM artifact fix bumps metadata to `0.4.2`
 - that branch aligns the bridge dependency on `@tummycrypt/scheduling-kit ^0.7.0`
 
 ## Deployment Truth
