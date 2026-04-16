@@ -46,6 +46,8 @@ jobs:
       - name: Resolve deploy target
         run: |
           echo "MODAL_APP_NAME=${INPUT_DEPLOYMENT_NAME:-scheduling-middleware}" >> "$GITHUB_ENV"
+          echo "MIDDLEWARE_RELEASE_VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+          echo "MIDDLEWARE_RELEASE_BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
           if [ -n "${INPUT_MODAL_ENVIRONMENT}" ]; then
             echo "MODAL_ENVIRONMENT=${INPUT_MODAL_ENVIRONMENT}" >> "$GITHUB_ENV"
           fi
@@ -75,3 +77,5 @@ jobs:
           MODAL_ENVIRONMENT: ${{ env.MODAL_ENVIRONMENT }}
           MIDDLEWARE_RELEASE_SHA: ${{ github.sha }}
           MIDDLEWARE_RELEASE_REF: ${{ github.ref_name }}
+          MIDDLEWARE_RELEASE_VERSION: ${{ env.MIDDLEWARE_RELEASE_VERSION }}
+          MIDDLEWARE_RELEASE_BUILT_AT: ${{ env.MIDDLEWARE_RELEASE_BUILT_AT }}
