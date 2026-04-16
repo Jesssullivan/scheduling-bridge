@@ -8,3 +8,5 @@ dist/
 coverage/
 .vitest/
 out/
+MODULE.bazel.lock
+bazel-*

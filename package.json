@@ -5,6 +5,10 @@
   "type": "module",
   "packageManager": "pnpm@9.15.9",
   "license": "MIT",
+  "homepage": "https://github.com/Jesssullivan/acuity-middleware",
+  "bugs": {
+    "url": "https://github.com/Jesssullivan/acuity-middleware/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Jesssullivan/acuity-middleware.git"
@@ -28,11 +32,13 @@
   ],
   "scripts": {
     "build": "tsc",
-    "prepublishOnly": "tsc",
+    "prepublishOnly": "pnpm check:release-metadata && pnpm build && pnpm check:package",
     "start": "node dist/server/handler.js",
     "dev": "tsx src/server/handler.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "check:release-metadata": "node scripts/check-release-metadata.mjs",
+    "check:package": "publint",
     "clean": "rm -rf dist",
     "paper:build": "cd docs/paper && tectonic acuity-middleware-paper.tex",
     "paper:dev": "node docs/paper/watch.mjs"
@@ -46,7 +52,8 @@
     "typescript": "^5.9.0",
     "tsx": "^4.0.0",
     "vitest": "^4.0.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "publint": "^0.3.18"
   },
   "publishConfig": {
     "access": "public"

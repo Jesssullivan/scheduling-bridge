@@ -138,14 +138,15 @@ Current convergence work:
 - package metadata bump to `0.4.2`
 - dependency alignment to `@tummycrypt/scheduling-kit ^0.7.0`
 
-Longer term, the intended publish shape is:
+The current publish shape is now:
 
 1. release metadata declared once
 2. Bazel validates/builds the publishable artifact
-3. GitHub Actions publishes that artifact
-4. downstream apps consume only the published package
+3. CI dry-runs the extracted Bazel package surface before release
+4. GitHub Actions publishes that extracted artifact
+5. downstream apps consume only the published package
 
-That is not fully true yet. Today the publish lane is still pnpm/npm-first.
+The remaining risk is operational, not structural: release truth still depends on disciplined tag/release handling in GitHub Actions.
 
 ## Development
 

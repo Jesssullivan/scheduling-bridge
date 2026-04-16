@@ -10,7 +10,7 @@ on:
         description: 'Dry run (no actual publish)'
         required: false
         type: boolean
-        default: false
+        default: true
 
 env:
   PNPM_VERSION: 9.15.9
@@ -18,8 +18,8 @@ env:
   PNPM_STORE_PATH: ${{ github.workspace }}/.pnpm-store
 
 jobs:
-  test:
-    name: Test & Build
+  package:
+    name: Test, Validate, & Package
     runs-on: ${{ fromJSON(vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}
     env:
       CHECKOUT_PATH: repo-${{ github.run_id }}-${{ env.DEFAULT_NODE_VERSION }}
@@ -29,52 +29,83 @@ jobs:
         with:
           clean: false
           path: ${{ env.CHECKOUT_PATH }}
-      - name: Clean stale packaged artifacts
+
+      - name: Clean stale workspace artifacts
         working-directory: ${{ env.CHECKOUT_PATH }}
         run: |
-          chmod -R u+w pkg bazel-bin bazel-out bazel-testlogs 2>/dev/null || true
-          rm -rf pkg bazel-bin bazel-out bazel-testlogs
+          chmod -R u+w dist node_modules pkg pkg-github bazel-bin bazel-out bazel-testlogs .pnpm-store 2>/dev/null || true
+          rm -rf dist node_modules pkg pkg-github bazel-bin bazel-out bazel-testlogs .pnpm-store MODULE.bazel.lock
+
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.DEFAULT_NODE_VERSION }}
           package-manager-cache: false
-      - run: corepack enable
+
+      - name: Enable Corepack
+        run: corepack enable
+
       - name: Configure workspace pnpm store
         working-directory: ${{ env.CHECKOUT_PATH }}
         run: pnpm config set store-dir "$PNPM_STORE_PATH"
+
       - uses: actions/cache@v5
         with:
           path: ${{ env.PNPM_STORE_PATH }}
           key: ${{ runner.os }}-node-${{ env.DEFAULT_NODE_VERSION }}-pnpm-${{ env.PNPM_VERSION }}-${{ hashFiles(format('{0}/pnpm-lock.yaml', env.CHECKOUT_PATH)) }}
           restore-keys: |
             ${{ runner.os }}-node-${{ env.DEFAULT_NODE_VERSION }}-pnpm-${{ env.PNPM_VERSION }}-
-      - working-directory: ${{ env.CHECKOUT_PATH }}
+
+      - name: Install dependencies
+        working-directory: ${{ env.CHECKOUT_PATH }}
         run: pnpm install --frozen-lockfile
+
+      - name: Verify release metadata
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm check:release-metadata
+
+      - name: Typecheck
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm typecheck
+
+      - name: Unit tests
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm test
+
+      - name: Build package
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm build
+
+      - name: Validate package surface
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm check:package
+
       - name: Validate Bazel package artifact
         working-directory: ${{ env.CHECKOUT_PATH }}
         run: npx --yes @bazel/bazelisk build //:pkg
+
       - name: Validate Bazel npm package contents
         working-directory: ${{ env.CHECKOUT_PATH }}
         run: npm pack --dry-run ./bazel-bin/pkg
+
+      - name: Validate Bazel npm publish dry run
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: npm publish --dry-run --ignore-scripts --access public ./bazel-bin/pkg
+
       - name: Archive Bazel package artifact
         working-directory: ${{ env.CHECKOUT_PATH }}
         run: tar -czf bazel-pkg.tgz -C bazel-bin pkg
+
       - name: Upload Bazel package artifact
         uses: actions/upload-artifact@v4
         with:
           name: bazel-pkg
           path: ${{ env.CHECKOUT_PATH }}/bazel-pkg.tgz
           if-no-files-found: error
-      - working-directory: ${{ env.CHECKOUT_PATH }}
-        run: pnpm typecheck
-      - working-directory: ${{ env.CHECKOUT_PATH }}
-        run: pnpm build
 
   publish-npm:
     name: Publish → npmjs.com
     runs-on: ${{ fromJSON(vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}
-    needs: [test]
-    if: ${{ !inputs.dry_run }}
+    needs: [package]
     permissions:
       contents: read
       id-token: write
@@ -85,28 +116,40 @@ jobs:
           package-manager-cache: false
           registry-url: 'https://registry.npmjs.org'
           scope: '@tummycrypt'
+
       - name: Download Bazel package artifact
         uses: actions/download-artifact@v4
         with:
           name: bazel-pkg
+
       - name: Extract Bazel package artifact
         run: tar -xzf bazel-pkg.tgz
+
+      - name: Normalize Bazel package permissions
+        run: chmod -R u+w pkg
+
       - name: Publish to npmjs.com
+        if: ${{ github.event_name == 'push' || github.event.inputs.dry_run != 'true' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           if [ "$RUNNER_ENVIRONMENT" = "self-hosted" ]; then
-            npm publish ./pkg --access public
+            npm publish ./pkg --access public --ignore-scripts
           else
-            npm publish ./pkg --access public --provenance
+            npm publish ./pkg --access public --provenance --ignore-scripts
           fi
+
+      - name: Publish dry run
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: npm publish ./pkg --access public --dry-run --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-github:
     name: Publish → GitHub Packages
     runs-on: ${{ fromJSON(vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}
-    needs: [test]
-    if: ${{ !inputs.dry_run }}
+    needs: [package]
     permissions:
       contents: read
       packages: write
@@ -115,27 +158,45 @@ jobs:
         with:
           node-version: ${{ env.DEFAULT_NODE_VERSION }}
           package-manager-cache: false
+
       - name: Download Bazel package artifact
         uses: actions/download-artifact@v4
         with:
           name: bazel-pkg
+
       - name: Extract Bazel package artifact
         run: tar -xzf bazel-pkg.tgz
+
       - name: Prepare GitHub Packages publish directory
         run: |
           cp -R pkg pkg-github
           chmod -R u+w pkg-github
+
       - name: Configure GitHub Packages auth
         run: echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> ~/.npmrc
+
       - name: Publish to GitHub Packages as @jesssullivan
+        if: ${{ github.event_name == 'push' || github.event.inputs.dry_run != 'true' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # GitHub Packages requires scope to match the GitHub owner
-          # Rewrite package name for GitHub Packages only
           node -e "
             const pkg = require('./pkg-github/package.json');
             pkg.name = '@jesssullivan/scheduling-bridge';
+            pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };
             require('fs').writeFileSync('./pkg-github/package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
-          npm publish ./pkg-github --registry https://npm.pkg.github.com --access public
+          npm publish ./pkg-github --registry https://npm.pkg.github.com --access public --ignore-scripts
+
+      - name: Publish dry run
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node -e "
+            const pkg = require('./pkg-github/package.json');
+            pkg.name = '@jesssullivan/scheduling-bridge';
+            pkg.publishConfig = { registry: 'https://npm.pkg.github.com' };
+            require('fs').writeFileSync('./pkg-github/package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          npm publish ./pkg-github --registry https://npm.pkg.github.com --access public --dry-run --ignore-scripts
