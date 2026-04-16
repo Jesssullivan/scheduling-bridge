@@ -81,6 +81,11 @@ export {
 
 // Server
 export { server } from './server/handler.js';
+export {
+	BRIDGE_PROTOCOL_VERSION,
+	BRIDGE_PROTOCOL_ENDPOINTS,
+	BRIDGE_PROTOCOL_CAPABILITIES,
+} from './server/health.js';
 
 // Payment capabilities extraction
 export { extractCapabilities } from './capabilities.js';

@@ -41,6 +41,30 @@ HTTP Request
 | POST | `/booking/create` | Create a booking (standard) |
 | POST | `/booking/create-with-payment` | Create booking with payment bypass (coupon) |
 
+### Health Contract
+
+`GET /health` is the stable downstream runtime-truth surface.
+
+In addition to basic runtime data, it now publishes:
+
+- release tuple:
+  - `releaseSha`
+  - `releaseRef`
+  - `releaseVersion`
+  - `releaseBuiltAt`
+  - nested `release.{ sha, ref, version, builtAt, modalEnvironment }`
+- protocol tuple:
+  - `protocolVersion`
+  - nested `protocol.version`
+  - `protocol.flowOwner = "scheduling-bridge"`
+  - `protocol.backend = "acuity"`
+  - `protocol.transport = "http-json"`
+  - `protocol.endpoints`
+  - `protocol.capabilities`
+
+Downstream apps should use this tuple to assert which bridge release and protocol
+surface they are talking to during beta validation and rollout claims.
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
@@ -55,6 +79,11 @@ HTTP Request
 | `CHROMIUM_LAUNCH_ARGS` | No | -- | Comma-separated Chromium args |
 | `SERVICES_JSON` | No | -- | Optional static service catalog to bypass live Acuity reads |
 | `ACUITY_SERVICE_CACHE_TTL_MS` | No | `300000` | TTL for cached live service catalogs before BUSINESS/scraper refresh |
+| `MIDDLEWARE_RELEASE_SHA` | No | -- | Release commit SHA exposed via `/health` |
+| `MIDDLEWARE_RELEASE_REF` | No | -- | Release ref/tag exposed via `/health` |
+| `MIDDLEWARE_RELEASE_VERSION` | No | -- | Release version exposed via `/health` |
+| `MIDDLEWARE_RELEASE_BUILT_AT` | No | -- | Build timestamp exposed via `/health` |
+| `MIDDLEWARE_BUILD_TIMESTAMP` | No | -- | Legacy fallback build timestamp for `/health` |
 
 ## Deployment
 
