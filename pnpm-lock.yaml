@@ -12,8 +12,8 @@ importers:
   .:
     dependencies:
       '@tummycrypt/scheduling-kit':
-        specifier: ^0.7.0
-        version: 0.7.0(@neondatabase/serverless@0.10.4)(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)(svelte@5.55.1)
+        specifier: ^0.7.1
+        version: 0.7.1(@neondatabase/serverless@0.10.4)(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1(@typescript-eslint/types@8.58.0)))(@types/pg@8.11.6)(svelte@5.55.1(@typescript-eslint/types@8.58.0))
       effect:
         specifier: ^3.19.14
         version: 3.21.0
@@ -220,8 +220,8 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@napi-rs/wasm-runtime@1.1.2':
-    resolution: {integrity: sha512-sNXv5oLJ7ob93xkZ1XnxisYhGYXfaG9f65/ZgYuAu3qt7b3NadcOEhLvx28hv31PgX8SZJRYrAIPQilQmFpLVw==}
+  '@napi-rs/wasm-runtime@1.1.4':
+    resolution: {integrity: sha512-3NQNNgA1YSlJb/kMH1ildASP9HW7/7kYnRI2szWJaofaS1hWmbGI4H+d3+22aGzXXN9IJ+n+GiFVcGipJP18ow==}
     peerDependencies:
       '@emnapi/core': ^1.7.1
       '@emnapi/runtime': ^1.7.1
@@ -354,8 +354,8 @@ packages:
     peerDependencies:
       acorn: ^8.9.0
 
-  '@tummycrypt/scheduling-kit@0.7.0':
-    resolution: {integrity: sha512-+WE3UrzL7Gam2sJOLF34evxsBszcUkGJodzQbUIOipz9Jgar3G3I518Jgy22cHWxhDa4ZKpXDwJ3Pj6HpiscNw==}
+  '@tummycrypt/scheduling-kit@0.7.1':
+    resolution: {integrity: sha512-kG8dBfVYOwngICtCiKzI7M95xJ5hxhLK1Kdoftboz0aSS5dDlwogaFXZvKaWzodL472GPRV968sQa19IpI/QNA==}
     engines: {node: '>=20 <25'}
     peerDependencies:
       '@skeletonlabs/skeleton': ^4.0.0
@@ -499,8 +499,8 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
-  devalue@5.6.4:
-    resolution: {integrity: sha512-Gp6rDldRsFh/7XuouDbxMH3Mx8GMCcgzIb1pDTvNyn8pZGQ22u+Wa+lGV9dQCltFQ7uVw0MhRyb8XDskNFOReA==}
+  devalue@5.7.1:
+    resolution: {integrity: sha512-MUbZ586EgQqdRnC4yDrlod3BEdyvE4TapGYHMW2CiaW+KkkFmWEFqBUaLltEZCGi0iFXCEjRF0OjF0DV2QHjOA==}
 
   dijkstrajs@1.0.3:
     resolution: {integrity: sha512-qiSlmBq9+BCdCA/L46dw8Uy93mloxsPSbwnm5yrKn2vMPiy8KyAskTF6zuV/j5BMsmOGZDPs7KjU+mjb670kfA==}
@@ -608,8 +608,13 @@ packages:
   esm-env@1.2.2:
     resolution: {integrity: sha512-Epxrv+Nr/CaL4ZcFGPJIYLWFom+YeV1DqMLHJoEd9SYRxNbaFruBwfEX/kkHUJf55j2+TUbmDcmuilbP1TmXHA==}
 
-  esrap@2.2.4:
-    resolution: {integrity: sha512-suICpxAmZ9A8bzJjEl/+rLJiDKC0X4gYWUxT6URAWBLvlXmtbZd5ySMu/N2ZGEtMCAmflUDPSehrP9BQcsGcSg==}
+  esrap@2.2.5:
+    resolution: {integrity: sha512-/yLB1538mag+dn0wsePTe8C0rDIjUOaJpMs2McodSzmM2msWcZsBSdRtg6HOBt0A/r82BN+Md3pgwSc/uWt2Ig==}
+    peerDependencies:
+      '@typescript-eslint/types': ^8.2.0
+    peerDependenciesMeta:
+      '@typescript-eslint/types':
+        optional: true
 
   estree-walker@3.0.3:
     resolution: {integrity: sha512-7RUKfXgSMMkzt6ZuXmqapOurLGPPfgj6l9uRZ7lRGolvk0y2yocc35LdcxKC5PQZdn2DMqioAQ2NoWcrTKmm6g==}
@@ -743,8 +748,8 @@ packages:
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
-  nanoid@5.1.7:
-    resolution: {integrity: sha512-ua3NDgISf6jdwezAheMOk4mbE1LXjm1DfMUDMuJf4AqxLFK3ccGpgWizwa5YV7Yz9EpXwEaWoRXSb/BnV0t5dQ==}
+  nanoid@5.1.9:
+    resolution: {integrity: sha512-ZUvP7KeBLe3OZ1ypw6dI/TzYJuvHP77IM4Ry73waSQTLn8/g8rpdjfyVAh7t1/+FjBtG4lCP42MEbDxOsRpBMw==}
     engines: {node: ^18 || >=20}
     hasBin: true
 
@@ -810,8 +815,8 @@ packages:
     resolution: {integrity: sha512-40QW5YalBNfQo5yRYmiw7Yz6TKKVr3h6970B2YE+3fQpsWcrbj1PzJgxeJ19DRQjhMbKPIuMY8rFaXc8moolVw==}
     engines: {node: '>=10.13.0'}
 
-  postcss@8.5.8:
-    resolution: {integrity: sha512-OW/rX8O/jXnm82Ey1k44pObPtdblfiuWnrd8X7GJ7emImCOstunGbXUpp7HdBrFQX6rJzn3sPT397Wp5aCwCHg==}
+  postcss@8.5.10:
+    resolution: {integrity: sha512-pMMHxBOZKFU6HgAZ4eyGnwXF/EvPGGqUr0MnZ5+99485wwW41kW91A4LOGxSHhgugZmSChL5AlElNdwlNgcnLQ==}
     engines: {node: ^10 || ^12 || >=14}
 
   postgres-array@3.0.4:
@@ -906,6 +911,10 @@ packages:
 
   tinyglobby@0.2.15:
     resolution: {integrity: sha512-j2Zq4NyQYG5XMST4cbs02Ak8iJUdxRM0XI5QyxXuZOzKOINmWurp3smXu3y5wDcJrptwpSjgXHzIQxR0omXljQ==}
+    engines: {node: '>=12.0.0'}
+
+  tinyglobby@0.2.16:
+    resolution: {integrity: sha512-pn99VhoACYR8nFHhxqix+uvsbXineAasWm5ojXoN8xEwK5Kd3/TrhNn1wByuD52UxWRLy8pu+kRMniEi6Eq9Zg==}
     engines: {node: '>=12.0.0'}
 
   tinyrainbow@3.1.0:
@@ -1150,7 +1159,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@napi-rs/wasm-runtime@1.1.2(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)':
+  '@napi-rs/wasm-runtime@1.1.4(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)':
     dependencies:
       '@emnapi/core': 1.9.2
       '@emnapi/runtime': 1.9.2
@@ -1226,7 +1235,7 @@ snapshots:
 
   '@rolldown/binding-wasm32-wasi@1.0.0-rc.12(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)':
     dependencies:
-      '@napi-rs/wasm-runtime': 1.1.2(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)
+      '@napi-rs/wasm-runtime': 1.1.4(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)
     transitivePeerDependencies:
       - '@emnapi/core'
       - '@emnapi/runtime'
@@ -1246,12 +1255,12 @@ snapshots:
     dependencies:
       acorn: 8.16.0
 
-  '@tummycrypt/scheduling-kit@0.7.0(@neondatabase/serverless@0.10.4)(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)(svelte@5.55.1)':
+  '@tummycrypt/scheduling-kit@0.7.1(@neondatabase/serverless@0.10.4)(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1(@typescript-eslint/types@8.58.0)))(@types/pg@8.11.6)(svelte@5.55.1(@typescript-eslint/types@8.58.0))':
     dependencies:
-      '@tummycrypt/tinyland-auth-pg': 0.1.1(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)
+      '@tummycrypt/tinyland-auth-pg': 0.1.1(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1(@typescript-eslint/types@8.58.0)))(@types/pg@8.11.6)
       drizzle-orm: 0.39.3(@neondatabase/serverless@0.10.4)(@types/pg@8.11.6)
       effect: 3.21.0
-      svelte: 5.55.1
+      svelte: 5.55.1(@typescript-eslint/types@8.58.0)
       zod: 4.3.6
     transitivePeerDependencies:
       - '@aws-sdk/client-rds-data'
@@ -1283,10 +1292,10 @@ snapshots:
       - sql.js
       - sqlite3
 
-  '@tummycrypt/tinyland-auth-pg@0.1.1(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1))(@types/pg@8.11.6)':
+  '@tummycrypt/tinyland-auth-pg@0.1.1(@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1(@typescript-eslint/types@8.58.0)))(@types/pg@8.11.6)':
     dependencies:
       '@neondatabase/serverless': 0.10.4
-      '@tummycrypt/tinyland-auth': 0.2.0(svelte@5.55.1)
+      '@tummycrypt/tinyland-auth': 0.2.0(svelte@5.55.1(@typescript-eslint/types@8.58.0))
       drizzle-orm: 0.39.3(@neondatabase/serverless@0.10.4)(@types/pg@8.11.6)
     transitivePeerDependencies:
       - '@aws-sdk/client-rds-data'
@@ -1316,14 +1325,14 @@ snapshots:
       - sql.js
       - sqlite3
 
-  '@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1)':
+  '@tummycrypt/tinyland-auth@0.2.0(svelte@5.55.1(@typescript-eslint/types@8.58.0))':
     dependencies:
       bcryptjs: 2.4.3
-      nanoid: 5.1.7
+      nanoid: 5.1.9
       otplib: 12.0.1
       qrcode: 1.5.4
     optionalDependencies:
-      svelte: 5.55.1
+      svelte: 5.55.1(@typescript-eslint/types@8.58.0)
 
   '@tybys/wasm-util@0.10.1':
     dependencies:
@@ -1351,7 +1360,8 @@ snapshots:
 
   '@types/trusted-types@2.0.7': {}
 
-  '@typescript-eslint/types@8.58.0': {}
+  '@typescript-eslint/types@8.58.0':
+    optional: true
 
   '@vitest/expect@4.1.2':
     dependencies:
@@ -1434,7 +1444,7 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
-  devalue@5.6.4: {}
+  devalue@5.7.1: {}
 
   dijkstrajs@1.0.3: {}
 
@@ -1483,9 +1493,10 @@ snapshots:
 
   esm-env@1.2.2: {}
 
-  esrap@2.2.4:
+  esrap@2.2.5(@typescript-eslint/types@8.58.0):
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
+    optionalDependencies:
       '@typescript-eslint/types': 8.58.0
 
   estree-walker@3.0.3:
@@ -1585,7 +1596,7 @@ snapshots:
 
   nanoid@3.3.11: {}
 
-  nanoid@5.1.7: {}
+  nanoid@5.1.9: {}
 
   obuf@1.1.2: {}
 
@@ -1637,7 +1648,7 @@ snapshots:
 
   pngjs@5.0.0: {}
 
-  postcss@8.5.8:
+  postcss@8.5.10:
     dependencies:
       nanoid: 3.3.11
       picocolors: 1.1.1
@@ -1724,7 +1735,7 @@ snapshots:
     dependencies:
       ansi-regex: 5.0.1
 
-  svelte@5.55.1:
+  svelte@5.55.1(@typescript-eslint/types@8.58.0):
     dependencies:
       '@jridgewell/remapping': 2.3.5
       '@jridgewell/sourcemap-codec': 1.5.5
@@ -1735,13 +1746,15 @@ snapshots:
       aria-query: 5.3.1
       axobject-query: 4.1.0
       clsx: 2.1.1
-      devalue: 5.6.4
+      devalue: 5.7.1
       esm-env: 1.2.2
-      esrap: 2.2.4
+      esrap: 2.2.5(@typescript-eslint/types@8.58.0)
       is-reference: 3.0.3
       locate-character: 3.0.0
       magic-string: 0.30.21
       zimmerframe: 1.1.4
+    transitivePeerDependencies:
+      - '@typescript-eslint/types'
 
   thirty-two@1.0.2: {}
 
@@ -1750,6 +1763,11 @@ snapshots:
   tinyexec@1.0.4: {}
 
   tinyglobby@0.2.15:
+    dependencies:
+      fdir: 6.5.0(picomatch@4.0.4)
+      picomatch: 4.0.4
+
+  tinyglobby@0.2.16:
     dependencies:
       fdir: 6.5.0(picomatch@4.0.4)
       picomatch: 4.0.4
@@ -1774,9 +1792,9 @@ snapshots:
     dependencies:
       lightningcss: 1.32.0
       picomatch: 4.0.4
-      postcss: 8.5.8
+      postcss: 8.5.10
       rolldown: 1.0.0-rc.12(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)
-      tinyglobby: 0.2.15
+      tinyglobby: 0.2.16
     optionalDependencies:
       '@types/node': 22.19.17
       esbuild: 0.27.7

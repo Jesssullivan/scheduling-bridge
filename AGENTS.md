@@ -43,7 +43,7 @@ Operationally relevant truth:
 
 - the current published bridge line is `0.4.1`
 - the current ESM artifact fix bumps metadata to `0.4.2`
-- that branch aligns the bridge dependency on `@tummycrypt/scheduling-kit ^0.7.0`
+- that branch aligns the bridge dependency on `@tummycrypt/scheduling-kit ^0.7.1`
 
 ## Deployment Truth
 
