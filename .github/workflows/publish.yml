@@ -104,7 +104,9 @@ jobs:
       - name: Extract Bazel package artifact
         run: tar -xzf bazel-pkg.tgz
       - name: Prepare GitHub Packages publish directory
-        run: cp -R pkg pkg-github
+        run: |
+          cp -R pkg pkg-github
+          chmod -R u+w pkg-github
       - name: Configure GitHub Packages auth
         run: echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> ~/.npmrc
       - name: Publish to GitHub Packages as @jesssullivan
