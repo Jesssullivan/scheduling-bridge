@@ -19,7 +19,7 @@ env:
 jobs:
   test:
     name: Test & Build
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -54,7 +54,7 @@ jobs:
 
   publish-npm:
     name: Publish → npmjs.com
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}
     needs: [test]
     if: ${{ !inputs.dry_run }}
     permissions:
@@ -80,7 +80,7 @@ jobs:
 
   publish-github:
     name: Publish → GitHub Packages
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}
     needs: [test]
     if: ${{ !inputs.dry_run }}
     permissions:
