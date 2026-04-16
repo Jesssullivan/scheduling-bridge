@@ -83,11 +83,22 @@ dashboard state when `/health` is available.
 | `CHROMIUM_LAUNCH_ARGS` | No | -- | Comma-separated Chromium args |
 | `SERVICES_JSON` | No | -- | Optional static service catalog to bypass live Acuity reads |
 | `ACUITY_SERVICE_CACHE_TTL_MS` | No | `300000` | TTL for cached live service catalogs before BUSINESS/scraper refresh |
+| `SCHEDULING_BRIDGE_SLOT_PROFILE_THRESHOLD_MS` | No | `1500` | Threshold in ms for logging long-tail slot-read profile events |
+| `SCHEDULING_BRIDGE_PROFILE_SLOT_READS` | No | `false` | Force logging of slot-read profile events even when under threshold |
 | `MIDDLEWARE_RELEASE_SHA` | No | -- | Release commit SHA exposed via `/health` |
 | `MIDDLEWARE_RELEASE_REF` | No | -- | Release ref/tag exposed via `/health` |
 | `MIDDLEWARE_RELEASE_VERSION` | No | -- | Release version exposed via `/health` |
 | `MIDDLEWARE_RELEASE_BUILT_AT` | No | -- | Build timestamp exposed via `/health` |
 | `MIDDLEWARE_BUILD_TIMESTAMP` | No | -- | Legacy fallback build timestamp for `/health` |
+
+### Observability
+
+The bridge emits NDJSON logs to stdout/stderr for runtime analysis.
+
+- `/health` remains the authoritative runtime-truth surface for downstream apps
+- request handlers emit request-scoped structured events, including `requestId`
+- long-tail slot reads emit `slot_read_profile` events with phase timings
+- `SCHEDULING_BRIDGE_PROFILE_SLOT_READS=1` forces profile emission for all slot reads
 
 ## Deployment
 
