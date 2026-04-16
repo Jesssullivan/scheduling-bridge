@@ -17,13 +17,18 @@ jobs:
     strategy:
       matrix:
         node-version: [20, 22]
+    env:
+      CHECKOUT_PATH: repo-${{ github.run_id }}-${{ matrix.node-version }}
+      PNPM_STORE_PATH: ${{ github.workspace }}/repo-${{ github.run_id }}-${{ matrix.node-version }}/.pnpm-store
 
     steps:
       - uses: actions/checkout@v6
         with:
           clean: false
+          path: ${{ env.CHECKOUT_PATH }}
 
       - name: Clean stale packaged artifacts
+        working-directory: ${{ env.CHECKOUT_PATH }}
         run: |
           chmod -R u+w pkg bazel-bin bazel-out bazel-testlogs 2>/dev/null || true
           rm -rf pkg bazel-bin bazel-out bazel-testlogs
@@ -38,20 +43,24 @@ jobs:
         run: corepack enable
 
       - name: Configure workspace pnpm store
+        working-directory: ${{ env.CHECKOUT_PATH }}
         run: pnpm config set store-dir "$PNPM_STORE_PATH"
 
       - uses: actions/cache@v5
         with:
           path: ${{ env.PNPM_STORE_PATH }}
-          key: ${{ runner.os }}-node-${{ matrix.node-version }}-pnpm-${{ env.PNPM_VERSION }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-node-${{ matrix.node-version }}-pnpm-${{ env.PNPM_VERSION }}-${{ hashFiles(format('{0}/pnpm-lock.yaml', env.CHECKOUT_PATH)) }}
           restore-keys: |
             ${{ runner.os }}-node-${{ matrix.node-version }}-pnpm-${{ env.PNPM_VERSION }}-
 
       - name: Install dependencies
+        working-directory: ${{ env.CHECKOUT_PATH }}
         run: pnpm install --frozen-lockfile
 
       - name: Typecheck
+        working-directory: ${{ env.CHECKOUT_PATH }}
         run: pnpm typecheck
 
       - name: Build
+        working-directory: ${{ env.CHECKOUT_PATH }}
         run: pnpm build

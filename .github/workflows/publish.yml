@@ -21,11 +21,16 @@ jobs:
   test:
     name: Test & Build
     runs-on: ${{ fromJSON(vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}
+    env:
+      CHECKOUT_PATH: repo-${{ github.run_id }}-${{ env.DEFAULT_NODE_VERSION }}
+      PNPM_STORE_PATH: ${{ github.workspace }}/repo-${{ github.run_id }}-${{ env.DEFAULT_NODE_VERSION }}/.pnpm-store
     steps:
       - uses: actions/checkout@v6
         with:
           clean: false
+          path: ${{ env.CHECKOUT_PATH }}
       - name: Clean stale packaged artifacts
+        working-directory: ${{ env.CHECKOUT_PATH }}
         run: |
           chmod -R u+w pkg bazel-bin bazel-out bazel-testlogs 2>/dev/null || true
           rm -rf pkg bazel-bin bazel-out bazel-testlogs
@@ -35,28 +40,35 @@ jobs:
           package-manager-cache: false
       - run: corepack enable
       - name: Configure workspace pnpm store
+        working-directory: ${{ env.CHECKOUT_PATH }}
         run: pnpm config set store-dir "$PNPM_STORE_PATH"
       - uses: actions/cache@v5
         with:
           path: ${{ env.PNPM_STORE_PATH }}
-          key: ${{ runner.os }}-node-${{ env.DEFAULT_NODE_VERSION }}-pnpm-${{ env.PNPM_VERSION }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-node-${{ env.DEFAULT_NODE_VERSION }}-pnpm-${{ env.PNPM_VERSION }}-${{ hashFiles(format('{0}/pnpm-lock.yaml', env.CHECKOUT_PATH)) }}
           restore-keys: |
             ${{ runner.os }}-node-${{ env.DEFAULT_NODE_VERSION }}-pnpm-${{ env.PNPM_VERSION }}-
-      - run: pnpm install --frozen-lockfile
+      - working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm install --frozen-lockfile
       - name: Validate Bazel package artifact
+        working-directory: ${{ env.CHECKOUT_PATH }}
         run: npx --yes @bazel/bazelisk build //:pkg
       - name: Validate Bazel npm package contents
+        working-directory: ${{ env.CHECKOUT_PATH }}
         run: npm pack --dry-run ./bazel-bin/pkg
       - name: Archive Bazel package artifact
+        working-directory: ${{ env.CHECKOUT_PATH }}
         run: tar -czf bazel-pkg.tgz -C bazel-bin pkg
       - name: Upload Bazel package artifact
         uses: actions/upload-artifact@v4
         with:
           name: bazel-pkg
-          path: bazel-pkg.tgz
+          path: ${{ env.CHECKOUT_PATH }}/bazel-pkg.tgz
           if-no-files-found: error
-      - run: pnpm typecheck
-      - run: pnpm build
+      - working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm typecheck
+      - working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm build
 
   publish-npm:
     name: Publish → npmjs.com
