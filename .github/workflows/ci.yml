@@ -9,6 +9,7 @@ on:
 
 env:
   PNPM_VERSION: 9.15.9
+  PNPM_STORE_PATH: ${{ github.workspace }}/.pnpm-store
 
 jobs:
   build:
@@ -29,13 +30,12 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
-      - name: Resolve pnpm store path
-        id: pnpm-store
-        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - name: Configure workspace pnpm store
+        run: pnpm config set store-dir "$PNPM_STORE_PATH"
 
       - uses: actions/cache@v5
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
+          path: ${{ env.PNPM_STORE_PATH }}
           key: ${{ runner.os }}-node-${{ matrix.node-version }}-pnpm-${{ env.PNPM_VERSION }}-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-node-${{ matrix.node-version }}-pnpm-${{ env.PNPM_VERSION }}-
