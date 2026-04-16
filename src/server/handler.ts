@@ -59,6 +59,7 @@ import {
 	readDatesViaUrl,
 	readSlotsViaUrl,
 } from '../adapters/acuity/steps/read-via-url.js';
+import { buildHealthPayload } from './health.js';
 import type {
 	Booking,
 	BookingRequest,
@@ -196,18 +197,21 @@ const isAcuityAppointmentTypeId = (serviceId: string): boolean => /^\d+$/.test(s
 // =============================================================================
 
 const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
-	sendSuccess(res, {
-		status: 'ok',
-		baseUrl: ACUITY_BASE_URL,
-		hasCoupon: !!COUPON_CODE,
-		headless: browserConfig.headless,
-		staticServices: serviceCatalog.staticServicesCount,
-		serviceCacheTtlMs: SERVICE_CACHE_TTL_MS,
-		releaseSha: process.env.MIDDLEWARE_RELEASE_SHA ?? 'unknown',
-		releaseRef: process.env.MIDDLEWARE_RELEASE_REF ?? 'unknown',
-		modalEnvironment: process.env.MODAL_ENVIRONMENT ?? null,
-		timestamp: new Date().toISOString(),
-	});
+	sendSuccess(
+		res,
+		buildHealthPayload({
+			baseUrl: ACUITY_BASE_URL,
+			hasCoupon: !!COUPON_CODE,
+			headless: browserConfig.headless,
+			staticServices: serviceCatalog.staticServicesCount,
+			serviceCacheTtlMs: SERVICE_CACHE_TTL_MS,
+			releaseSha: process.env.MIDDLEWARE_RELEASE_SHA,
+			releaseRef: process.env.MIDDLEWARE_RELEASE_REF,
+			releaseVersion: process.env.MIDDLEWARE_RELEASE_VERSION ?? process.env.npm_package_version,
+			releaseBuiltAt: process.env.MIDDLEWARE_RELEASE_BUILT_AT ?? process.env.MIDDLEWARE_BUILD_TIMESTAMP,
+			modalEnvironment: process.env.MODAL_ENVIRONMENT,
+		}),
+	);
 };
 
 
