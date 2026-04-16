@@ -78,8 +78,8 @@ jobs:
     runs-on: ${{ fromJSON(vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}
     needs: workspace
     env:
-      CHECKOUT_PATH: repo-${{ github.run_id }}-${{ env.DEFAULT_NODE_VERSION }}
-      PNPM_STORE_PATH: ${{ github.workspace }}/repo-${{ github.run_id }}-${{ env.DEFAULT_NODE_VERSION }}/.pnpm-store
+      CHECKOUT_PATH: repo-${{ github.run_id }}-22
+      PNPM_STORE_PATH: ${{ github.workspace }}/repo-${{ github.run_id }}-22/.pnpm-store
 
     steps:
       - uses: actions/checkout@v6
