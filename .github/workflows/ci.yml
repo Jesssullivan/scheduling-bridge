@@ -9,10 +9,11 @@ on:
 
 env:
   PNPM_VERSION: 9.15.9
+  DEFAULT_NODE_VERSION: 22
   PNPM_STORE_PATH: ${{ github.workspace }}/.pnpm-store
 
 jobs:
-  build:
+  workspace:
     runs-on: ${{ fromJSON(vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}
     strategy:
       matrix:
@@ -27,11 +28,11 @@ jobs:
           clean: false
           path: ${{ env.CHECKOUT_PATH }}
 
-      - name: Clean stale packaged artifacts
+      - name: Clean stale workspace artifacts
         working-directory: ${{ env.CHECKOUT_PATH }}
         run: |
-          chmod -R u+w pkg bazel-bin bazel-out bazel-testlogs 2>/dev/null || true
-          rm -rf pkg bazel-bin bazel-out bazel-testlogs
+          chmod -R u+w dist node_modules bazel-bin bazel-out bazel-testlogs .pnpm-store 2>/dev/null || true
+          rm -rf dist node_modules bazel-bin bazel-out bazel-testlogs .pnpm-store MODULE.bazel.lock
 
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v6
@@ -57,10 +58,85 @@ jobs:
         working-directory: ${{ env.CHECKOUT_PATH }}
         run: pnpm install --frozen-lockfile
 
+      - name: Verify release metadata
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm check:release-metadata
+
       - name: Typecheck
         working-directory: ${{ env.CHECKOUT_PATH }}
         run: pnpm typecheck
 
+      - name: Unit tests
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm test
+
       - name: Build
         working-directory: ${{ env.CHECKOUT_PATH }}
         run: pnpm build
+
+  package:
+    runs-on: ${{ fromJSON(vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}
+    needs: workspace
+    env:
+      CHECKOUT_PATH: repo-${{ github.run_id }}-22
+      PNPM_STORE_PATH: ${{ github.workspace }}/repo-${{ github.run_id }}-22/.pnpm-store
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          clean: false
+          path: ${{ env.CHECKOUT_PATH }}
+
+      - name: Clean stale workspace artifacts
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: |
+          chmod -R u+w dist node_modules pkg bazel-bin bazel-out bazel-testlogs .pnpm-store 2>/dev/null || true
+          rm -rf dist node_modules pkg bazel-bin bazel-out bazel-testlogs .pnpm-store MODULE.bazel.lock
+
+      - name: Setup Node.js ${{ env.DEFAULT_NODE_VERSION }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.DEFAULT_NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Configure workspace pnpm store
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm config set store-dir "$PNPM_STORE_PATH"
+
+      - uses: actions/cache@v5
+        with:
+          path: ${{ env.PNPM_STORE_PATH }}
+          key: ${{ runner.os }}-node-${{ env.DEFAULT_NODE_VERSION }}-pnpm-${{ env.PNPM_VERSION }}-${{ hashFiles(format('{0}/pnpm-lock.yaml', env.CHECKOUT_PATH)) }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ env.DEFAULT_NODE_VERSION }}-pnpm-${{ env.PNPM_VERSION }}-
+
+      - name: Install dependencies
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release metadata
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm check:release-metadata
+
+      - name: Build package
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm build
+
+      - name: Validate package surface
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: pnpm check:package
+
+      - name: Validate Bazel package artifact
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: npx --yes @bazel/bazelisk build //:pkg
+
+      - name: Validate Bazel npm package contents
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: npm pack --dry-run ./bazel-bin/pkg
+
+      - name: Validate Bazel npm publish dry run
+        working-directory: ${{ env.CHECKOUT_PATH }}
+        run: npm publish --dry-run --ignore-scripts --access public ./bazel-bin/pkg
