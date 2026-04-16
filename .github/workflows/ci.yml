@@ -20,6 +20,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          clean: false
+
+      - name: Clean stale packaged artifacts
+        run: |
+          chmod -R u+w pkg bazel-bin bazel-out bazel-testlogs 2>/dev/null || true
+          rm -rf pkg bazel-bin bazel-out bazel-testlogs
 
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v6

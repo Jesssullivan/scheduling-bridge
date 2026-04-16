@@ -23,6 +23,12 @@ jobs:
     runs-on: ${{ fromJSON(vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          clean: false
+      - name: Clean stale packaged artifacts
+        run: |
+          chmod -R u+w pkg bazel-bin bazel-out bazel-testlogs 2>/dev/null || true
+          rm -rf pkg bazel-bin bazel-out bazel-testlogs
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.DEFAULT_NODE_VERSION }}
