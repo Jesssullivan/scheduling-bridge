@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { describe, expect, it, vi } from 'vitest';
 import {
 	createAcuityServiceCatalog,
@@ -138,5 +139,56 @@ describe('createAcuityServiceCatalog', () => {
 		await expect(catalog.getServices()).resolves.toEqual(services);
 		await expect(catalog.resolveServiceName('svc-2')).resolves.toBe('TMD Tuneup');
 		expect(loadScraperServices).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('AcuityServiceCatalog with Redis L2', () => {
+	it('delegates single-flight to RedisL2.getCached when redisL2 provided', async () => {
+		const mkGetCached = vi.fn(
+			async (_k: string, _ttl: number, mk: Effect.Effect<unknown>) =>
+				await Effect.runPromise(mk),
+		);
+		const mockL2 = {
+			getCached: <A>(key: string, ttl: number, mk: Effect.Effect<A>) =>
+				Effect.promise(() => mkGetCached(key, ttl, mk) as Promise<A>),
+		};
+
+		const fetchBusinessData = vi.fn(async () => null);
+		const loadScraperServices = vi.fn(async () => services);
+
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://x.as.me',
+			staticServices: null,
+			fetchBusinessData,
+			loadScraperServices,
+			redisL2: mockL2,
+			logger: makeLogger(),
+		});
+
+		await catalog.getServices();
+		await catalog.getServices();
+
+		// L2 layer handles dedup; catalog calls it every time.
+		expect(mkGetCached).toHaveBeenCalledTimes(2);
+		// Key should be namespaced with baseUrl.
+		const firstCallKey = mkGetCached.mock.calls[0]?.[0];
+		expect(firstCallKey).toBe('acuity:services:v1:https://x.as.me');
+	});
+
+	it('falls back to in-process cache when redisL2 absent', async () => {
+		const loadSpy = vi.fn(async () => services);
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://x.as.me',
+			staticServices: null,
+			fetchBusinessData: async () => null,
+			loadScraperServices: loadSpy,
+			logger: makeLogger(),
+		});
+
+		await catalog.getServices();
+		await catalog.getServices();
+
+		// in-proc cache hit on second call.
+		expect(loadSpy).toHaveBeenCalledTimes(1);
 	});
 });

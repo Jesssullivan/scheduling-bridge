@@ -21,6 +21,22 @@ export interface AcuityServiceCatalog {
 	readonly resolveServiceName: (serviceId: string, serviceName?: string) => Promise<string>;
 }
 
+/**
+ * Minimal interface over `RedisL2.getCached` that the catalog depends on.
+ *
+ * Kept as a structural interface (not the concrete Effect service Tag) so that
+ * the catalog stays usable from non-Effect callers and is trivially mockable
+ * in tests. The wiring module (e.g. `src/server/handler.ts`) is responsible
+ * for providing the `RedisL2` context that the real `getCached` needs.
+ */
+export interface ServiceCatalogRedisL2 {
+	readonly getCached: <A>(
+		key: string,
+		ttlSeconds: number,
+		mk: Effect.Effect<A>,
+	) => Effect.Effect<A>;
+}
+
 export interface AcuityServiceCatalogConfig {
 	readonly baseUrl: string;
 	readonly staticServices?: readonly Service[] | null;
@@ -31,6 +47,17 @@ export interface AcuityServiceCatalogConfig {
 	readonly businessToServices?: (business: AcuityBusinessData) => Service[];
 	readonly loadScraperServices?: () => Promise<readonly Service[]>;
 	readonly now?: () => number;
+	/**
+	 * Optional L2 (networked) cache. When provided, every `runRefresh()` call
+	 * is delegated through `getCached`, which is expected to provide
+	 * cross-pod single-flight + TTL semantics. The in-process `loadInFlight`
+	 * dedup path is bypassed because L2 is the coordination boundary.
+	 *
+	 * The local `cachedServices` buffer is still maintained so that the
+	 * synchronous `getCachedService()` accessor and `resolveServiceName()`
+	 * fast path keep working.
+	 */
+	readonly redisL2?: ServiceCatalogRedisL2;
 }
 
 const cloneService = (service: Service): Service => ({ ...service });
@@ -162,6 +189,27 @@ export const createAcuityServiceCatalog = (
 	};
 
 	const runRefresh = async (): Promise<Service[]> => {
+		if (config.redisL2) {
+			// L2 path: delegate single-flight + TTL to the networked cache.
+			// Coordination across pods is only correct when every refresh goes
+			// through L2, so we skip the in-process `loadInFlight` dedup here.
+			const cacheKey = `acuity:services:v1:${config.baseUrl}`;
+			const ttlSeconds = Math.max(1, Math.floor(cacheTtlMs / 1000));
+			const services = await Effect.runPromise(
+				config.redisL2.getCached(
+					cacheKey,
+					ttlSeconds,
+					Effect.promise(refreshServices),
+				),
+			);
+			// Keep L1 buffer warm so `getCachedService()` and the
+			// `resolveServiceName()` fast-path can serve synchronously.
+			setCachedServices(services);
+			return cloneServices(services);
+		}
+
+		// In-process Promise dedup: single-node deployments (or the fallback
+		// path for tests / local dev without Redis).
 		if (!loadInFlight) {
 			loadInFlight = refreshServices().finally(() => {
 				loadInFlight = null;
@@ -170,8 +218,15 @@ export const createAcuityServiceCatalog = (
 		return cloneServices(await loadInFlight);
 	};
 
-	const ensureServices = async (): Promise<Service[]> =>
-		hasFreshCache() ? cloneServices(cachedServices ?? []) : runRefresh();
+	const ensureServices = async (): Promise<Service[]> => {
+		// When L2 is wired, every call goes through it — L2 is the freshness
+		// authority, not the in-process `cachedServices` buffer. Static
+		// services still short-circuit because they are the declared truth.
+		if (config.redisL2 && !staticServices) {
+			return runRefresh();
+		}
+		return hasFreshCache() ? cloneServices(cachedServices ?? []) : runRefresh();
+	};
 
 	return {
 		staticServicesCount: staticServices?.length ?? 0,
