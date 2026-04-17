@@ -37,6 +37,7 @@ import type { Redis as IORedis } from 'ioredis';
 import type { ScraperConfig } from '../adapters/acuity/scraper.js';
 import {
 	BrowserProcessLive,
+	BrowserProcess,
 	BrowserService,
 	BrowserSessionLive,
 	type BrowserConfig,
@@ -66,6 +67,7 @@ import {
 	readSlotsViaUrl,
 } from '../adapters/acuity/steps/read-via-url.js';
 import { buildHealthPayload } from './health.js';
+import { handleReady as _handleReady } from './ready.js';
 import { ndjsonLog } from '../shared/logger.js';
 import type {
 	Booking,
@@ -353,6 +355,32 @@ const isAcuityAppointmentTypeId = (serviceId: string): boolean => /^\d+$/.test(s
 // =============================================================================
 // ROUTE HANDLERS
 // =============================================================================
+
+/** The L2 Redis key used by the service catalog (must match acuity-service-catalog.ts). */
+const CATALOG_REDIS_KEY = `acuity:services:v1:${ACUITY_BASE_URL}`;
+
+/**
+ * Real-liveness readiness handler wired to the module-level singletons.
+ *
+ * Checks (in parallel, under ~3 s combined budget):
+ *  1. Redis ping
+ *  2. Browser pool `isConnected()` via BrowserProcess Effect service
+ *  3. Catalog has data in L1 (getCachedCount) or L2 (Redis EXISTS)
+ *
+ * Returns HTTP 200 when all pass; 503 otherwise.
+ */
+const handleReady = (res: ServerResponse) =>
+	_handleReady(res, {
+		redisPing: redisClient ? () => redisClient!.ping() : null,
+		browserConnected: () =>
+			browserRuntime.runPromise(
+				BrowserProcess.pipe(Effect.map(({ browser }) => browser.isConnected())),
+			),
+		catalogL1Count: () => serviceCatalog.getCachedCount(),
+		catalogL2Exists: redisClient
+			? () => redisClient!.exists(CATALOG_REDIS_KEY)
+			: null,
+	});
 
 const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
 	sendSuccess(
@@ -726,19 +754,7 @@ const server = createServer(async (req, res) => {
 		}
 
 		if (path === '/ready' && method === 'GET') {
-			// Redis readiness gate: when a client is configured, a failing ping
-			// flips the pod out of service. When unconfigured (local dev), we
-			// skip the check so the app stays bootable.
-			const redisOk = redisClient
-				? (await redisClient.ping().catch(() => null)) === 'PONG'
-				: true;
-			if (!redisOk) {
-				res.writeHead(503, { 'Content-Type': 'text/plain' });
-				res.end('redis unreachable');
-				return;
-			}
-			// Preserve legacy readiness signal (mirrors `/health` semantics).
-			return handleHealth(req, res);
+			return handleReady(res);
 		}
 
 		// Route matching

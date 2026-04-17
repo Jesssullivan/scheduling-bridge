@@ -18,6 +18,8 @@ export interface AcuityServiceCatalog {
 	readonly getServices: () => Promise<Service[]>;
 	readonly getService: (serviceId: string) => Promise<Service | null>;
 	readonly getCachedService: (serviceId: string) => Service | undefined;
+	/** Returns the number of services currently held in the L1 in-process cache (0 = not yet populated). */
+	readonly getCachedCount: () => number;
 	readonly resolveServiceName: (serviceId: string, serviceName?: string) => Promise<string>;
 }
 
@@ -246,6 +248,7 @@ export const createAcuityServiceCatalog = (
 			const service = cachedServices?.find((candidate) => candidate.id === serviceId);
 			return service ? cloneService(service) : undefined;
 		},
+		getCachedCount: () => cachedServices?.length ?? 0,
 		resolveServiceName: async (serviceId, serviceName) => {
 			if (isNonNumericServiceName(serviceName)) {
 				return serviceName;
