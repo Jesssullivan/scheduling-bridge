@@ -12,13 +12,15 @@
 import { Effect, Scope } from 'effect';
 import type { Page } from 'playwright-core';
 import { BrowserService } from '../../../shared/browser-service.js';
+import { ndjsonLog } from '../../../shared/logger.js';
 import { WizardStepError } from '../errors.js';
 import { Selectors } from '../selectors.js';
 import { parseSlotText, buildIsoDatetime } from '../slot-parser.js';
 import {
+	buildSlotReadProfileEvent,
 	createSlotReadProfile,
-	formatSlotReadProfileLog,
 	getSlotReadProfileConfig,
+	type SlotReadProfileContext,
 	shouldLogSlotReadProfile,
 } from './slot-read-profile.js';
 
@@ -146,6 +148,7 @@ export const readDatesViaUrl = (
 export const readSlotsViaUrl = (
 	serviceId: string,
 	date: string,
+	context?: SlotReadProfileContext,
 ): Effect.Effect<UrlSlotResult[], WizardStepError, BrowserService | Scope.Scope> =>
 	Effect.gen(function* () {
 		const { acquirePage, config } = yield* BrowserService;
@@ -263,10 +266,11 @@ export const readSlotsViaUrl = (
 				slotDomReadMs,
 				parseMs,
 			},
+			context,
 		});
 
 		if (shouldLogSlotReadProfile(profile, profileConfig)) {
-			console.log(formatSlotReadProfileLog(profile));
+			ndjsonLog('INFO', 'Slot read profile', { ...buildSlotReadProfileEvent(profile) });
 		}
 
 		return parsedSlots;

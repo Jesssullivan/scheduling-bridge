@@ -8,6 +8,16 @@ export interface SlotReadPhaseTimings {
 	readonly parseMs: number;
 }
 
+export interface SlotReadProfileContext {
+	readonly requestId?: string;
+	readonly endpoint?: string;
+	readonly modalEnvironment?: string;
+	readonly releaseSha?: string;
+	readonly releaseVersion?: string;
+	readonly flowOwner?: string;
+	readonly transport?: string;
+}
+
 export interface SlotReadProfile {
 	readonly serviceId: string;
 	readonly date: string;
@@ -20,6 +30,7 @@ export interface SlotReadProfile {
 	readonly parsedSlotCount: number;
 	readonly unparsedSlotCount: number;
 	readonly phases: SlotReadPhaseTimings;
+	readonly context?: SlotReadProfileContext;
 }
 
 export interface SlotReadProfileConfig {
@@ -53,6 +64,7 @@ export interface CreateSlotReadProfileInput {
 	readonly slotCount: number;
 	readonly parsedSlotCount: number;
 	readonly phases: SlotReadPhaseTimings;
+	readonly context?: SlotReadProfileContext;
 }
 
 export const createSlotReadProfile = (
@@ -79,8 +91,20 @@ export const createSlotReadProfile = (
 		parsedSlotCount: input.parsedSlotCount,
 		unparsedSlotCount: Math.max(0, input.slotCount - input.parsedSlotCount),
 		phases: input.phases,
+		context: input.context,
 	};
 };
+
+export interface SlotReadProfileEvent extends SlotReadProfile {
+	readonly event: 'slot_read_profile';
+}
+
+export const buildSlotReadProfileEvent = (
+	profile: SlotReadProfile,
+): SlotReadProfileEvent => ({
+	event: 'slot_read_profile',
+	...profile,
+});
 
 export const shouldLogSlotReadProfile = (
 	profile: SlotReadProfile,
@@ -88,4 +112,4 @@ export const shouldLogSlotReadProfile = (
 ): boolean => config.forceLog || profile.longTail;
 
 export const formatSlotReadProfileLog = (profile: SlotReadProfile): string =>
-	`[availability/slots][profile] ${JSON.stringify(profile)}`;
+	`[availability/slots][profile] ${JSON.stringify(buildSlotReadProfileEvent(profile))}`;

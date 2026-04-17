@@ -30,6 +30,7 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { Effect, Exit, Cause, ManagedRuntime, Scope } from 'effect';
 import type { ScraperConfig } from '../adapters/acuity/scraper.js';
 import {
@@ -60,6 +61,7 @@ import {
 	readSlotsViaUrl,
 } from '../adapters/acuity/steps/read-via-url.js';
 import { buildHealthPayload } from './health.js';
+import { ndjsonLog } from '../shared/logger.js';
 import type {
 	Booking,
 	BookingRequest,
@@ -143,6 +145,87 @@ const parseBody = async (req: IncomingMessage): Promise<unknown> => {
 	return raw ? JSON.parse(raw) : {};
 };
 
+type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
+
+interface RequestContext {
+	readonly requestId: string;
+	readonly method: string;
+	readonly path: string;
+	readonly startedAt: number;
+}
+
+const runtimeLogFields = () => ({
+	flowOwner: 'scheduling-bridge',
+	backend: 'acuity',
+	transport: 'http-json',
+	modalEnvironment: process.env.MODAL_ENVIRONMENT,
+	releaseSha: process.env.MIDDLEWARE_RELEASE_SHA,
+	releaseVersion: process.env.MIDDLEWARE_RELEASE_VERSION ?? process.env.npm_package_version,
+});
+
+const logEvent = (
+	level: LogLevel,
+	msg: string,
+	data?: Record<string, unknown>,
+) => {
+	ndjsonLog(level, msg, {
+		...runtimeLogFields(),
+		...data,
+	});
+};
+
+const logRequestEvent = (
+	level: LogLevel,
+	msg: string,
+	context: RequestContext,
+	data?: Record<string, unknown>,
+) => {
+	logEvent(level, msg, {
+		event: 'request',
+		requestId: context.requestId,
+		method: context.method,
+		path: context.path,
+		...data,
+	});
+};
+
+const describeLogValue = (value: unknown): string => {
+	if (typeof value === 'string') return value;
+	if (value instanceof Error) return value.message;
+	try {
+		return JSON.stringify(value);
+	} catch {
+		return String(value);
+	}
+};
+
+const createServiceCatalogLogger = () => ({
+	log: (...args: unknown[]) =>
+		logEvent('INFO', 'Service catalog event', {
+			event: 'service_catalog',
+			detail: args.map(describeLogValue).join(' '),
+		}),
+	warn: (...args: unknown[]) =>
+		logEvent('WARN', 'Service catalog warning', {
+			event: 'service_catalog',
+			detail: args.map(describeLogValue).join(' '),
+		}),
+	error: (...args: unknown[]) =>
+		logEvent('ERROR', 'Service catalog error', {
+			event: 'service_catalog',
+			detail: args.map(describeLogValue).join(' '),
+		}),
+});
+
+const createSlotReadTelemetryContext = (
+	context: RequestContext,
+	endpoint: string,
+) => ({
+	requestId: context.requestId,
+	endpoint,
+	...runtimeLogFields(),
+});
+
 // =============================================================================
 // EFFECT RUNNER
 // =============================================================================
@@ -172,7 +255,7 @@ const serviceCatalog = createAcuityServiceCatalog({
 	cacheTtlMs: SERVICE_CACHE_TTL_MS,
 	staticServices: parseStaticServicesJson(process.env.SERVICES_JSON),
 	scraperConfig,
-	logger: console,
+	logger: createServiceCatalogLogger(),
 });
 
 const isSchedulingError = (error: unknown): error is SchedulingError =>
@@ -182,10 +265,12 @@ const resolveServiceName = async (serviceId: string, serviceName?: string): Prom
 	try {
 		return await serviceCatalog.resolveServiceName(serviceId, serviceName);
 	} catch (error) {
-		console.warn(
-			`[middleware-server] Service name resolution failed for ${serviceId}:`,
-			error,
-		);
+		logEvent('WARN', 'Service name resolution failed', {
+			event: 'service_name_resolution_failed',
+			serviceId,
+			serviceName,
+			error: describeLogValue(error),
+		});
 		return serviceName && !/^\d+$/.test(serviceName) ? serviceName : serviceId;
 	}
 };
@@ -259,13 +344,24 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 	}
 };
 
-const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) => {
+const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
+	logRequestEvent('INFO', 'Availability dates requested', context, {
+		event: 'availability_dates_requested',
+		serviceId: body.serviceId,
+		serviceName: body.serviceName,
+		startDate: body.startDate,
+	});
 	const result = isAcuityAppointmentTypeId(body.serviceId)
 		? await runEffect(readDatesViaUrl(body.serviceId, body.startDate?.slice(0, 7)))
 		: await (async () => {
 				const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
-				console.log(`[availability/dates] serviceName="${serviceName}" from serviceId="${body.serviceId}"`);
+				logRequestEvent('INFO', 'Availability dates resolved service name', context, {
+					event: 'availability_dates_resolved_service',
+					serviceId: body.serviceId,
+					serviceName,
+					startDate: body.startDate,
+				});
 				return runEffect(
 					readAvailableDates({
 						serviceName,
@@ -277,7 +373,14 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) =
 
 	if (!result.ok) {
 		const err = result.error;
-		console.error(`[availability/dates] error:`, err);
+		logRequestEvent('ERROR', 'Availability dates request failed', context, {
+			event: 'availability_dates_failed',
+			serviceId: body.serviceId,
+			startDate: body.startDate,
+			errorTag: err._tag,
+			errorCode: 'code' in err ? (err as { code: string }).code : 'UNKNOWN',
+			errorMessage: 'message' in err ? (err as { message: string }).message : 'Availability lookup failed',
+		});
 		return sendJson(res, 500, {
 			success: false,
 			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Availability lookup failed' },
@@ -286,13 +389,30 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse) =
 	sendSuccess(res, result.value);
 };
 
-const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) => {
+const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; date: string };
+	logRequestEvent('INFO', 'Availability slots requested', context, {
+		event: 'availability_slots_requested',
+		serviceId: body.serviceId,
+		serviceName: body.serviceName,
+		date: body.date,
+	});
 	const result = isAcuityAppointmentTypeId(body.serviceId)
-		? await runEffect(readSlotsViaUrl(body.serviceId, body.date))
+		? await runEffect(
+				readSlotsViaUrl(
+					body.serviceId,
+					body.date,
+					createSlotReadTelemetryContext(context, 'availability_slots'),
+				),
+			)
 		: await (async () => {
 				const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
-				console.log(`[availability/slots] serviceName="${serviceName}" date="${body.date}"`);
+				logRequestEvent('INFO', 'Availability slots resolved service name', context, {
+					event: 'availability_slots_resolved_service',
+					serviceId: body.serviceId,
+					serviceName,
+					date: body.date,
+				});
 				return runEffect(
 					readTimeSlots({
 						serviceName,
@@ -303,7 +423,14 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) =
 
 	if (!result.ok) {
 		const err = result.error;
-		console.error(`[availability/slots] error:`, err);
+		logRequestEvent('ERROR', 'Availability slots request failed', context, {
+			event: 'availability_slots_failed',
+			serviceId: body.serviceId,
+			date: body.date,
+			errorTag: err._tag,
+			errorCode: 'code' in err ? (err as { code: string }).code : 'UNKNOWN',
+			errorMessage: 'message' in err ? (err as { message: string }).message : 'Slot lookup failed',
+		});
 		return sendJson(res, 500, {
 			success: false,
 			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot lookup failed' },
@@ -312,11 +439,23 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse) =
 	sendSuccess(res, result.value);
 };
 
-const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
+const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; datetime: string };
 	const date = body.datetime.split('T')[0];
+	logRequestEvent('INFO', 'Availability check requested', context, {
+		event: 'availability_check_requested',
+		serviceId: body.serviceId,
+		serviceName: body.serviceName,
+		datetime: body.datetime,
+	});
 	const result = isAcuityAppointmentTypeId(body.serviceId)
-		? await runEffect(readSlotsViaUrl(body.serviceId, date))
+		? await runEffect(
+				readSlotsViaUrl(
+					body.serviceId,
+					date,
+					createSlotReadTelemetryContext(context, 'availability_check'),
+				),
+			)
 		: await (async () => {
 				const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
 				return runEffect(
@@ -329,6 +468,14 @@ const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
 
 	if (!result.ok) {
 		const err = result.error;
+		logRequestEvent('ERROR', 'Availability check failed', context, {
+			event: 'availability_check_failed',
+			serviceId: body.serviceId,
+			datetime: body.datetime,
+			errorTag: err._tag,
+			errorCode: 'code' in err ? (err as { code: string }).code : 'UNKNOWN',
+			errorMessage: 'message' in err ? (err as { message: string }).message : 'Slot check failed',
+		});
 		return sendJson(res, 500, {
 			success: false,
 			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot check failed' },
@@ -340,11 +487,16 @@ const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse) => {
 	sendSuccess(res, available);
 };
 
-const handleCreateBooking = async (req: IncomingMessage, res: ServerResponse) => {
+const handleCreateBooking = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
 	const body = (await parseBody(req)) as { request: BookingRequest; couponCode?: string };
 	const { request } = body;
 
 	const serviceName = await resolveServiceName(request.serviceId);
+	logRequestEvent('INFO', 'Booking create requested', context, {
+		event: 'booking_create_requested',
+		serviceId: request.serviceId,
+		datetime: request.datetime,
+	});
 
 	const result = await runEffect(
 		Effect.gen(function* () {
@@ -361,11 +513,25 @@ const handleCreateBooking = async (req: IncomingMessage, res: ServerResponse) =>
 		}),
 	);
 
-	if (!result.ok) return sendError(res, 500, result.error);
+	if (!result.ok) {
+		logRequestEvent('ERROR', 'Booking create failed', context, {
+			event: 'booking_create_failed',
+			serviceId: request.serviceId,
+			datetime: request.datetime,
+			errorTag: result.error._tag,
+			errorCode: 'code' in result.error ? result.error.code : 'UNKNOWN',
+			errorMessage: 'message' in result.error ? result.error.message : 'Booking create failed',
+		});
+		return sendError(res, 500, result.error);
+	}
 	sendSuccess(res, result.value);
 };
 
-const handleCreateBookingWithPayment = async (req: IncomingMessage, res: ServerResponse) => {
+const handleCreateBookingWithPayment = async (
+	req: IncomingMessage,
+	res: ServerResponse,
+	context: RequestContext,
+) => {
 	const body = (await parseBody(req)) as {
 		request: BookingRequest;
 		paymentRef: string;
@@ -384,6 +550,12 @@ const handleCreateBookingWithPayment = async (req: IncomingMessage, res: ServerR
 
 	const serviceName = await resolveServiceName(request.serviceId);
 	const service = serviceCatalog.getCachedService(request.serviceId);
+	logRequestEvent('INFO', 'Booking create with payment requested', context, {
+		event: 'booking_create_with_payment_requested',
+		serviceId: request.serviceId,
+		datetime: request.datetime,
+		paymentProcessor,
+	});
 
 	const result = await runEffect(
 		Effect.gen(function* () {
@@ -407,7 +579,19 @@ const handleCreateBookingWithPayment = async (req: IncomingMessage, res: ServerR
 		}),
 	);
 
-	if (!result.ok) return sendError(res, 500, result.error);
+	if (!result.ok) {
+		logRequestEvent('ERROR', 'Booking create with payment failed', context, {
+			event: 'booking_create_with_payment_failed',
+			serviceId: request.serviceId,
+			datetime: request.datetime,
+			paymentProcessor,
+			errorTag: result.error._tag,
+			errorCode: 'code' in result.error ? result.error.code : 'UNKNOWN',
+			errorMessage:
+				'message' in result.error ? result.error.message : 'Booking create with payment failed',
+		});
+		return sendError(res, 500, result.error);
+	}
 	sendSuccess(res, result.value);
 };
 
@@ -419,11 +603,36 @@ const server = createServer(async (req, res) => {
 	const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
 	const path = url.pathname;
 	const method = req.method?.toUpperCase() ?? 'GET';
+	const context: RequestContext = {
+		requestId:
+			typeof req.headers['x-request-id'] === 'string' && req.headers['x-request-id'].length > 0
+				? req.headers['x-request-id']
+				: randomUUID(),
+		method,
+		path,
+		startedAt: Date.now(),
+	};
+
+	res.setHeader('x-request-id', context.requestId);
+	logRequestEvent('INFO', 'Request started', context, {
+		event: 'request_started',
+	});
+	res.on('finish', () => {
+		logRequestEvent('INFO', 'Request completed', context, {
+			event: 'request_completed',
+			statusCode: res.statusCode,
+			durationMs: Date.now() - context.startedAt,
+		});
+	});
 
 	// Auth check (skip health endpoint)
 	if (AUTH_TOKEN && path !== '/health') {
 		const auth = req.headers.authorization;
 		if (auth !== `Bearer ${AUTH_TOKEN}`) {
+			logRequestEvent('WARN', 'Unauthorized request rejected', context, {
+				event: 'request_rejected',
+				reason: 'invalid_auth_token',
+			});
 			return sendJson(res, 401, {
 				success: false,
 				error: { tag: 'InfrastructureError', code: 'UNAUTHORIZED', message: 'Invalid auth token' },
@@ -444,27 +653,33 @@ const server = createServer(async (req, res) => {
 			return await handleGetService(serviceId, res);
 		}
 		if (path === '/availability/dates' && method === 'POST') {
-			return await handleAvailableDates(req, res);
+			return await handleAvailableDates(req, res, context);
 		}
 		if (path === '/availability/slots' && method === 'POST') {
-			return await handleAvailableSlots(req, res);
+			return await handleAvailableSlots(req, res, context);
 		}
 		if (path === '/availability/check' && method === 'POST') {
-			return await handleCheckSlot(req, res);
+			return await handleCheckSlot(req, res, context);
 		}
 		if (path === '/booking/create' && method === 'POST') {
-			return await handleCreateBooking(req, res);
+			return await handleCreateBooking(req, res, context);
 		}
 		if (path === '/booking/create-with-payment' && method === 'POST') {
-			return await handleCreateBookingWithPayment(req, res);
+			return await handleCreateBookingWithPayment(req, res, context);
 		}
 
+		logRequestEvent('WARN', 'Unknown route requested', context, {
+			event: 'request_not_found',
+		});
 		sendJson(res, 404, {
 			success: false,
 			error: { tag: 'InfrastructureError', code: 'NOT_FOUND', message: `Unknown route: ${method} ${path}` },
 		});
 	} catch (e) {
-		console.error(`[middleware-server] Unhandled error on ${method} ${path}:`, e);
+		logRequestEvent('ERROR', 'Unhandled request error', context, {
+			event: 'request_failed',
+			error: describeLogValue(e),
+		});
 		sendJson(res, 500, {
 			success: false,
 			error: {
@@ -482,7 +697,10 @@ const disposeBrowserRuntime = () => {
 	if (browserRuntimeDisposed) return;
 	browserRuntimeDisposed = true;
 	void browserRuntime.dispose().catch((error) => {
-		console.error('[middleware-server] Failed to dispose browser runtime:', error);
+		logEvent('ERROR', 'Failed to dispose browser runtime', {
+			event: 'runtime_dispose_failed',
+			error: describeLogValue(error),
+		});
 	});
 };
 
@@ -491,11 +709,14 @@ server.on('close', disposeBrowserRuntime);
 // Only start listening when this file is executed directly (not imported)
 if (process.argv[1]?.match(/handler\.(ts|js|mjs)$/)) {
 	server.listen(PORT, '0.0.0.0', () => {
-		console.log(`[middleware-server] Listening on port ${PORT}`);
-		console.log(`[middleware-server] Acuity URL: ${ACUITY_BASE_URL}`);
-		console.log(`[middleware-server] Coupon: ${COUPON_CODE ? 'configured' : 'NOT SET'}`);
-		console.log(`[middleware-server] Auth: ${AUTH_TOKEN ? 'enabled' : 'disabled'}`);
-		console.log(`[middleware-server] Headless: ${browserConfig.headless}`);
+		logEvent('INFO', 'Middleware server listening', {
+			event: 'runtime_started',
+			port: PORT,
+			acuityBaseUrl: ACUITY_BASE_URL,
+			couponConfigured: !!COUPON_CODE,
+			authEnabled: !!AUTH_TOKEN,
+			headless: browserConfig.headless,
+		});
 	});
 }
 

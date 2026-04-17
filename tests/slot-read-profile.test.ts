@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	buildSlotReadProfileEvent,
 	createSlotReadProfile,
 	formatSlotReadProfileLog,
 	getSlotReadProfileConfig,
@@ -32,6 +33,40 @@ describe('slot read profiling helpers', () => {
 		expect(profile.unparsedSlotCount).toBe(1);
 		expect(profile.matchedDateFound).toBe(true);
 		expect(profile.phases.postClickSettleMs).toBe(2000);
+	});
+
+	it('preserves request-scoped context in emitted profile events', () => {
+		const profile = createSlotReadProfile({
+			serviceId: '53178494',
+			date: '2026-04-25',
+			thresholdMs: 1500,
+			calendarTileCount: 28,
+			matchedDateFound: true,
+			slotCount: 4,
+			parsedSlotCount: 4,
+			phases: {
+				navigationMs: 900,
+				calendarReadyMs: 40,
+				dateSelectMs: 120,
+				postClickSettleMs: 2000,
+				slotWaitMs: 300,
+				slotDomReadMs: 180,
+				parseMs: 10,
+			},
+			context: {
+				requestId: 'req-123',
+				endpoint: 'availability_slots',
+				flowOwner: 'scheduling-bridge',
+				releaseVersion: '0.4.2',
+			},
+		});
+
+		const event = buildSlotReadProfileEvent(profile);
+
+		expect(event.event).toBe('slot_read_profile');
+		expect(event.context?.requestId).toBe('req-123');
+		expect(event.context?.endpoint).toBe('availability_slots');
+		expect(event.context?.flowOwner).toBe('scheduling-bridge');
 	});
 
 	it('reads threshold and force-log config from env', () => {
@@ -77,5 +112,6 @@ describe('slot read profiling helpers', () => {
 		expect(shouldLogSlotReadProfile(profile, { thresholdMs: 1500, forceLog: false })).toBe(false);
 		expect(shouldLogSlotReadProfile(profile, { thresholdMs: 1500, forceLog: true })).toBe(true);
 		expect(formatSlotReadProfileLog(profile)).toContain('[availability/slots][profile]');
+		expect(formatSlotReadProfileLog(profile)).toContain('"event":"slot_read_profile"');
 	});
 });
