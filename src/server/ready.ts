@@ -82,6 +82,8 @@ const probeCatalog = async (
 		if (catalogL2Exists) {
 			const exists = await catalogL2Exists().catch(() => null);
 			if (exists === 1) {
+				// size: 0 on L2 hit — EXISTS does not deserialize the payload.
+				// A consumer that needs the real size must GET the key; /ready stays cheap.
 				return { status: 'ok', size: 0, source: 'l2' };
 			}
 		}

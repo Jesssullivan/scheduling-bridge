@@ -10,7 +10,7 @@
  * before they are initialised.
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { runReadyChecks, sendReadyResponse, handleReady } from '../ready.js';
 import type { ReadyDeps, ReadyChecks } from '../ready.js';
 
@@ -26,26 +26,6 @@ const happyDeps = (): ReadyDeps => ({
 	catalogL2Exists: null,
 	browserTimeoutMs: 500,
 });
-
-/** Collect the JSON body written to a mock ServerResponse. */
-const makeMockResponse = () => {
-	const chunks: string[] = [];
-	return {
-		writtenStatus: 0 as number,
-		body: () => JSON.parse(chunks.join('')),
-		res: {
-			writeHead(status: number) {
-				this.writtenStatus = status;
-			},
-			end(chunk: string) {
-				chunks.push(chunk);
-			},
-		} as unknown as import('node:http').ServerResponse,
-		get writtenStatus() {
-			return (this as { _status: number })._status ?? 0;
-		},
-	};
-};
 
 // We need a response mock that tracks status separately from the object literal
 // so writtenStatus updates are visible after the call.
