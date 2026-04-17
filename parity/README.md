@@ -19,13 +19,30 @@ can be surfaced via Loki alerts long before any cutover.
 
 ## Environment variables
 
-| Variable        | Required | Default | Purpose                                                          |
-| --------------- | -------- | ------- | ---------------------------------------------------------------- |
-| `MODAL_URL`     | yes      | —       | Base URL of the Modal deployment (tailnet-reachable).            |
-| `K8S_URL`       | yes      | —       | Base URL of the K8s shadow deployment (tailnet-reachable).       |
-| `HMAC_SECRET`   | yes      | —       | Shared secret used by the middleware for request signing.        |
-| `SERVICE_IDS`   | yes      | —       | Comma-separated Acuity service IDs to probe.                     |
-| `DATE_HORIZON`  | no       | `14`    | Probe days 0..N into the future (inclusive), per service.        |
+| Variable                 | Required | Default | Purpose                                                                          |
+| ------------------------ | -------- | ------- | -------------------------------------------------------------------------------- |
+| `MODAL_URL`              | yes      | —       | Base URL of the Modal deployment (tailnet-reachable).                            |
+| `K8S_URL`                | yes      | —       | Base URL of the K8s shadow deployment (tailnet-reachable).                       |
+| `ACUITY_MW_AUTH_TOKEN`   | yes      | —       | Bearer token the middleware server requires (`AUTH_TOKEN` on the server side).   |
+| `ACUITY_MW_HMAC_SECRET`  | yes      | —       | Shared HMAC secret for replay-protection signing (`HMAC_SECRET` legacy alias).   |
+| `SERVICE_IDS`            | yes      | —       | Comma-separated Acuity service IDs to probe.                                     |
+| `DATE_HORIZON`           | no       | `14`    | Probe days 0..N into the future (inclusive), per service.                        |
+
+### Auth model
+
+Every request to both backends sends **two** auth mechanisms:
+
+1. **Bearer token** (`Authorization: Bearer <ACUITY_MW_AUTH_TOKEN>`) — the
+   mechanism the middleware server actually enforces. Requests without a valid
+   `AUTH_TOKEN` header are rejected 401.
+2. **HMAC headers** (`X-Timestamp` + `X-Signature`) — replay-protection
+   signing for future tightening. The server currently logs these but does not
+   enforce them; they are included now so the infrastructure is in place before
+   enforcement is added.
+
+The HMAC signature is `HMAC-SHA256(secret, timestamp + path)` where `timestamp`
+is the Unix epoch in milliseconds and `path` is the request path including query
+string (e.g., `/availability/slots?service=12345&date=2026-05-01`).
 
 Both `MODAL_URL` and `K8S_URL` must be tailnet-reachable from the harness host.
 The harness never punches out to the public internet — it relies on the same
@@ -94,19 +111,23 @@ Run directly from a tailnet host with environment variables set:
 ```bash
 export MODAL_URL='https://modal.example-tailnet.internal'
 export K8S_URL='https://k8s.example-tailnet.internal'
-export HMAC_SECRET='...'
+export ACUITY_MW_AUTH_TOKEN='...'
+export ACUITY_MW_HMAC_SECRET='...'
 export SERVICE_IDS='12345,67890'
 export DATE_HORIZON=14
 
 tsx parity/check.ts
 ```
 
-Each probe emits one NDJSON line to stdout:
+Each probe emits one NDJSON line to stdout with structured fields:
 
 ```json
-{"ts":"2026-04-17T06:30:00.000Z","level":"OK","detail":"drift=0"}
-{"ts":"2026-04-17T06:30:00.100Z","level":"WARN","detail":"drift=3, onlyModal=2, onlyK8s=1"}
+{"ts":"2026-04-17T06:30:00.000Z","service":"12345","date":"2026-05-01","modalCount":4,"k8sCount":4,"level":"OK","detail":"drift=0"}
+{"ts":"2026-04-17T06:30:00.100Z","service":"12345","date":"2026-05-02","modalCount":5,"k8sCount":8,"level":"WARN","detail":"drift=3, onlyModal=2, onlyK8s=1"}
 ```
+
+The `service` and `date` fields allow T22 rollup queries to aggregate by service
+or date window without needing to parse the `detail` string.
 
 ## Structure
 

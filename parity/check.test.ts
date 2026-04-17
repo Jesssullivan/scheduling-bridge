@@ -1,6 +1,15 @@
-import { describe, expect, it } from 'vitest';
-import { classifyDiff, type SlotsResponse } from './check.js';
+import { createHmac } from 'node:crypto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  classifyDiff,
+  fetchWithHmac,
+  runParityCheck,
+  type SlotsResponse,
+} from './check.js';
 
+// ---------------------------------------------------------------------------
+// classifyDiff — four classifier bands
+// ---------------------------------------------------------------------------
 describe('classifyDiff for /availability/slots', () => {
   const modal: SlotsResponse = {
     service_id: 's1',
@@ -40,5 +49,140 @@ describe('classifyDiff for /availability/slots', () => {
       })),
     };
     expect(classifyDiff(modal, k8s).level).toBe('CRITICAL');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchWithHmac — signature shape + Bearer header
+// ---------------------------------------------------------------------------
+describe('fetchWithHmac signature shape', () => {
+  const SECRET = 'test-secret-abc';
+  const BASE = 'https://modal.example.internal';
+  const PATH = '/availability/slots?service=99&date=2026-05-01';
+  const BEARER = 'my-bearer-token';
+
+  let capturedRequest: Request | undefined;
+  let restoreFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    restoreFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedRequest = new Request(input, init);
+      return new Response(JSON.stringify({ service_id: '99', slots: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+  });
+
+  afterEach(() => {
+    globalThis.fetch = restoreFetch;
+  });
+
+  it('sends X-Timestamp, X-Signature, and Authorization: Bearer headers', async () => {
+    await fetchWithHmac(BASE, PATH, SECRET, BEARER);
+
+    expect(capturedRequest).toBeDefined();
+    const ts = capturedRequest!.headers.get('X-Timestamp');
+    const sig = capturedRequest!.headers.get('X-Signature');
+    const auth = capturedRequest!.headers.get('Authorization');
+
+    expect(ts).not.toBeNull();
+    expect(sig).not.toBeNull();
+    expect(auth).toBe(`Bearer ${BEARER}`);
+
+    // Independently recompute expected HMAC
+    const expected = createHmac('sha256', SECRET).update(`${ts}${PATH}`).digest('hex');
+    expect(sig).toBe(expected);
+  });
+
+  it('omits Authorization header when no bearerToken supplied', async () => {
+    await fetchWithHmac(BASE, PATH, SECRET);
+
+    expect(capturedRequest!.headers.get('Authorization')).toBeNull();
+    expect(capturedRequest!.headers.get('X-Signature')).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runParityCheck — happy path and error path
+// ---------------------------------------------------------------------------
+describe('runParityCheck', () => {
+  const makeSlotPayload = (slots: string[]): SlotsResponse => ({
+    service_id: 'svc1',
+    slots: slots.map(s => ({ start_iso: s })),
+  });
+
+  const happyPayload = makeSlotPayload([
+    '2026-05-01T10:00:00Z',
+    '2026-05-01T11:00:00Z',
+  ]);
+
+  let restoreFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    restoreFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = restoreFetch;
+  });
+
+  it('happy path: identical payloads → classification OK with all structured fields', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify(happyPayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const results = await runParityCheck({
+      modalUrl: 'https://modal.internal',
+      k8sUrl: 'https://k8s.internal',
+      hmacSecret: 'secret',
+      serviceIds: ['svc1'],
+      dateHorizonDays: 0,
+    });
+
+    expect(results).toHaveLength(1);
+    const r = results[0];
+    expect(r.level).toBe('OK');
+    expect(r.service).toBe('svc1');
+    expect(r.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(r.modalCount).toBe(2);
+    expect(r.k8sCount).toBe(2);
+    expect(typeof r.detail).toBe('string');
+  });
+
+  it('error path: K8s fetch throws → emits CRITICAL rather than crashing', async () => {
+    let callCount = 0;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      callCount++;
+      if (url.startsWith('https://k8s.internal')) {
+        throw new Error('connection refused');
+      }
+      return new Response(JSON.stringify(happyPayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    const results = await runParityCheck({
+      modalUrl: 'https://modal.internal',
+      k8sUrl: 'https://k8s.internal',
+      hmacSecret: 'secret',
+      serviceIds: ['svc1'],
+      dateHorizonDays: 0,
+    });
+
+    expect(results).toHaveLength(1);
+    const r = results[0];
+    expect(r.level).toBe('CRITICAL');
+    expect(r.detail).toMatch(/fetch error/);
+    expect(r.service).toBe('svc1');
+    // modalCount / k8sCount are sentinel -1 on error
+    expect(r.modalCount).toBe(-1);
+    expect(r.k8sCount).toBe(-1);
   });
 });

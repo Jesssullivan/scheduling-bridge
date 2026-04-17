@@ -4,12 +4,20 @@ import { createHmac } from 'node:crypto';
 export interface Slot { start_iso: string }
 export interface SlotsResponse { service_id: string; slots: Slot[] }
 export type DiffLevel = 'OK' | 'WARN' | 'CRITICAL';
-export interface DiffResult { level: DiffLevel; detail: string }
+
+export interface DiffResult {
+  service: string;
+  date: string;
+  modalCount: number;
+  k8sCount: number;
+  level: DiffLevel;
+  detail: string;
+}
 
 const sign = (secret: string, path: string, ts: string): string =>
   createHmac('sha256', secret).update(`${ts}${path}`).digest('hex');
 
-export const classifyDiff = (modal: SlotsResponse, k8s: SlotsResponse): DiffResult => {
+export const classifyDiff = (modal: SlotsResponse, k8s: SlotsResponse): { level: DiffLevel; detail: string } => {
   const modalSet = new Set(modal.slots.map(s => s.start_iso));
   const k8sSet = new Set(k8s.slots.map(s => s.start_iso));
   const onlyModal = [...modalSet].filter(s => !k8sSet.has(s));
@@ -21,14 +29,21 @@ export const classifyDiff = (modal: SlotsResponse, k8s: SlotsResponse): DiffResu
   return { level: 'CRITICAL', detail: `drift=${drift}, onlyModal=${onlyModal.length}, onlyK8s=${onlyK8s.length}` };
 };
 
-const fetchWithHmac = async (base: string, path: string, secret: string): Promise<unknown> => {
+export const fetchWithHmac = async (
+  base: string,
+  path: string,
+  secret: string,
+  bearerToken?: string,
+): Promise<unknown> => {
   const ts = Date.now().toString();
-  const res = await fetch(`${base}${path}`, {
-    headers: {
-      'X-Timestamp': ts,
-      'X-Signature': sign(secret, path, ts),
-    },
-  });
+  const headers: Record<string, string> = {
+    'X-Timestamp': ts,
+    'X-Signature': sign(secret, path, ts),
+  };
+  if (bearerToken) {
+    headers['Authorization'] = `Bearer ${bearerToken}`;
+  }
+  const res = await fetch(`${base}${path}`, { headers });
   if (!res.ok) throw new Error(`${base}${path} → ${res.status}`);
   return res.json();
 };
@@ -37,6 +52,7 @@ export interface ParityConfig {
   modalUrl: string;
   k8sUrl: string;
   hmacSecret: string;
+  bearerToken?: string;
   serviceIds: string[];
   dateHorizonDays: number;
 }
@@ -51,11 +67,26 @@ export const runParityCheck = async (cfg: ParityConfig): Promise<DiffResult[]> =
       const iso = date.toISOString().slice(0, 10);
       const path = `/availability/slots?service=${sid}&date=${iso}`;
       try {
-        const modal = (await fetchWithHmac(cfg.modalUrl, path, cfg.hmacSecret)) as SlotsResponse;
-        const k8s = (await fetchWithHmac(cfg.k8sUrl, path, cfg.hmacSecret)) as SlotsResponse;
-        results.push(classifyDiff(modal, k8s));
+        const modal = (await fetchWithHmac(cfg.modalUrl, path, cfg.hmacSecret, cfg.bearerToken)) as SlotsResponse;
+        const k8s = (await fetchWithHmac(cfg.k8sUrl, path, cfg.hmacSecret, cfg.bearerToken)) as SlotsResponse;
+        const { level, detail } = classifyDiff(modal, k8s);
+        results.push({
+          service: sid,
+          date: iso,
+          modalCount: modal.slots.length,
+          k8sCount: k8s.slots.length,
+          level,
+          detail,
+        });
       } catch (e) {
-        results.push({ level: 'CRITICAL', detail: `fetch error: ${String(e)}` });
+        results.push({
+          service: sid,
+          date: iso,
+          modalCount: -1,
+          k8sCount: -1,
+          level: 'CRITICAL',
+          detail: `fetch error: ${String(e)}`,
+        });
       }
     }
   }
@@ -68,7 +99,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     const results = await runParityCheck({
       modalUrl: process.env.MODAL_URL!,
       k8sUrl: process.env.K8S_URL!,
-      hmacSecret: process.env.HMAC_SECRET!,
+      hmacSecret: process.env.ACUITY_MW_HMAC_SECRET ?? process.env.HMAC_SECRET!,
+      bearerToken: process.env.ACUITY_MW_AUTH_TOKEN,
       serviceIds: (process.env.SERVICE_IDS ?? '').split(',').filter(Boolean),
       dateHorizonDays: Number(process.env.DATE_HORIZON ?? 14),
     });
