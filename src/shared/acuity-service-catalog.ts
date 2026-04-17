@@ -28,6 +28,12 @@ export interface AcuityServiceCatalog {
  * the catalog stays usable from non-Effect callers and is trivially mockable
  * in tests. The wiring module (e.g. `src/server/handler.ts`) is responsible
  * for providing the `RedisL2` context that the real `getCached` needs.
+ *
+ * NOTE: this interface intentionally erases Effect error/context channels.
+ * Callers wiring a real `RedisL2` instance must provide a
+ * `(mk: Effect.Effect<A>) => ...` shim that handles `RedisError` /
+ * `CacheTimeoutError` (or turns them into defects). Errors not handled
+ * before `Effect.runPromise` below will reject as unknown defects.
  */
 export interface ServiceCatalogRedisL2 {
 	readonly getCached: <A>(
@@ -193,6 +199,7 @@ export const createAcuityServiceCatalog = (
 			// L2 path: delegate single-flight + TTL to the networked cache.
 			// Coordination across pods is only correct when every refresh goes
 			// through L2, so we skip the in-process `loadInFlight` dedup here.
+			// bump the "v1" suffix when Service shape changes to invalidate stale L2 entries across rolling deploys
 			const cacheKey = `acuity:services:v1:${config.baseUrl}`;
 			const ttlSeconds = Math.max(1, Math.floor(cacheTtlMs / 1000));
 			const services = await Effect.runPromise(

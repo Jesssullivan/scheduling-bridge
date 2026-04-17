@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
 	createAcuityServiceCatalog,
 	parseStaticServicesJson,
+	type AcuityServiceCatalogConfig,
 	type ServiceCatalogLogger,
+	type ServiceCatalogRedisL2,
 } from '../acuity-service-catalog.js';
 import type { Service } from '../../core/types.js';
 import type { AcuityBusinessData } from '../../adapters/acuity/steps/index.js';
@@ -190,5 +192,22 @@ describe('AcuityServiceCatalog with Redis L2', () => {
 
 		// in-proc cache hit on second call.
 		expect(loadSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it('surfaces redisL2.getCached errors without falling back to L1', async () => {
+		const boom = new Error('redis-down');
+		const mkGetCached = vi.fn().mockImplementation(
+			() => Effect.fail(boom as never) as Effect.Effect<Service[]>,
+		);
+		const fakeL2 = { getCached: mkGetCached } as ServiceCatalogRedisL2;
+
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://x.as.me',
+			redisL2: fakeL2,
+			staticServices: null,
+		} as unknown as AcuityServiceCatalogConfig);
+
+		await expect(catalog.getServices()).rejects.toThrow();
+		expect(mkGetCached).toHaveBeenCalledTimes(1);
 	});
 });
