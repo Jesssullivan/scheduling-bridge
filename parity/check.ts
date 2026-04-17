@@ -14,6 +14,11 @@ export interface DiffResult {
   detail: string;
 }
 
+// Canonical HMAC input is `${ts}${path}` only. Method and host are intentionally
+// omitted: the harness runs over Tailscale (single known host) and exclusively
+// issues GETs, so both would be constants that add no replay-prevention value.
+// If the deployment ever exposes writes or fan-outs to multiple hosts, extend
+// this to SigV4-style (METHOD + HOST + PATH + BODY_HASH + TS).
 const sign = (secret: string, path: string, ts: string): string =>
   createHmac('sha256', secret).update(`${ts}${path}`).digest('hex');
 
