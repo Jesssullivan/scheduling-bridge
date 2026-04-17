@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   classifyDiff,
@@ -91,8 +91,11 @@ describe('fetchWithHmac signature shape', () => {
     expect(sig).not.toBeNull();
     expect(auth).toBe(`Bearer ${BEARER}`);
 
-    // Independently recompute expected HMAC
-    const expected = createHmac('sha256', SECRET).update(`${ts}${PATH}`).digest('hex');
+    // Independently recompute expected HMAC: bodyHash = sha256('') for bodyless GET.
+    const emptyBodyHash = createHash('sha256').update('').digest('hex');
+    const expected = createHmac('sha256', SECRET)
+      .update(`${ts}${PATH}${emptyBodyHash}`)
+      .digest('hex');
     expect(sig).toBe(expected);
   });
 
@@ -101,6 +104,60 @@ describe('fetchWithHmac signature shape', () => {
 
     expect(capturedRequest!.headers.get('Authorization')).toBeNull();
     expect(capturedRequest!.headers.get('X-Signature')).not.toBeNull();
+  });
+
+  it('sends POST with Content-Type JSON and stringified body when body provided', async () => {
+    const body = { service_id: '99', date: '2026-05-01' };
+    await fetchWithHmac(BASE, '/availability/slots', SECRET, undefined, body);
+
+    expect(capturedRequest!.method).toBe('POST');
+    expect(capturedRequest!.headers.get('Content-Type')).toBe('application/json');
+
+    // Verify body was serialized and sent
+    const sent = await capturedRequest!.text();
+    expect(sent).toBe(JSON.stringify(body));
+  });
+
+  it('canonical string includes body hash: signatures differ with/without body', async () => {
+    // Freeze time so timestamps match between the two calls
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-01T12:00:00Z'));
+
+    try {
+      let sigNoBody: string | null = null;
+      let sigWithBody: string | null = null;
+      let sigEmptyBodyObj: string | null = null;
+
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const req = new Request(input, init);
+        const s = req.headers.get('X-Signature');
+        // Order of capture matches order of calls below
+        if (sigNoBody === null) sigNoBody = s;
+        else if (sigWithBody === null) sigWithBody = s;
+        else sigEmptyBodyObj = s;
+        return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+      });
+
+      // Call 1: no body (GET)
+      await fetchWithHmac(BASE, '/availability/slots', SECRET);
+      // Call 2: with body (POST)
+      await fetchWithHmac(BASE, '/availability/slots', SECRET, undefined, { service_id: '99', date: '2026-05-01' });
+      // Call 3: with explicit empty-string-equivalent body — JSON.stringify('') === '""', so this MUST differ from Call 1.
+      // To verify the "empty body vs no body" equivalence, we pass an empty object and compare against no body separately.
+
+      expect(sigNoBody).not.toBeNull();
+      expect(sigWithBody).not.toBeNull();
+      // Different bodies → different signatures
+      expect(sigWithBody).not.toBe(sigNoBody);
+
+      // And: "no body at all" vs "body = undefined" should produce the same canonical string
+      // (both take the bodyHash of ''). Re-run the no-body path a second time to confirm stable output.
+      sigEmptyBodyObj = null;
+      await fetchWithHmac(BASE, '/availability/slots', SECRET);
+      expect(sigEmptyBodyObj).toBe(sigNoBody);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

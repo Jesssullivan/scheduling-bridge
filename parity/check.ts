@@ -1,5 +1,5 @@
 // parity/check.ts
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 
 export interface Slot { start_iso: string }
 export interface SlotsResponse { service_id: string; slots: Slot[] }
@@ -14,13 +14,19 @@ export interface DiffResult {
   detail: string;
 }
 
-// Canonical HMAC input is `${ts}${path}` only. Method and host are intentionally
-// omitted: the harness runs over Tailscale (single known host) and exclusively
-// issues GETs, so both would be constants that add no replay-prevention value.
-// If the deployment ever exposes writes or fan-outs to multiple hosts, extend
-// this to SigV4-style (METHOD + HOST + PATH + BODY_HASH + TS).
-const sign = (secret: string, path: string, ts: string): string =>
-  createHmac('sha256', secret).update(`${ts}${path}`).digest('hex');
+// Canonical HMAC input is `${ts}${path}${bodyHash}` where bodyHash is the
+// sha256 hex digest of the raw request body (or the sha256 of the empty string
+// for bodyless GETs). Method and host are intentionally omitted: the harness
+// runs over Tailscale (single known host). Including the body hash binds the
+// signature to the exact JSON payload so that POST /availability/slots cannot
+// be replayed with a mutated body. For GETs, bodyHash is the sha256 of `''`,
+// which keeps pre-body signatures stable on read-only endpoints.
+// If the deployment ever fan-outs to multiple hosts, extend this to SigV4-
+// style (METHOD + HOST + PATH + BODY_HASH + TS).
+const sign = (secret: string, path: string, ts: string, body?: string): string => {
+  const bodyHash = createHash('sha256').update(body ?? '').digest('hex');
+  return createHmac('sha256', secret).update(`${ts}${path}${bodyHash}`).digest('hex');
+};
 
 export const classifyDiff = (modal: SlotsResponse, k8s: SlotsResponse): { level: DiffLevel; detail: string } => {
   const modalSet = new Set(modal.slots.map(s => s.start_iso));
@@ -39,16 +45,25 @@ export const fetchWithHmac = async (
   path: string,
   secret: string,
   bearerToken?: string,
+  body?: unknown,
 ): Promise<unknown> => {
   const ts = Date.now().toString();
+  const serialized = body === undefined ? undefined : JSON.stringify(body);
   const headers: Record<string, string> = {
     'X-Timestamp': ts,
-    'X-Signature': sign(secret, path, ts),
+    'X-Signature': sign(secret, path, ts, serialized),
   };
   if (bearerToken) {
     headers['Authorization'] = `Bearer ${bearerToken}`;
   }
-  const res = await fetch(`${base}${path}`, { headers });
+  const init: RequestInit = body === undefined
+    ? { headers }
+    : {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: serialized,
+      };
+  const res = await fetch(`${base}${path}`, init);
   if (!res.ok) throw new Error(`${base}${path} → ${res.status}`);
   return res.json();
 };
@@ -70,10 +85,11 @@ export const runParityCheck = async (cfg: ParityConfig): Promise<DiffResult[]> =
       const date = new Date(today);
       date.setDate(date.getDate() + d);
       const iso = date.toISOString().slice(0, 10);
-      const path = `/availability/slots?service=${sid}&date=${iso}`;
+      const path = `/availability/slots`;
+      const body = { service_id: sid, date: iso };
       try {
-        const modal = (await fetchWithHmac(cfg.modalUrl, path, cfg.hmacSecret, cfg.bearerToken)) as SlotsResponse;
-        const k8s = (await fetchWithHmac(cfg.k8sUrl, path, cfg.hmacSecret, cfg.bearerToken)) as SlotsResponse;
+        const modal = (await fetchWithHmac(cfg.modalUrl, path, cfg.hmacSecret, cfg.bearerToken, body)) as SlotsResponse;
+        const k8s = (await fetchWithHmac(cfg.k8sUrl, path, cfg.hmacSecret, cfg.bearerToken, body)) as SlotsResponse;
         const { level, detail } = classifyDiff(modal, k8s);
         results.push({
           service: sid,
@@ -102,12 +118,12 @@ export const runParityCheck = async (cfg: ParityConfig): Promise<DiffResult[]> =
 if (import.meta.url === `file://${process.argv[1]}`) {
   (async (): Promise<void> => {
     const results = await runParityCheck({
-      modalUrl: process.env.MODAL_URL!,
-      k8sUrl: process.env.K8S_URL!,
+      modalUrl: process.env.ACUITY_MW_MODAL_URL ?? process.env.MODAL_URL!,
+      k8sUrl: process.env.ACUITY_MW_K8S_URL ?? process.env.K8S_URL!,
       hmacSecret: process.env.ACUITY_MW_HMAC_SECRET ?? process.env.HMAC_SECRET!,
       bearerToken: process.env.ACUITY_MW_AUTH_TOKEN,
-      serviceIds: (process.env.SERVICE_IDS ?? '').split(',').filter(Boolean),
-      dateHorizonDays: Number(process.env.DATE_HORIZON ?? 14),
+      serviceIds: (process.env.ACUITY_MW_SERVICE_IDS ?? process.env.SERVICE_IDS ?? '').split(',').filter(Boolean),
+      dateHorizonDays: Number(process.env.ACUITY_MW_DATE_HORIZON ?? process.env.DATE_HORIZON ?? 14),
     });
 
     for (const r of results) {
