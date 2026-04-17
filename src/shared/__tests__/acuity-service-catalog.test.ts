@@ -210,4 +210,48 @@ describe('AcuityServiceCatalog with Redis L2', () => {
 		await expect(catalog.getServices()).rejects.toThrow();
 		expect(mkGetCached).toHaveBeenCalledTimes(1);
 	});
+
+	it('increments scrape counter with source=lock_winner when L2 runs mk', async () => {
+		const { metrics } = await import('../metrics.js');
+		const winnerBefore =
+			(await metrics.serviceCatalogScrapeTotal.get()).values.find(
+				(v) => v.labels.source === 'lock_winner',
+			)?.value ?? 0;
+
+		const mockL2: ServiceCatalogRedisL2 = {
+			getCached: <A>(_k: string, _ttl: number, mk: Effect.Effect<A>) =>
+				Effect.tap(mk, () =>
+					Effect.sync(() =>
+						metrics.serviceCatalogScrapeTotal.inc({ source: 'lock_winner' }),
+					),
+				),
+		};
+
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://x.as.me',
+			staticServices: null,
+			fetchBusinessData: async () => null,
+			loadScraperServices: async () => [
+				{
+					id: '1',
+					name: 's',
+					duration: 60,
+					price: 0,
+					currency: 'USD',
+					category: 'test',
+					active: true,
+				},
+			],
+			redisL2: mockL2,
+			logger: makeLogger(),
+		});
+		await catalog.getServices();
+
+		const winnerAfter =
+			(await metrics.serviceCatalogScrapeTotal.get()).values.find(
+				(v) => v.labels.source === 'lock_winner',
+			)?.value ?? 0;
+
+		expect(winnerAfter).toBe(winnerBefore + 1);
+	});
 });

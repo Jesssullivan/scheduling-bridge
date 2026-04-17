@@ -4,6 +4,8 @@ import { Context, Data, Effect, Layer } from 'effect';
 import type { Redis as IORedis, RedisOptions } from 'ioredis';
 import { Redis as IORedisImpl } from 'ioredis';
 
+import { metrics } from './metrics.js';
+
 /**
  * RedisL2 — Effect-wrapped ioredis client with SETNX single-flight `getCached`.
  *
@@ -134,6 +136,15 @@ export const getCached = <A>(
 				catch: (e) => new RedisError({ cause: e }),
 			}).pipe(Effect.ignore);
 
+			// Record that this pod won the lock and is about to run mk.
+			// prom-client's Histogram.startTimer returns `endTimer()` — we
+			// invoke it once mk settles (success or failure) so duration
+			// observations match wall-time cost of the scrape.
+			yield* Effect.sync(() =>
+				metrics.serviceCatalogScrapeTotal.inc({ source: 'lock_winner' }),
+			);
+			const endTimer = metrics.serviceCatalogRefreshDuration.startTimer();
+
 			return yield* Effect.gen(function* () {
 				const value = yield* Effect.tryPromise({
 					try: () => mk(),
@@ -144,7 +155,10 @@ export const getCached = <A>(
 					catch: (e) => new RedisError({ cause: e }),
 				});
 				return value;
-			}).pipe(Effect.ensuring(releaseLock));
+			}).pipe(
+				Effect.ensuring(Effect.sync(() => endTimer())),
+				Effect.ensuring(releaseLock),
+			);
 		}
 
 		// ── Loser path: poll for cache ──
@@ -155,7 +169,15 @@ export const getCached = <A>(
 				try: () => client.get(key),
 				catch: (e) => new RedisError({ cause: e }),
 			});
-			if (v !== null) return JSON.parse(v) as A;
+			if (v !== null) {
+				// Cache became fresh while we polled — the winner in some other
+				// pod ran mk on our behalf. Count this as a lock_loser scrape
+				// so the SLI can distinguish "we scraped" vs "somebody else did".
+				yield* Effect.sync(() =>
+					metrics.serviceCatalogScrapeTotal.inc({ source: 'lock_loser' }),
+				);
+				return JSON.parse(v) as A;
+			}
 		}
 
 		// ── Degraded single-flight: loser timed out, run mk itself ──
