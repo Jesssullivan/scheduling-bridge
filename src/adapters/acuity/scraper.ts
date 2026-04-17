@@ -30,6 +30,7 @@ const getChromium = async () => {
 import { Effect } from 'effect';
 import type { Service, Provider, TimeSlot, AcuityError, InfrastructureError, SchedulingResult } from '../../core/types.js';
 import { Errors } from '../../core/types.js';
+import { observePageOp } from '../../shared/metrics.js';
 
 // Keep E for internal class methods (deprecated, not worth migrating)
 const E = {
@@ -145,13 +146,18 @@ export class AcuityScraper {
 
     try {
       page = await this.createPage();
-      await page.goto(this.config.baseUrl, { waitUntil: 'networkidle' });
+      // Time the entire catalog-scrape page interaction — navigation plus
+      // the selector wait that unblocks downstream DOM reads. Downstream
+      // `page.evaluate` cost is small relative to network + render.
+      await observePageOp('scrape_catalog', async () => {
+        await page!.goto(this.config.baseUrl, { waitUntil: 'networkidle' });
 
-      // Wait for appointment types to load
-      await page.waitForSelector('.select-item, .appointment-type-item, [data-testid="appointment-type"]', {
-        timeout: 10000,
-      }).catch(() => {
-        // Some Acuity pages use different selectors
+        // Wait for appointment types to load
+        await page!.waitForSelector('.select-item, .appointment-type-item, [data-testid="appointment-type"]', {
+          timeout: 10000,
+        }).catch(() => {
+          // Some Acuity pages use different selectors
+        });
       });
 
       // Try multiple selector patterns for robustness

@@ -7,6 +7,7 @@ import {
 	type ServiceCatalogLogger,
 	type ServiceCatalogRedisL2,
 } from '../acuity-service-catalog.js';
+import { _resetCacheHitRatioForTests, metrics } from '../metrics.js';
 import type { Service } from '../../core/types.js';
 import type { AcuityBusinessData } from '../../adapters/acuity/steps/index.js';
 
@@ -253,5 +254,54 @@ describe('AcuityServiceCatalog with Redis L2', () => {
 			)?.value ?? 0;
 
 		expect(winnerAfter).toBe(winnerBefore + 1);
+	});
+});
+
+describe('AcuityServiceCatalog cache hit ratio wiring', () => {
+	const ratioGauge = async (): Promise<number> => {
+		const snap = await metrics.cacheHitRatio.get();
+		return snap.values[0]?.value ?? NaN;
+	};
+
+	it('records a miss on first load and a hit on subsequent L1 reads', async () => {
+		_resetCacheHitRatioForTests();
+
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://example.com',
+			cacheTtlMs: 60_000,
+			fetchBusinessData: vi.fn(async () => ({} as AcuityBusinessData)),
+			businessToServices: vi.fn(() => services),
+			logger: makeLogger(),
+		});
+
+		// Startup value: no samples, ratio should be the "healthy" 1.0 so the
+		// AcuityCacheHitRatioLow alert does not page an empty pod.
+		expect(await ratioGauge()).toBe(1);
+
+		// First call: cold cache → miss, ratio becomes 0/1 = 0.
+		await catalog.getServices();
+		expect(await ratioGauge()).toBe(0);
+
+		// Second call: inside TTL, served from L1 → hit, ratio = 1/2 = 0.5.
+		await catalog.getServices();
+		expect(await ratioGauge()).toBeCloseTo(0.5, 10);
+
+		// Third call: another L1 hit → ratio = 2/3.
+		await catalog.getServices();
+		expect(await ratioGauge()).toBeCloseTo(2 / 3, 10);
+	});
+
+	it('treats static-service configuration as a cache hit', async () => {
+		_resetCacheHitRatioForTests();
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://example.com',
+			staticServices: services,
+			logger: makeLogger(),
+		});
+
+		await catalog.getServices();
+		// Static services are a declared configuration surface — they should
+		// never flip the gauge into "unhealthy" territory.
+		expect(await ratioGauge()).toBe(1);
 	});
 });

@@ -120,7 +120,13 @@ export const getCached = <A>(
 			try: () => client.get(key),
 			catch: (e) => new RedisError({ cause: e }),
 		});
-		if (hit !== null) return JSON.parse(hit) as A;
+		if (hit !== null) {
+			// L2 hit: cached value served without running mk. Record as a cache
+			// hit so the derived `acuity_cache_hit_ratio` gauge reflects actual
+			// networked-cache effectiveness.
+			metrics.recordCacheHit();
+			return JSON.parse(hit) as A;
+		}
 
 		// ── Try to acquire single-flight lock ──
 		const token = randomBytes(16).toString('hex');
@@ -140,9 +146,12 @@ export const getCached = <A>(
 			// prom-client's Histogram.startTimer returns `endTimer()` — we
 			// invoke it once mk settles (success or failure) so duration
 			// observations match wall-time cost of the scrape.
-			yield* Effect.sync(() =>
-				metrics.serviceCatalogScrapeTotal.inc({ source: 'lock_winner' }),
-			);
+			yield* Effect.sync(() => {
+				metrics.serviceCatalogScrapeTotal.inc({ source: 'lock_winner' });
+				// Winner path runs mk against the origin — this is a cache miss
+				// from the ratio's perspective.
+				metrics.recordCacheMiss();
+			});
 			const endTimer = metrics.serviceCatalogRefreshDuration.startTimer();
 
 			return yield* Effect.gen(function* () {
@@ -173,9 +182,12 @@ export const getCached = <A>(
 				// Cache became fresh while we polled — the winner in some other
 				// pod ran mk on our behalf. Count this as a lock_loser scrape
 				// so the SLI can distinguish "we scraped" vs "somebody else did".
-				yield* Effect.sync(() =>
-					metrics.serviceCatalogScrapeTotal.inc({ source: 'lock_loser' }),
-				);
+				yield* Effect.sync(() => {
+					metrics.serviceCatalogScrapeTotal.inc({ source: 'lock_loser' });
+					// From this pod's perspective, another pod served us a
+					// cached value — count as a cache hit.
+					metrics.recordCacheHit();
+				});
 				return JSON.parse(v) as A;
 			}
 		}
@@ -186,6 +198,7 @@ export const getCached = <A>(
 		console.warn(
 			`[redis-l2] loser timeout ${MAX_WAIT_MS}ms on key=${key}, falling through`,
 		);
+		yield* Effect.sync(() => metrics.recordCacheMiss());
 		const fallback = yield* Effect.tryPromise({
 			try: () => mk(),
 			catch: (e) => new RedisError({ cause: e }),

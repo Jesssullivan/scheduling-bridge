@@ -17,6 +17,7 @@
 import { Effect } from 'effect';
 import type { Page, ElementHandle } from 'playwright-core';
 import { BrowserService } from '../../../shared/browser-service.js';
+import { observePageOpEffect } from '../../../shared/metrics.js';
 import { WizardStepError } from '../errors.js';
 import { resolveSelector, probe, Selectors } from '../selectors.js';
 import type { ClientInfo } from '../../../core/types.js';
@@ -55,7 +56,7 @@ export interface NavigateResult {
  * Flow: Service page → Book → Calendar → Time slot → Select and continue
  */
 export const navigateToBooking = (params: NavigateParams) =>
-	Effect.gen(function* () {
+	observePageOpEffect('wizard_navigate', Effect.gen(function* () {
 		const { acquirePage, config } = yield* BrowserService;
 		const page: Page = yield* acquirePage;
 
@@ -114,7 +115,7 @@ export const navigateToBooking = (params: NavigateParams) =>
 			selectedDate: targetDate.toISOString().split('T')[0],
 			selectedTime: targetTime,
 		} satisfies NavigateResult;
-	});
+	}));
 
 // =============================================================================
 // STEP 2: SERVICE SELECTION

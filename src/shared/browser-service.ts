@@ -9,6 +9,7 @@
 import { Context, Effect, Layer, Scope } from 'effect';
 import type { Browser, Page } from 'playwright-core';
 import { BrowserError } from '../adapters/acuity/errors.js';
+import { metrics } from './metrics.js';
 
 // =============================================================================
 // CONFIGURATION
@@ -138,16 +139,25 @@ export const BrowserSessionLive = Layer.scoped(
 	Effect.gen(function* () {
 		const { browser, config } = yield* BrowserProcess;
 
+		// Track the active page as a Playwright "session" via acquire/release —
+		// `browserActiveSessions` is incremented when the page is created and
+		// decremented when the scope closes (including on interrupt / failure),
+		// so the gauge reflects the number of live contexts at any instant.
 		const page: Page = yield* Effect.acquireRelease(
 			Effect.tryPromise({
 				try: async () => {
 					const p = await browser.newPage({ userAgent: config.userAgent });
 					p.setDefaultTimeout(config.timeout);
+					metrics.browserActiveSessions.inc();
 					return p;
 				},
 				catch: (e) => new BrowserError({ reason: 'PAGE_FAILED', cause: e }),
 			}),
-			(p) => Effect.promise(() => p.close()).pipe(Effect.ignoreLogged),
+			(p) =>
+				Effect.promise(() => p.close()).pipe(
+					Effect.ensuring(Effect.sync(() => metrics.browserActiveSessions.dec())),
+					Effect.ignoreLogged,
+				),
 		);
 
 		const acquirePage = Effect.acquireRelease(

@@ -6,6 +6,7 @@ import {
 	type AcuityBusinessData,
 } from '../adapters/acuity/steps/index.js';
 import { Errors, type SchedulingError, type Service } from '../core/types.js';
+import { metrics } from './metrics.js';
 
 export interface ServiceCatalogLogger {
 	readonly log?: (...args: unknown[]) => void;
@@ -231,10 +232,21 @@ export const createAcuityServiceCatalog = (
 		// When L2 is wired, every call goes through it — L2 is the freshness
 		// authority, not the in-process `cachedServices` buffer. Static
 		// services still short-circuit because they are the declared truth.
+		// Hit/miss accounting for the L2 path is recorded inside
+		// `redis-l2.ts::getCached` so we do not double-count here.
 		if (config.redisL2 && !staticServices) {
 			return runRefresh();
 		}
-		return hasFreshCache() ? cloneServices(cachedServices ?? []) : runRefresh();
+		// L1-only path: a fresh in-process buffer counts as a cache hit, any
+		// path that falls through to `runRefresh()` counts as a miss. Static
+		// services are a declared configuration surface, not a cache, so they
+		// are counted as hits for dashboard continuity.
+		if (hasFreshCache()) {
+			metrics.recordCacheHit();
+			return cloneServices(cachedServices ?? []);
+		}
+		metrics.recordCacheMiss();
+		return runRefresh();
 	};
 
 	return {
