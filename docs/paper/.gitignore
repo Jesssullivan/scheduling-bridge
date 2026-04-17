@@ -12,3 +12,6 @@
 *.vrb
 # PDF is gitignored locally but force-added by CI on main
 *.pdf
+# local python venv for figure regeneration
+.venv/
+__pycache__/
