@@ -14,7 +14,7 @@ on:
 
 jobs:
   package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@jess/tin-164-add-bazel-js-package-workflow
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@0e13cc4e50b191f48191f08b3db081307d3447ce
     with:
       runner_mode: repo_owned
       runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
