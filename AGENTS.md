@@ -20,6 +20,8 @@ It does **not** own:
 - application-specific environment switching
 - site-specific admin UI
 - reusable, backend-agnostic UI components
+- payment capability extraction or booking-surface payment policy
+- canonical public payment method identifiers
 
 ## Strategic Goal
 
@@ -98,6 +100,19 @@ Key architectural lessons already established:
 - URL-based direct reads are preferable when Acuity ids allow them
 - shared service catalog logic should not be duplicated across local and remote paths
 
+Authority boundary rules:
+
+- `@tummycrypt/scheduling-bridge` owns Acuity protocol truth, wizard-step
+  semantics, and remote transport behavior.
+- `@tummycrypt/scheduling-kit` owns reusable booking-controller semantics and
+  canonical public payment identifiers.
+- application repos such as `MassageIthaca` own site policy, environment
+  selection, and which payment capabilities should be exposed on a given
+  surface.
+- if this repo still exports helper contracts like `extractCapabilities`, treat
+  them as transition debt to be removed or deprecated once downstream consumers
+  adopt the package-owned authority.
+
 ## Effect Guidance
 
 Effect is useful here because this repo truly has resource lifecycle problems:
@@ -168,3 +183,5 @@ rather than by implication.
 - Do not confuse this repo with the reusable UI/package layer.
 - Do not let the bridge package declare stale `scheduling-kit` dependencies
   while downstream apps have already moved on.
+- Do not let this repo become the long-term owner of booking-surface payment
+  policy just because it can currently see practitioner settings.
