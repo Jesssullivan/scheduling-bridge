@@ -14,7 +14,7 @@ on:
 
 jobs:
   package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@bcf25551b2a608f3c4169930bfdd7e12e51fd661
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@dde8c378815e47aa027c163278430c0d98ae007b
     with:
       runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON || '["ubuntu-latest"]' }}
       node_versions: '["20", "22"]'
