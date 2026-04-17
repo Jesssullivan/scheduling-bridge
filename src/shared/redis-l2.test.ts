@@ -29,8 +29,11 @@ const run = <A>(
 describe('RedisL2.getCached', () => {
 	let mock: IORedisMock;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		mock = new IORedisMock();
+		// ioredis-mock shares state across instances (module-scoped Redis data),
+		// so we must flushall between tests to guarantee isolation.
+		await mock.flushall();
 	});
 
 	it('returns cached value on hit without calling mk', async () => {
@@ -105,6 +108,7 @@ describe('RedisL2.getCached', () => {
 
 	it(
 		'loser times out at 10s and falls through to run mk independently',
+		{ timeout: 15_000 },
 		async () => {
 			// Pre-seat the lock with a long TTL and never write the cache.
 			await mock.set('lock:stuck', 'ghost-token', 'PX', 60_000, 'NX');
@@ -122,7 +126,6 @@ describe('RedisL2.getCached', () => {
 			expect(elapsed).toBeGreaterThanOrEqual(9_500);
 			expect(elapsed).toBeLessThan(12_000);
 		},
-		{ timeout: 15_000 },
 	);
 
 	it('lock TTL expires after its window; second caller acquires new lock', async () => {
