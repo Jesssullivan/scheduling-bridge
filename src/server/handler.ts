@@ -282,6 +282,15 @@ const redisClient: IORedis | null = REDIS_URL
 		})
 	: null;
 
+// Declare which cache tier is active at boot so operators can diagnose silent
+// L1-only degradation (e.g. REDIS_URL accidentally unset in prod) from logs
+// alone, without having to probe the running process.
+logEvent('INFO', 'Cache mode selected', {
+	event: 'cache_mode_selected',
+	mode: redisClient ? 'l1+l2' : 'l1-only',
+	redisConfigured: Boolean(process.env.REDIS_URL),
+});
+
 if (redisClient) {
 	redisClient.on('error', (e) => {
 		logEvent('ERROR', 'Redis L2 client error', {
@@ -291,7 +300,7 @@ if (redisClient) {
 	});
 }
 
-const redisL2Adapter: ServiceCatalogRedisL2 | undefined = redisClient
+const serviceCatalogRedisL2: ServiceCatalogRedisL2 | undefined = redisClient
 	? {
 			getCached: <A>(
 				key: string,
@@ -319,7 +328,7 @@ const serviceCatalog = createAcuityServiceCatalog({
 	staticServices: parseStaticServicesJson(process.env.SERVICES_JSON),
 	scraperConfig,
 	logger: createServiceCatalogLogger(),
-	redisL2: redisL2Adapter,
+	redisL2: serviceCatalogRedisL2,
 });
 
 const isSchedulingError = (error: unknown): error is SchedulingError =>

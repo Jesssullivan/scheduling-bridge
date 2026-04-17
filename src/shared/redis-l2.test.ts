@@ -3,6 +3,7 @@ import IORedisMock from 'ioredis-mock';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Redis as IORedis } from 'ioredis';
+import { metrics } from './metrics.js';
 import { getCached, RedisL2 } from './redis-l2.js';
 
 /**
@@ -48,6 +49,14 @@ describe('RedisL2.getCached', () => {
 	it('miss -> winner: mk called exactly once, cache written with ~ttl, lock released', async () => {
 		const mk = vi.fn(async () => ({ computed: 42 }));
 
+		// Pin real instrumentation: winner path must inc serviceCatalogScrapeTotal
+		// with source=lock_winner. Delta assertion (not absolute) because the
+		// registry is a module-level singleton and accumulates across tests.
+		const winnerBefore =
+			(await metrics.serviceCatalogScrapeTotal.get()).values.find(
+				(v) => v.labels.source === 'lock_winner',
+			)?.value ?? 0;
+
 		const out = await run(mock, getCached('k', 90, mk));
 		expect(out).toEqual({ computed: 42 });
 		expect(mk).toHaveBeenCalledTimes(1);
@@ -64,6 +73,12 @@ describe('RedisL2.getCached', () => {
 		// Lock released
 		const lock = await mock.get('lock:k');
 		expect(lock).toBeNull();
+
+		const winnerAfter =
+			(await metrics.serviceCatalogScrapeTotal.get()).values.find(
+				(v) => v.labels.source === 'lock_winner',
+			)?.value ?? 0;
+		expect(winnerAfter).toBe(winnerBefore + 1);
 	});
 
 	it('single-flight: only one of N concurrent callers runs mk; others read cache', async () => {
@@ -94,6 +109,13 @@ describe('RedisL2.getCached', () => {
 
 		const mk = vi.fn(async () => ({ wrong: true }));
 
+		// Pin real instrumentation: loser-polls-then-hits path must inc
+		// serviceCatalogScrapeTotal with source=lock_loser.
+		const loserBefore =
+			(await metrics.serviceCatalogScrapeTotal.get()).values.find(
+				(v) => v.labels.source === 'lock_loser',
+			)?.value ?? 0;
+
 		const start = Date.now();
 		const out = await run(mock, getCached('late', 60, mk));
 		const elapsed = Date.now() - start;
@@ -104,6 +126,12 @@ describe('RedisL2.getCached', () => {
 		expect(elapsed).toBeLessThan(1000);
 		// Must have actually polled (waited for winner) — > poll interval.
 		expect(elapsed).toBeGreaterThanOrEqual(150);
+
+		const loserAfter =
+			(await metrics.serviceCatalogScrapeTotal.get()).values.find(
+				(v) => v.labels.source === 'lock_loser',
+			)?.value ?? 0;
+		expect(loserAfter).toBe(loserBefore + 1);
 	});
 
 	it(
