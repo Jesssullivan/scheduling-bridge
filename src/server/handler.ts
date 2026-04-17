@@ -32,9 +32,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { Effect, Exit, Cause, ManagedRuntime, Scope } from 'effect';
+import { Redis as IORedisImpl } from 'ioredis';
+import type { Redis as IORedis } from 'ioredis';
 import type { ScraperConfig } from '../adapters/acuity/scraper.js';
 import {
 	BrowserProcessLive,
+	BrowserProcess,
 	BrowserService,
 	BrowserSessionLive,
 	type BrowserConfig,
@@ -43,7 +46,10 @@ import {
 import {
 	createAcuityServiceCatalog,
 	parseStaticServicesJson,
+	type ServiceCatalogRedisL2,
 } from '../shared/acuity-service-catalog.js';
+import { getCached as redisL2GetCached, RedisL2 } from '../shared/redis-l2.js';
+import { metrics, renderMetrics } from '../shared/metrics.js';
 import { toSchedulingError, type MiddlewareError } from '../adapters/acuity/errors.js';
 import {
 	navigateToBooking,
@@ -61,6 +67,7 @@ import {
 	readSlotsViaUrl,
 } from '../adapters/acuity/steps/read-via-url.js';
 import { buildHealthPayload } from './health.js';
+import { handleReady as _handleReady } from './ready.js';
 import { ndjsonLog } from '../shared/logger.js';
 import type {
 	Booking,
@@ -250,12 +257,80 @@ const runEffect = async <A>(
 	return { ok: false, error: { _tag: 'InfrastructureError', code: 'UNKNOWN', message: Cause.pretty(exit.cause) } };
 };
 
+// =============================================================================
+// REDIS L2 CLIENT + ADAPTER SHIM
+// =============================================================================
+//
+// `RedisL2.getCached` (from `shared/redis-l2.ts`) expects `mk: () => Promise<A>`
+// because its Effect.gen generator internally calls `Effect.tryPromise({ try:
+// () => mk(), ... })`. But `ServiceCatalogRedisL2.getCached` (the structural
+// interface the catalog depends on) takes `mk: Effect.Effect<A>` so that
+// non-Node callers and tests stay Effect-native.
+//
+// This shim bridges the two: the catalog hands us an Effect, we wrap it as a
+// Promise via `Effect.runPromise`, pass it into the real `getCached`, and
+// provide the `RedisL2` service via a module-level singleton ioredis client.
+//
+// If REDIS_URL is missing (local dev), `redisL2` stays `undefined` and the
+// catalog falls back to its in-process single-flight path.
+
+const REDIS_URL = process.env.REDIS_URL;
+const REDIS_PASSWORD = process.env.REDIS_PASSWORD;
+
+const redisClient: IORedis | null = REDIS_URL
+	? new IORedisImpl(REDIS_URL, {
+			password: REDIS_PASSWORD,
+			maxRetriesPerRequest: 3,
+		})
+	: null;
+
+// Declare which cache tier is active at boot so operators can diagnose silent
+// L1-only degradation (e.g. REDIS_URL accidentally unset in prod) from logs
+// alone, without having to probe the running process.
+logEvent('INFO', 'Cache mode selected', {
+	event: 'cache_mode_selected',
+	mode: redisClient ? 'l1+l2' : 'l1-only',
+	redisConfigured: Boolean(process.env.REDIS_URL),
+});
+
+if (redisClient) {
+	redisClient.on('error', (e) => {
+		logEvent('ERROR', 'Redis L2 client error', {
+			event: 'redis_client_error',
+			error: describeLogValue(e),
+		});
+	});
+}
+
+const serviceCatalogRedisL2: ServiceCatalogRedisL2 | undefined = redisClient
+	? {
+			getCached: <A>(
+				key: string,
+				ttlSeconds: number,
+				mk: Effect.Effect<A>,
+			): Effect.Effect<A> => {
+				const mkPromise = (): Promise<A> => Effect.runPromise(mk);
+				// Provide the RedisL2 service for the real `getCached`, then erase
+				// the `RedisError | CacheTimeoutError` channel so the result fits
+				// the `Effect.Effect<A>` shape expected by the catalog. Defects
+				// propagate as rejections through `Effect.runPromise` in the
+				// catalog, preserving the error-surface contract documented in
+				// `acuity-service-catalog.ts`.
+				return redisL2GetCached(key, ttlSeconds, mkPromise).pipe(
+					Effect.provideService(RedisL2, redisClient),
+					Effect.orDie,
+				);
+			},
+		}
+	: undefined;
+
 const serviceCatalog = createAcuityServiceCatalog({
 	baseUrl: ACUITY_BASE_URL,
 	cacheTtlMs: SERVICE_CACHE_TTL_MS,
 	staticServices: parseStaticServicesJson(process.env.SERVICES_JSON),
 	scraperConfig,
 	logger: createServiceCatalogLogger(),
+	redisL2: serviceCatalogRedisL2,
 });
 
 const isSchedulingError = (error: unknown): error is SchedulingError =>
@@ -280,6 +355,32 @@ const isAcuityAppointmentTypeId = (serviceId: string): boolean => /^\d+$/.test(s
 // =============================================================================
 // ROUTE HANDLERS
 // =============================================================================
+
+/** The L2 Redis key used by the service catalog (must match acuity-service-catalog.ts). */
+const CATALOG_REDIS_KEY = `acuity:services:v1:${ACUITY_BASE_URL}`;
+
+/**
+ * Real-liveness readiness handler wired to the module-level singletons.
+ *
+ * Checks (in parallel, under ~3 s combined budget):
+ *  1. Redis ping
+ *  2. Browser pool `isConnected()` via BrowserProcess Effect service
+ *  3. Catalog has data in L1 (getCachedCount) or L2 (Redis EXISTS)
+ *
+ * Returns HTTP 200 when all pass; 503 otherwise.
+ */
+const handleReady = (res: ServerResponse) =>
+	_handleReady(res, {
+		redisPing: redisClient ? () => redisClient!.ping() : null,
+		browserConnected: () =>
+			browserRuntime.runPromise(
+				BrowserProcess.pipe(Effect.map(({ browser }) => browser.isConnected())),
+			),
+		catalogL1Count: () => serviceCatalog.getCachedCount(),
+		catalogL2Exists: redisClient
+			? () => redisClient!.exists(CATALOG_REDIS_KEY)
+			: null,
+	});
 
 const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
 	sendSuccess(
@@ -625,8 +726,9 @@ const server = createServer(async (req, res) => {
 		});
 	});
 
-	// Auth check (skip health endpoint)
-	if (AUTH_TOKEN && path !== '/health') {
+	// Auth check (skip health + observability endpoints)
+	const unauthenticatedPaths = new Set(['/health', '/ready', '/metrics']);
+	if (AUTH_TOKEN && !unauthenticatedPaths.has(path)) {
 		const auth = req.headers.authorization;
 		if (auth !== `Bearer ${AUTH_TOKEN}`) {
 			logRequestEvent('WARN', 'Unauthorized request rejected', context, {
@@ -641,6 +743,20 @@ const server = createServer(async (req, res) => {
 	}
 
 	try {
+		// Observability endpoints are matched BEFORE the main dispatch so the
+		// Prometheus scraper and k8s readiness probe never race with auth or
+		// business-logic errors.
+		if (path === '/metrics' && method === 'GET') {
+			const body = await renderMetrics();
+			res.writeHead(200, { 'Content-Type': metrics.registry.contentType });
+			res.end(body);
+			return;
+		}
+
+		if (path === '/ready' && method === 'GET') {
+			return handleReady(res);
+		}
+
 		// Route matching
 		if (path === '/health' && method === 'GET') {
 			return handleHealth(req, res);
@@ -704,7 +820,13 @@ const disposeBrowserRuntime = () => {
 	});
 };
 
+const disposeRedisClient = () => {
+	if (!redisClient) return;
+	void redisClient.quit().catch(() => undefined);
+};
+
 server.on('close', disposeBrowserRuntime);
+server.on('close', disposeRedisClient);
 
 // Only start listening when this file is executed directly (not imported)
 if (process.argv[1]?.match(/handler\.(ts|js|mjs)$/)) {

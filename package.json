@@ -45,15 +45,18 @@
   },
   "dependencies": {
     "@tummycrypt/scheduling-kit": "^0.7.1",
+    "effect": "^3.19.14",
+    "ioredis": "^5",
     "playwright-core": "1.58.1",
-    "effect": "^3.19.14"
+    "prom-client": "^15"
   },
   "devDependencies": {
-    "typescript": "^5.9.0",
-    "tsx": "^4.0.0",
-    "vitest": "^4.0.0",
     "@types/node": "^22.0.0",
-    "publint": "^0.3.18"
+    "ioredis-mock": "^8.13.1",
+    "publint": "^0.3.18",
+    "tsx": "^4.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
   },
   "publishConfig": {
     "access": "public"

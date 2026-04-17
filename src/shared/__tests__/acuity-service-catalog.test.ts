@@ -1,9 +1,13 @@
+import { Effect } from 'effect';
 import { describe, expect, it, vi } from 'vitest';
 import {
 	createAcuityServiceCatalog,
 	parseStaticServicesJson,
+	type AcuityServiceCatalogConfig,
 	type ServiceCatalogLogger,
+	type ServiceCatalogRedisL2,
 } from '../acuity-service-catalog.js';
+import { _resetCacheHitRatioForTests, metrics } from '../metrics.js';
 import type { Service } from '../../core/types.js';
 import type { AcuityBusinessData } from '../../adapters/acuity/steps/index.js';
 
@@ -138,5 +142,166 @@ describe('createAcuityServiceCatalog', () => {
 		await expect(catalog.getServices()).resolves.toEqual(services);
 		await expect(catalog.resolveServiceName('svc-2')).resolves.toBe('TMD Tuneup');
 		expect(loadScraperServices).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('AcuityServiceCatalog with Redis L2', () => {
+	it('delegates single-flight to RedisL2.getCached when redisL2 provided', async () => {
+		const mkGetCached = vi.fn(
+			async (_k: string, _ttl: number, mk: Effect.Effect<unknown>) =>
+				await Effect.runPromise(mk),
+		);
+		const mockL2 = {
+			getCached: <A>(key: string, ttl: number, mk: Effect.Effect<A>) =>
+				Effect.promise(() => mkGetCached(key, ttl, mk) as Promise<A>),
+		};
+
+		const fetchBusinessData = vi.fn(async () => null);
+		const loadScraperServices = vi.fn(async () => services);
+
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://x.as.me',
+			staticServices: null,
+			fetchBusinessData,
+			loadScraperServices,
+			redisL2: mockL2,
+			logger: makeLogger(),
+		});
+
+		await catalog.getServices();
+		await catalog.getServices();
+
+		// L2 layer handles dedup; catalog calls it every time.
+		expect(mkGetCached).toHaveBeenCalledTimes(2);
+		// Key should be namespaced with baseUrl.
+		const firstCallKey = mkGetCached.mock.calls[0]?.[0];
+		expect(firstCallKey).toBe('acuity:services:v1:https://x.as.me');
+	});
+
+	it('falls back to in-process cache when redisL2 absent', async () => {
+		const loadSpy = vi.fn(async () => services);
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://x.as.me',
+			staticServices: null,
+			fetchBusinessData: async () => null,
+			loadScraperServices: loadSpy,
+			logger: makeLogger(),
+		});
+
+		await catalog.getServices();
+		await catalog.getServices();
+
+		// in-proc cache hit on second call.
+		expect(loadSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it('surfaces redisL2.getCached errors without falling back to L1', async () => {
+		const boom = new Error('redis-down');
+		const mkGetCached = vi.fn().mockImplementation(
+			() => Effect.fail(boom as never) as Effect.Effect<Service[]>,
+		);
+		const fakeL2 = { getCached: mkGetCached } as ServiceCatalogRedisL2;
+
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://x.as.me',
+			redisL2: fakeL2,
+			staticServices: null,
+		} as unknown as AcuityServiceCatalogConfig);
+
+		await expect(catalog.getServices()).rejects.toThrow();
+		expect(mkGetCached).toHaveBeenCalledTimes(1);
+	});
+
+	it('increments scrape counter with source=lock_winner when L2 runs mk', async () => {
+		const { metrics } = await import('../metrics.js');
+		const winnerBefore =
+			(await metrics.serviceCatalogScrapeTotal.get()).values.find(
+				(v) => v.labels.source === 'lock_winner',
+			)?.value ?? 0;
+
+		const mockL2: ServiceCatalogRedisL2 = {
+			getCached: <A>(_k: string, _ttl: number, mk: Effect.Effect<A>) =>
+				Effect.tap(mk, () =>
+					Effect.sync(() =>
+						metrics.serviceCatalogScrapeTotal.inc({ source: 'lock_winner' }),
+					),
+				),
+		};
+
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://x.as.me',
+			staticServices: null,
+			fetchBusinessData: async () => null,
+			loadScraperServices: async () => [
+				{
+					id: '1',
+					name: 's',
+					duration: 60,
+					price: 0,
+					currency: 'USD',
+					category: 'test',
+					active: true,
+				},
+			],
+			redisL2: mockL2,
+			logger: makeLogger(),
+		});
+		await catalog.getServices();
+
+		const winnerAfter =
+			(await metrics.serviceCatalogScrapeTotal.get()).values.find(
+				(v) => v.labels.source === 'lock_winner',
+			)?.value ?? 0;
+
+		expect(winnerAfter).toBe(winnerBefore + 1);
+	});
+});
+
+describe('AcuityServiceCatalog cache hit ratio wiring', () => {
+	const ratioGauge = async (): Promise<number> => {
+		const snap = await metrics.cacheHitRatio.get();
+		return snap.values[0]?.value ?? NaN;
+	};
+
+	it('records a miss on first load and a hit on subsequent L1 reads', async () => {
+		_resetCacheHitRatioForTests();
+
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://example.com',
+			cacheTtlMs: 60_000,
+			fetchBusinessData: vi.fn(async () => ({} as AcuityBusinessData)),
+			businessToServices: vi.fn(() => services),
+			logger: makeLogger(),
+		});
+
+		// Startup value: no samples, ratio should be the "healthy" 1.0 so the
+		// AcuityCacheHitRatioLow alert does not page an empty pod.
+		expect(await ratioGauge()).toBe(1);
+
+		// First call: cold cache → miss, ratio becomes 0/1 = 0.
+		await catalog.getServices();
+		expect(await ratioGauge()).toBe(0);
+
+		// Second call: inside TTL, served from L1 → hit, ratio = 1/2 = 0.5.
+		await catalog.getServices();
+		expect(await ratioGauge()).toBeCloseTo(0.5, 10);
+
+		// Third call: another L1 hit → ratio = 2/3.
+		await catalog.getServices();
+		expect(await ratioGauge()).toBeCloseTo(2 / 3, 10);
+	});
+
+	it('treats static-service configuration as a cache hit', async () => {
+		_resetCacheHitRatioForTests();
+		const catalog = createAcuityServiceCatalog({
+			baseUrl: 'https://example.com',
+			staticServices: services,
+			logger: makeLogger(),
+		});
+
+		await catalog.getServices();
+		// Static services are a declared configuration surface — they should
+		// never flip the gauge into "unhealthy" territory.
+		expect(await ratioGauge()).toBe(1);
 	});
 });

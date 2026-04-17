@@ -13,6 +13,7 @@ import { Effect, Scope } from 'effect';
 import type { Page } from 'playwright-core';
 import { BrowserService } from '../../../shared/browser-service.js';
 import { ndjsonLog } from '../../../shared/logger.js';
+import { observePageOpEffect } from '../../../shared/metrics.js';
 import { WizardStepError } from '../errors.js';
 import { Selectors } from '../selectors.js';
 import { parseSlotText, buildIsoDatetime } from '../slot-parser.js';
@@ -79,7 +80,7 @@ export const readDatesViaUrl = (
 	serviceId: string,
 	targetMonth?: string,
 ): Effect.Effect<UrlDateResult[], WizardStepError, BrowserService | Scope.Scope> =>
-	Effect.gen(function* () {
+	observePageOpEffect('availability_dates', Effect.gen(function* () {
 		const { acquirePage, config } = yield* BrowserService;
 		const page = yield* acquirePage.pipe(
 			Effect.mapError((e) => new WizardStepError({ step: 'read-availability', message: `Browser error: ${e._tag}` })),
@@ -131,7 +132,7 @@ export const readDatesViaUrl = (
 		}).pipe(Effect.ignore);
 
 		return yield* readEnabledCalendarDates(page, tileSelector);
-	});
+	}));
 
 // =============================================================================
 // READ SLOTS VIA URL PARAM
@@ -150,7 +151,7 @@ export const readSlotsViaUrl = (
 	date: string,
 	context?: SlotReadProfileContext,
 ): Effect.Effect<UrlSlotResult[], WizardStepError, BrowserService | Scope.Scope> =>
-	Effect.gen(function* () {
+	observePageOpEffect('availability_slots', Effect.gen(function* () {
 		const { acquirePage, config } = yield* BrowserService;
 		const profileConfig = getSlotReadProfileConfig();
 		const page = yield* acquirePage.pipe(
@@ -274,4 +275,4 @@ export const readSlotsViaUrl = (
 		}
 
 		return parsedSlots;
-	});
+	}));
