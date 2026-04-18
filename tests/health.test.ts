@@ -18,7 +18,7 @@ describe('bridge health payload', () => {
 			releaseRef: 'refs/heads/main',
 			releaseVersion: '0.4.2',
 			releaseBuiltAt: '2026-04-16T12:00:00.000Z',
-			modalEnvironment: 'main',
+			runtimeEnvironment: 'main',
 			timestamp: '2026-04-16T12:34:56.000Z',
 		});
 
@@ -28,7 +28,7 @@ describe('bridge health payload', () => {
 			ref: 'refs/heads/main',
 			version: '0.4.2',
 			builtAt: '2026-04-16T12:00:00.000Z',
-			modalEnvironment: 'main',
+			runtimeEnvironment: 'main',
 		});
 		expect(payload.protocol).toEqual({
 			version: BRIDGE_PROTOCOL_VERSION,
@@ -60,7 +60,7 @@ describe('bridge health payload', () => {
 			ref: 'unknown',
 			version: 'unknown',
 			builtAt: null,
-			modalEnvironment: null,
+			runtimeEnvironment: null,
 		});
 	});
 });
