@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * HMR-style LaTeX build watcher for the IEEE paper.
+ * HMR-style LaTeX build watcher for the acuity-middleware paper.
  *
  * Usage:  node docs/paper/watch.mjs          (or: npm run paper:dev)
  * Requires: tectonic (brew install tectonic)
