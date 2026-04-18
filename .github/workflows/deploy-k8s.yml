@@ -52,15 +52,21 @@ jobs:
     runs-on: ubuntu-latest
     environment: tailnet-dev
     concurrency:
-      group: deploy-tailnet-dev
+      group: deploy-${{ inputs.overlay || 'tailnet-dev' }}
       cancel-in-progress: false  # never cancel an in-progress deploy
 
     env:
-      OVERLAY: tailnet-dev
+      # Wire inputs.overlay through env (defaults to tailnet-dev for
+      # workflow_run triggers which don't have inputs)
+      OVERLAY: ${{ inputs.overlay || 'tailnet-dev' }}
       GHCR_IMAGE: ghcr.io/jesssullivan/acuity-middleware
 
     steps:
-      - uses: actions/checkout@v4
+      # SHA-pinned checkout (supply chain safety for cluster-write workflow)
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Install kustomize
+        uses: imranismail/setup-kustomize@2ba527d4d055ab63514ba50a97cb0a4f5fb463f0  # v2.1.0
 
       - name: Determine image tag
         id: tag
@@ -91,11 +97,6 @@ jobs:
           IMAGE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           cd "deploy/overlays/${OVERLAY}"
-          # Install kustomize if not available
-          if ! command -v kustomize &> /dev/null; then
-            curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-            sudo mv kustomize /usr/local/bin/
-          fi
           kustomize edit set image "${GHCR_IMAGE}:${IMAGE_TAG}"
 
       - name: Render manifests (dry run)
