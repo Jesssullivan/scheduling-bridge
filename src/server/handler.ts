@@ -73,6 +73,7 @@ import {
 } from '../adapters/acuity/steps/read-via-url.js';
 import { buildHealthPayload } from './health.js';
 import { handleReady as _handleReady } from './ready.js';
+import { registerGracefulShutdown } from './shutdown.js';
 import { ndjsonLog } from '../shared/logger.js';
 import type {
 	Booking,
@@ -825,6 +826,14 @@ if (process.argv[1]?.match(/handler\.(ts|js|mjs)$/)) {
 			authEnabled: !!AUTH_TOKEN,
 			headless: browserConfig.headless,
 		});
+	});
+
+	// K8s pod lifecycle — drain in-flight requests, then dispose resources
+	registerGracefulShutdown({
+		server,
+		disposeBrowser: disposeBrowserRuntime,
+		disposeRedis: disposeRedisClient,
+		log: logEvent,
 	});
 }
 
