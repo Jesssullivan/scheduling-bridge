@@ -6,6 +6,7 @@ import {
 	readRedisConfig,
 	readReleaseConfig,
 	readAppConfig,
+	configSummary,
 } from '../src/server/config.js';
 
 describe('server config', () => {
@@ -181,6 +182,48 @@ describe('server config', () => {
 			expect(config.server.port).toBe(3001);
 			expect(config.acuity.baseUrl).toBe('https://MassageIthaca.as.me');
 			expect(config.redis.url).toBeUndefined();
+		});
+	});
+
+	describe('configSummary', () => {
+		it('omits secret values, exposes only booleans and non-sensitive fields', () => {
+			const config = readAppConfig({
+				PORT: '8080',
+				AUTH_TOKEN: 'super-secret-token',
+				ACUITY_BYPASS_COUPON: 'SECRET100',
+				REDIS_URL: 'redis://:password@host:6379',
+				REDIS_PASSWORD: 'password',
+				DEPLOYMENT_ENVIRONMENT: 'tailnet-dev',
+				MIDDLEWARE_RELEASE_SHA: 'abc123',
+				MIDDLEWARE_RELEASE_VERSION: '0.4.3',
+			});
+
+			const summary = configSummary(config);
+
+			// Sensitive values should NOT appear
+			expect(JSON.stringify(summary)).not.toContain('super-secret-token');
+			expect(JSON.stringify(summary)).not.toContain('SECRET100');
+			expect(JSON.stringify(summary)).not.toContain('password');
+
+			// Only booleans for secret-adjacent fields
+			expect(summary.authEnabled).toBe(true);
+			expect(summary.couponConfigured).toBe(true);
+			expect(summary.redisConfigured).toBe(true);
+
+			// Non-sensitive metadata present
+			expect(summary.port).toBe(8080);
+			expect(summary.runtimeEnvironment).toBe('tailnet-dev');
+			expect(summary.releaseSha).toBe('abc123');
+		});
+
+		it('handles empty config gracefully', () => {
+			const config = readAppConfig({});
+			const summary = configSummary(config);
+
+			expect(summary.authEnabled).toBe(false);
+			expect(summary.redisConfigured).toBe(false);
+			expect(summary.runtimeEnvironment).toBeNull();
+			expect(summary.releaseVersion).toBeNull();
 		});
 	});
 });
