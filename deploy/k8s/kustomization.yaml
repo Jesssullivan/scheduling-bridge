@@ -14,7 +14,9 @@ namespace: scheduling-bridge
 resources:
   - namespace.yaml
   - configmap.yaml
-  - sealed-secret-template.yaml
+  # sealed-secret-template.yaml is NOT a resource — it documents the
+  # expected Secret shape. Apply real secrets via:
+  #   sops -d deploy/k8s/secret.enc.yaml | kubectl apply -f -
   - deployment.yaml
   - service.yaml
 
