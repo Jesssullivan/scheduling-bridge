@@ -1,0 +1,10 @@
+# Patch: tailnet-dev environment identity
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduling-bridge-config
+  namespace: scheduling-bridge
+data:
+  DEPLOYMENT_ENVIRONMENT: "tailnet-dev"
+  # Lower cache TTL for faster iteration during dev
+  ACUITY_SERVICE_CACHE_TTL_MS: "60000"
