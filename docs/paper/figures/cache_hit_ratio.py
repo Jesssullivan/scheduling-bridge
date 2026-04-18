@@ -2,8 +2,12 @@
 """
 cache_hit_ratio.py — cache hit ratio over the shadow-bake window.
 
-Shows L1 (in-process) and L2 (Redis SETNX) hit fractions. Reads from
-../data/phase1/*.json; falls back to synthetic values.
+Reads the daily-rollup `cache_hit_ratio` float from ../data/phase1/*.json
+and plots combined (L1+L2) hit ratio over time. Falls back to synthetic
+values when no rollups exist yet. The rollup schema in
+`data/phase1/README.md` exposes a single `cache_hit_ratio` (not separate
+L1/L2/miss), so both real and synthetic paths produce a single `hit`
+series with matching shape.
 """
 from __future__ import annotations
 
@@ -45,21 +49,19 @@ def load_real() -> pd.DataFrame | None:
 def load_synthetic() -> pd.DataFrame:
     rng = np.random.default_rng(seed=20260419)
     dates = pd.date_range("2026-04-17", periods=28, freq="D")
-    # Most requests hit L1; small fraction served by L2 single-flight.
-    l1 = rng.normal(loc=0.88, scale=0.02, size=28).clip(0.0, 1.0)
-    l2 = rng.normal(loc=0.09, scale=0.015, size=28).clip(0.0, 1.0)
-    miss = np.clip(1.0 - l1 - l2, 0.0, 1.0)
-    return pd.DataFrame({"date": dates, "l1": l1, "l2": l2, "miss": miss})
+    # Combined L1+L2 hit ratio (mirrors the rollup's single `cache_hit_ratio`
+    # field). Target ~97% hit, ~3% upstream.
+    hit = rng.normal(loc=0.97, scale=0.01, size=28).clip(0.0, 1.0)
+    return pd.DataFrame({"date": dates, "hit": hit})
 
 
 def main() -> int:
     df = load_real()
     synthetic = df is None
-    if synthetic or "l1" not in df.columns:
+    if synthetic:
         print("[cache_hit_ratio] no real data; using synthetic fallback.",
               file=sys.stderr)
         df = load_synthetic()
-        synthetic = True
 
     try:
         plt.style.use(PUB_STYLE)
@@ -67,22 +69,17 @@ def main() -> int:
         plt.style.use("fast")
 
     fig, ax = plt.subplots(figsize=FIGSIZE, constrained_layout=True)
-    x = np.arange(len(df))
-    ax.stackplot(
-        x,
-        df["l1"],
-        df["l2"],
-        df["miss"],
-        labels=["L1 (in-proc)", "L2 (Redis SETNX)", "upstream"],
-        alpha=0.85,
-    )
-    ax.set_xlabel("Day of bake")
+    ax.plot(df["date"], df["hit"], label="hit (L1+L2)", linewidth=1.2,
+            marker="o", markersize=2.5, color="tab:green")
+    ax.fill_between(df["date"], df["hit"], 1.0, alpha=0.15,
+                    color="tab:red", label="upstream")
+    ax.set_xlabel("Date")
     ax.set_ylabel("Fraction of requests")
     ax.set_ylim(0.0, 1.0)
     ax.set_title("Cache hit ratio"
                  + (" [synthetic]" if synthetic else ""))
     ax.legend(loc="lower right", frameon=False, fontsize=7)
-    ax.tick_params(axis="x", labelsize=7)
+    ax.tick_params(axis="x", labelrotation=30, labelsize=7)
     ax.tick_params(axis="y", labelsize=7)
     fig.savefig(OUT_PDF, dpi=DPI, format="pdf")
     print(f"[cache_hit_ratio] wrote {OUT_PDF}", file=sys.stderr)
