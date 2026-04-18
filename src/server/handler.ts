@@ -3,7 +3,7 @@
  *
  * Standalone Node.js HTTP server wrapping the Effect TS wizard programs.
  * Designed to run inside a Docker container with Playwright + Chromium
- * on Modal Labs, Fly.io, or any host.
+ * on K8s, Modal Labs, Fly.io, or any container host.
  *
  * Endpoints:
  *   GET  /health                    - Health check
@@ -165,7 +165,7 @@ const runtimeLogFields = () => ({
 	flowOwner: 'scheduling-bridge',
 	backend: 'acuity',
 	transport: 'http-json',
-	modalEnvironment: process.env.MODAL_ENVIRONMENT,
+	runtimeEnvironment: process.env.DEPLOYMENT_ENVIRONMENT ?? process.env.MODAL_ENVIRONMENT,
 	releaseSha: process.env.MIDDLEWARE_RELEASE_SHA,
 	releaseVersion: process.env.MIDDLEWARE_RELEASE_VERSION ?? process.env.npm_package_version,
 });
@@ -395,7 +395,7 @@ const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
 			releaseRef: process.env.MIDDLEWARE_RELEASE_REF,
 			releaseVersion: process.env.MIDDLEWARE_RELEASE_VERSION ?? process.env.npm_package_version,
 			releaseBuiltAt: process.env.MIDDLEWARE_RELEASE_BUILT_AT ?? process.env.MIDDLEWARE_BUILD_TIMESTAMP,
-			modalEnvironment: process.env.MODAL_ENVIRONMENT,
+			runtimeEnvironment: process.env.DEPLOYMENT_ENVIRONMENT ?? process.env.MODAL_ENVIRONMENT,
 		}),
 	);
 };

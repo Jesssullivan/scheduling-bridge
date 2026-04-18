@@ -35,7 +35,7 @@ export interface BuildHealthPayloadOptions {
 	releaseRef?: string | null;
 	releaseVersion?: string | null;
 	releaseBuiltAt?: string | null;
-	modalEnvironment?: string | null;
+	runtimeEnvironment?: string | null;
 	timestamp?: string;
 }
 
@@ -49,7 +49,7 @@ export const buildHealthPayload = ({
 	releaseRef,
 	releaseVersion,
 	releaseBuiltAt,
-	modalEnvironment,
+	runtimeEnvironment,
 	timestamp = new Date().toISOString(),
 }: BuildHealthPayloadOptions) => ({
 	status: 'ok' as const,
@@ -62,14 +62,14 @@ export const buildHealthPayload = ({
 	releaseRef: releaseRef ?? 'unknown',
 	releaseVersion: releaseVersion ?? 'unknown',
 	releaseBuiltAt: releaseBuiltAt ?? null,
-	modalEnvironment: modalEnvironment ?? null,
+	runtimeEnvironment: runtimeEnvironment ?? null,
 	protocolVersion: BRIDGE_PROTOCOL_VERSION,
 	release: {
 		sha: releaseSha ?? 'unknown',
 		ref: releaseRef ?? 'unknown',
 		version: releaseVersion ?? 'unknown',
 		builtAt: releaseBuiltAt ?? null,
-		modalEnvironment: modalEnvironment ?? null,
+		runtimeEnvironment: runtimeEnvironment ?? null,
 	},
 	protocol: {
 		version: BRIDGE_PROTOCOL_VERSION,

@@ -11,7 +11,7 @@ export interface SlotReadPhaseTimings {
 export interface SlotReadProfileContext {
 	readonly requestId?: string;
 	readonly endpoint?: string;
-	readonly modalEnvironment?: string;
+	readonly runtimeEnvironment?: string;
 	readonly releaseSha?: string;
 	readonly releaseVersion?: string;
 	readonly flowOwner?: string;
