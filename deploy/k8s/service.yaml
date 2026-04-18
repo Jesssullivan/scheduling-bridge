@@ -1,0 +1,20 @@
+# ClusterIP service for tailnet-internal traffic.
+# External access is via Tailscale Ingress or tailnet-only DNS.
+apiVersion: v1
+kind: Service
+metadata:
+  name: scheduling-bridge
+  namespace: scheduling-bridge
+  labels:
+    app.kubernetes.io/name: scheduling-bridge
+    app.kubernetes.io/component: middleware
+    app.kubernetes.io/part-of: tinyland
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: scheduling-bridge
+  ports:
+    - name: http
+      port: 3001
+      targetPort: http
+      protocol: TCP

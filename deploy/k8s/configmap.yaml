@@ -1,0 +1,27 @@
+# Non-secret configuration for the scheduling bridge.
+# Secrets (AUTH_TOKEN, REDIS_PASSWORD, ACUITY_BYPASS_COUPON) are
+# managed via SOPS-encrypted Secret manifests — see secret.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scheduling-bridge-config
+  namespace: scheduling-bridge
+  labels:
+    app.kubernetes.io/name: scheduling-bridge
+    app.kubernetes.io/component: middleware
+    app.kubernetes.io/part-of: tinyland
+data:
+  # Server
+  PORT: "3001"
+  NODE_ENV: "production"
+
+  # Acuity
+  ACUITY_BASE_URL: "https://MassageIthaca.as.me"
+  ACUITY_SERVICE_CACHE_TTL_MS: "300000"
+
+  # Browser / Playwright
+  PLAYWRIGHT_HEADLESS: "true"
+  PLAYWRIGHT_TIMEOUT: "30000"
+
+  # Runtime identity (injected by CI — overridden per-deploy)
+  DEPLOYMENT_ENVIRONMENT: "tailnet-dev"

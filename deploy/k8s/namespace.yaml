@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scheduling-bridge
+  labels:
+    app.kubernetes.io/part-of: tinyland
+    app.kubernetes.io/managed-by: kubectl
