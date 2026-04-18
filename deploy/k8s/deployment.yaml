@@ -1,0 +1,113 @@
+# Scheduling bridge Deployment.
+#
+# Wires up:
+#   - Liveness probe  → GET /health  (is the process alive?)
+#   - Readiness probe  → GET /ready   (are Redis + browser + catalog healthy?)
+#   - Startup probe   → GET /health  (allow slow Chromium launch)
+#   - Graceful shutdown via SIGTERM + terminationGracePeriodSeconds
+#   - Non-root securityContext (matches Dockerfile USER middleware)
+#   - Resource limits sized for Playwright + Chromium headless
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduling-bridge
+  namespace: scheduling-bridge
+  labels:
+    app.kubernetes.io/name: scheduling-bridge
+    app.kubernetes.io/component: middleware
+    app.kubernetes.io/part-of: tinyland
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: scheduling-bridge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: scheduling-bridge
+        app.kubernetes.io/component: middleware
+        app.kubernetes.io/part-of: tinyland
+      annotations:
+        # Prometheus scrape config — /metrics endpoint (prom-client)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3001"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Match the Dockerfile's 15s drain timeout + a 5s buffer
+      terminationGracePeriodSeconds: 20
+
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: middleware
+          image: ghcr.io/jesssullivan/acuity-middleware:latest
+          ports:
+            - name: http
+              containerPort: 3001
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: scheduling-bridge-config
+            - secretRef:
+                name: scheduling-bridge-secrets
+
+          # Release metadata — injected by CI at deploy time
+          env:
+            - name: MIDDLEWARE_RELEASE_SHA
+              value: ""  # overridden by kustomize or CI
+            - name: MIDDLEWARE_RELEASE_VERSION
+              value: ""
+            - name: MIDDLEWARE_RELEASE_REF
+              value: ""
+            - name: MIDDLEWARE_RELEASE_BUILT_AT
+              value: ""
+
+          # --- Probes ---
+          # Startup: generous timeout for Chromium cold-start
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12  # 5 + 12*5 = 65s max startup
+
+          # Liveness: is the Node process alive?
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Readiness: are dependencies (Redis, browser, catalog) healthy?
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+
+          # --- Resources ---
+          # Chromium headless needs ~300-500 Mi per page.
+          # One concurrent browser session at a time.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false  # Chromium needs /tmp writes
+            capabilities:
+              drop:
+                - ALL

@@ -1,0 +1,29 @@
+# Kustomize base for the scheduling bridge.
+#
+# Usage:
+#   kubectl apply -k deploy/k8s/
+#
+# For environment-specific overlays (e.g., tailnet-dev vs prod), create
+# deploy/k8s/overlays/<env>/kustomization.yaml that patches image tags,
+# replica counts, and resource limits.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: scheduling-bridge
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - sealed-secret-template.yaml
+  - deployment.yaml
+  - service.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: tinyland
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false
+
+images:
+  - name: ghcr.io/jesssullivan/acuity-middleware
+    newTag: latest  # overridden per-deploy by CI
