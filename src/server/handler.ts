@@ -76,6 +76,7 @@ import { buildHealthPayload } from './health.js';
 import { handleReady as _handleReady } from './ready.js';
 import { registerGracefulShutdown } from './shutdown.js';
 import { checkAuth } from './auth.js';
+import { sendJson, sendSuccess, sendError, parseBody, BodyTooLargeError } from './http.js';
 import { ndjsonLog } from '../shared/logger.js';
 import type {
 	Booking,
@@ -100,10 +101,8 @@ const browserConfig: BrowserConfig = toBrowserConfig(appConfig.acuity, appConfig
 const scraperConfig: ScraperConfig = toScraperConfig(appConfig.acuity, browserConfig);
 
 // =============================================================================
-// RESPONSE HELPERS (re-exported from http.ts)
+// RESPONSE + BODY PARSING (see http.ts)
 // =============================================================================
-
-import { sendJson, sendSuccess, sendError, parseBody } from './http.js';
 
 type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 
@@ -736,6 +735,22 @@ const server = createServer(async (req, res) => {
 			error: { tag: 'InfrastructureError', code: 'NOT_FOUND', message: `Unknown route: ${method} ${path}` },
 		});
 	} catch (e) {
+		// Body size limit exceeded → 413 (not 500)
+		if (e instanceof BodyTooLargeError) {
+			logRequestEvent('WARN', 'Request body too large', context, {
+				event: 'request_rejected',
+				reason: 'body_too_large',
+			});
+			return sendJson(res, 413, {
+				success: false,
+				error: {
+					tag: 'InfrastructureError',
+					code: 'BODY_TOO_LARGE',
+					message: e.message,
+				},
+			});
+		}
+
 		logRequestEvent('ERROR', 'Unhandled request error', context, {
 			event: 'request_failed',
 			error: describeLogValue(e),
