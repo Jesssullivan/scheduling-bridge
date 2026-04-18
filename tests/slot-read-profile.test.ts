@@ -69,6 +69,36 @@ describe('slot read profiling helpers', () => {
 		expect(event.context?.flowOwner).toBe('scheduling-bridge');
 	});
 
+	it('carries runtimeEnvironment through context', () => {
+		const profile = createSlotReadProfile({
+			serviceId: '53178494',
+			date: '2026-04-25',
+			thresholdMs: 1500,
+			calendarTileCount: 28,
+			matchedDateFound: true,
+			slotCount: 4,
+			parsedSlotCount: 4,
+			phases: {
+				navigationMs: 100,
+				calendarReadyMs: 20,
+				dateSelectMs: 30,
+				postClickSettleMs: 50,
+				slotWaitMs: 40,
+				slotDomReadMs: 10,
+				parseMs: 5,
+			},
+			context: {
+				requestId: 'req-456',
+				runtimeEnvironment: 'tailnet-dev',
+				releaseSha: 'abc123',
+			},
+		});
+
+		const event = buildSlotReadProfileEvent(profile);
+		expect(event.context?.runtimeEnvironment).toBe('tailnet-dev');
+		expect(event.context?.releaseSha).toBe('abc123');
+	});
+
 	it('reads threshold and force-log config from env', () => {
 		const config = getSlotReadProfileConfig({
 			SCHEDULING_BRIDGE_SLOT_PROFILE_THRESHOLD_MS: '2200',
