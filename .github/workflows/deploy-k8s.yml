@@ -1,0 +1,128 @@
+# Deploy to K8s via Kustomize overlay.
+#
+# Triggers:
+#   - After a successful GHCR image build (workflow_run)
+#   - Manual dispatch with overlay + image tag selection
+#
+# Prerequisites:
+#   - KUBECONFIG_TAILNET secret with base64-encoded kubeconfig
+#   - SOPS_AGE_KEY secret for secret decryption
+#   - GHCR image already pushed by docker-ghcr.yml
+#
+# This workflow is NOT active until:
+#   1. PR #57 (GHCR workflow) merges to main
+#   2. blahaj cluster has scheduling-bridge namespace (tofu apply T15)
+#   3. Secrets (KUBECONFIG_TAILNET, SOPS_AGE_KEY) are configured
+name: Deploy K8s
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Image"]
+    types: [completed]
+    branches: [main]
+
+  workflow_dispatch:
+    inputs:
+      overlay:
+        description: "Kustomize overlay to deploy"
+        required: true
+        default: "tailnet-dev"
+        type: choice
+        options:
+          - tailnet-dev
+      image_tag:
+        description: "Image tag (default: sha-<short> from latest GHCR build)"
+        required: false
+        type: string
+      dry_run:
+        description: "Dry run (render only, no apply)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    # Only deploy on successful GHCR builds (or manual dispatch)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: tailnet-dev
+    concurrency:
+      group: deploy-tailnet-dev
+      cancel-in-progress: false  # never cancel an in-progress deploy
+
+    env:
+      OVERLAY: tailnet-dev
+      GHCR_IMAGE: ghcr.io/jesssullivan/acuity-middleware
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine image tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+          FALLBACK_SHA: ${{ github.sha }}
+        run: |
+          if [[ -n "${INPUT_TAG}" ]]; then
+            echo "tag=${INPUT_TAG}" >> "$GITHUB_OUTPUT"
+          else
+            SHA="${WORKFLOW_SHA:-$FALLBACK_SHA}"
+            echo "tag=sha-${SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure kubectl
+        if: ${{ !inputs.dry_run }}
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_TAILNET }}
+        run: |
+          mkdir -p ~/.kube
+          echo "${KUBECONFIG_B64}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          kubectl cluster-info
+
+      - name: Set image tag in overlay
+        env:
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          cd "deploy/overlays/${OVERLAY}"
+          # Install kustomize if not available
+          if ! command -v kustomize &> /dev/null; then
+            curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+            sudo mv kustomize /usr/local/bin/
+          fi
+          kustomize edit set image "${GHCR_IMAGE}:${IMAGE_TAG}"
+
+      - name: Render manifests (dry run)
+        if: ${{ inputs.dry_run }}
+        run: |
+          echo "=== Dry run: rendering overlay '${OVERLAY}' ==="
+          kubectl kustomize "deploy/overlays/${OVERLAY}"
+
+      - name: Apply manifests
+        if: ${{ !inputs.dry_run }}
+        env:
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          echo "Deploying overlay '${OVERLAY}' with image tag '${IMAGE_TAG}'"
+          kubectl apply -k "deploy/overlays/${OVERLAY}"
+
+      - name: Wait for rollout
+        if: ${{ !inputs.dry_run }}
+        run: |
+          kubectl -n scheduling-bridge rollout status deployment/scheduling-bridge \
+            --timeout=120s
+
+      - name: Verify deployment
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "=== Pod status ==="
+          kubectl -n scheduling-bridge get pods -l app.kubernetes.io/name=scheduling-bridge
+          echo ""
+          echo "=== Deployment ==="
+          kubectl -n scheduling-bridge get deployment scheduling-bridge -o wide
