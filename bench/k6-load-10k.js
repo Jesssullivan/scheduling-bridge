@@ -1,7 +1,7 @@
 // bench/k6-load-10k.js — ~10k req sustained load test
 import http from 'k6/http';
 import { check, sleep } from 'k6';
-import { Trend, Rate } from 'k6/metrics';
+import { Rate } from 'k6/metrics';
 
 export const options = {
   stages: [
@@ -49,7 +49,10 @@ export default function () {
     });
     fastResponses.add(res.timings.duration < 200);
   } else {
-    const serviceId = SERVICE_IDS[__ITER % SERVICE_IDS.length];
+    // __ITER is always odd in this branch; using `__ITER % length` skips
+    // half the services when `SERVICE_IDS.length` is even. `Math.floor(__ITER / 2)`
+    // gives a dense 0,0,1,1,2,2,... index that rotates through every entry.
+    const serviceId = SERVICE_IDS[Math.floor(__ITER / 2) % SERVICE_IDS.length];
     const date = tomorrow();
     const res = http.get(
       `${BASE_URL}/availability/slots?serviceId=${serviceId}&date=${date}`,
