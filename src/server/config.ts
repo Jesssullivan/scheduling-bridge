@@ -177,3 +177,24 @@ export const readAppConfig = (
 	redis: readRedisConfig(env),
 	release: readReleaseConfig(env),
 });
+
+// ---------------------------------------------------------------------------
+// Startup diagnostics (safe to log — no secrets)
+// ---------------------------------------------------------------------------
+
+/** Structured config summary for startup logging. Omits secrets. */
+export const configSummary = (config: AppConfig): Record<string, unknown> => ({
+	port: config.server.port,
+	authEnabled: Boolean(config.server.authToken),
+	acuityBaseUrl: config.acuity.baseUrl,
+	couponConfigured: Boolean(config.acuity.couponCode),
+	serviceCacheTtlMs: config.acuity.serviceCacheTtlMs,
+	staticServicesConfigured: Boolean(config.acuity.servicesJson),
+	headless: config.browserEnv.headless,
+	browserTimeout: config.browserEnv.timeout,
+	customChromiumPath: Boolean(config.browserEnv.executablePath),
+	redisConfigured: Boolean(config.redis.url),
+	runtimeEnvironment: config.release.runtimeEnvironment ?? null,
+	releaseVersion: config.release.version ?? null,
+	releaseSha: config.release.sha ?? null,
+});

@@ -47,6 +47,7 @@ import {
 	readAppConfig,
 	toBrowserConfig,
 	toScraperConfig,
+	configSummary,
 } from './config.js';
 import {
 	createAcuityServiceCatalog,
@@ -820,11 +821,7 @@ if (process.argv[1]?.match(/handler\.(ts|js|mjs)$/)) {
 	server.listen(PORT, '0.0.0.0', () => {
 		logEvent('INFO', 'Middleware server listening', {
 			event: 'runtime_started',
-			port: PORT,
-			acuityBaseUrl: ACUITY_BASE_URL,
-			couponConfigured: !!COUPON_CODE,
-			authEnabled: !!AUTH_TOKEN,
-			headless: browserConfig.headless,
+			...configSummary(appConfig),
 		});
 	});
 
