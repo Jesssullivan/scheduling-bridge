@@ -10,10 +10,13 @@
 #     -e ACUITY_BYPASS_COUPON=... \
 #     acuity-middleware
 #
-# Modal Labs:
-#   modal deploy modal-app.py
-
 FROM mcr.microsoft.com/playwright:v1.58.2-noble
+
+LABEL org.opencontainers.image.source="https://github.com/Jesssullivan/acuity-middleware"
+LABEL org.opencontainers.image.description="Acuity Scheduling middleware with Playwright browser automation"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="acuity-middleware"
+LABEL org.opencontainers.image.vendor="tummycrypt"
 
 # Install Node.js 22 LTS + pnpm
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
@@ -47,7 +50,7 @@ ENV PORT=3001
 ENV PLAYWRIGHT_HEADLESS=true
 ENV PLAYWRIGHT_TIMEOUT=30000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3001/health', (r) => r.statusCode === 200 ? process.exit(0) : process.exit(1))"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+  CMD wget -qO- --tries=1 http://localhost:3001/health
 
 CMD ["node", "dist/server/handler.js"]
