@@ -1,0 +1,63 @@
+# Default-deny ingress for the scheduling-bridge namespace.
+# All ingress is blocked unless explicitly allowed by the companion policy below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: scheduling-bridge
+  labels:
+    app.kubernetes.io/part-of: tinyland
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector: {}  # matches all pods in namespace
+  policyTypes:
+    - Ingress
+---
+# Allow ingress to scheduling-bridge pods from:
+#   1. Same-namespace pods (N=2 replicas + Redis StatefulSet)
+#   2. Prometheus (tinyland-dev-production) for /metrics scraping
+#   3. Tailscale proxy (blahaj-ops) for tailnet-exposed service
+#
+# Egress is unrestricted — middleware must reach Acuity (HTTPS),
+# Redis (same namespace), and DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-scheduling-bridge-ingress
+  namespace: scheduling-bridge
+  labels:
+    app.kubernetes.io/part-of: tinyland
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: scheduling-bridge
+  policyTypes:
+    - Ingress
+  ingress:
+    # Same-namespace pod-to-pod (N=2 replicas, Redis StatefulSet)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: scheduling-bridge
+      ports:
+        - protocol: TCP
+          port: 3001
+
+    # Prometheus scraping from monitoring namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tinyland-dev-production
+      ports:
+        - protocol: TCP
+          port: 3001
+
+    # Tailscale proxy for tailnet access
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: blahaj-ops
+      ports:
+        - protocol: TCP
+          port: 3001
