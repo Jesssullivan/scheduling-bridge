@@ -9,7 +9,7 @@ on:
 
 jobs:
   package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@7dddffb9969ccd3e0f2d9105e95cd834d3050685
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@f2e12c10580f17d54ac48434e2577fbcfe502a05
     with:
       runner_mode: repo_owned
       runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
