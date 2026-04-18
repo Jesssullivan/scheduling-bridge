@@ -5,7 +5,7 @@
  * 1. Effect Logger (for code inside Effect.gen) — uses Effect's Logger API
  * 2. ndjsonLog() standalone helper (for plain async handlers outside Effect)
  *
- * Both emit JSON lines to stdout/stderr, compatible with Modal's log capture.
+ * Both emit JSON lines to stdout/stderr, compatible with any structured log collector.
  */
 
 import { Logger, Layer, HashMap } from 'effect';

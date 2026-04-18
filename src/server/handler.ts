@@ -3,7 +3,7 @@
  *
  * Standalone Node.js HTTP server wrapping the Effect TS wizard programs.
  * Designed to run inside a Docker container with Playwright + Chromium
- * on Modal Labs, Fly.io, or any host.
+ * on K8s, Modal Labs, Fly.io, or any container host.
  *
  * Endpoints:
  *   GET  /health                    - Health check

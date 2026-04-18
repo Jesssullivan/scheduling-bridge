@@ -40,7 +40,7 @@ import { Errors } from '../core/types.js';
 // =============================================================================
 
 export interface RemoteAdapterConfig {
-	/** Base URL of the middleware server (e.g., https://scheduling-middleware--org.modal.run) */
+	/** Base URL of the middleware server (e.g., https://bridge.example.com) */
 	readonly baseUrl: string;
 	/** Auth token for the middleware server */
 	readonly authToken?: string;
