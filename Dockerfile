@@ -51,6 +51,6 @@ ENV PLAYWRIGHT_HEADLESS=true
 ENV PLAYWRIGHT_TIMEOUT=30000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
-  CMD wget -qO- --tries=1 http://localhost:3001/health || exit 1
+  CMD wget -qO- --tries=1 http://localhost:3001/health
 
 CMD ["node", "dist/server/handler.js"]
