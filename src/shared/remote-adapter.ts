@@ -2,8 +2,8 @@
  * Remote Wizard Adapter
  *
  * SchedulingAdapter implementation backed by HTTP calls to a remote
- * middleware server running Playwright + Chromium (e.g., Modal Labs,
- * Fly.io, or any Docker host).
+ * middleware server running Playwright + Chromium (e.g., K8s pod,
+ * Modal Labs, Fly.io, or any Docker host).
  *
  * This adapter is the client-side counterpart to `middleware/server.ts`.
  * It serializes requests, sends them over HTTP, and deserializes
@@ -12,8 +12,8 @@
  * @example
  * ```typescript
  * const adapter = createRemoteWizardAdapter({
- *   baseUrl: process.env.MODAL_MIDDLEWARE_URL,
- *   authToken: process.env.MODAL_AUTH_TOKEN,
+ *   baseUrl: process.env.SCHEDULING_BRIDGE_URL,
+ *   authToken: process.env.SCHEDULING_BRIDGE_AUTH_TOKEN,
  * });
  * const kit = createSchedulingKit(adapter, [venmoAdapter]);
  * ```
