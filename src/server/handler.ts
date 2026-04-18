@@ -75,6 +75,7 @@ import {
 import { buildHealthPayload } from './health.js';
 import { handleReady as _handleReady } from './ready.js';
 import { registerGracefulShutdown } from './shutdown.js';
+import { checkAuth } from './auth.js';
 import { ndjsonLog } from '../shared/logger.js';
 import type {
 	Booking,
@@ -99,49 +100,10 @@ const browserConfig: BrowserConfig = toBrowserConfig(appConfig.acuity, appConfig
 const scraperConfig: ScraperConfig = toScraperConfig(appConfig.acuity, browserConfig);
 
 // =============================================================================
-// RESPONSE HELPERS
+// RESPONSE HELPERS (re-exported from http.ts)
 // =============================================================================
 
-interface SuccessResponse<T> {
-	success: true;
-	data: T;
-}
-
-interface ErrorResponse {
-	success: false;
-	error: {
-		tag: string;
-		code: string;
-		message: string;
-	};
-}
-
-const sendJson = (res: ServerResponse, status: number, body: SuccessResponse<unknown> | ErrorResponse) => {
-	res.writeHead(status, { 'Content-Type': 'application/json' });
-	res.end(JSON.stringify(body));
-};
-
-const sendSuccess = <T>(res: ServerResponse, data: T) =>
-	sendJson(res, 200, { success: true, data });
-
-const sendError = (res: ServerResponse, status: number, err: SchedulingError) =>
-	sendJson(res, status, {
-		success: false,
-		error: {
-			tag: err._tag,
-			code: 'code' in err ? (err as { code: string }).code : err._tag,
-			message: 'message' in err ? (err as { message: string }).message : 'Unknown error',
-		},
-	});
-
-const parseBody = async (req: IncomingMessage): Promise<unknown> => {
-	const chunks: Buffer[] = [];
-	for await (const chunk of req) {
-		chunks.push(chunk as Buffer);
-	}
-	const raw = Buffer.concat(chunks).toString('utf8');
-	return raw ? JSON.parse(raw) : {};
-};
+import { sendJson, sendSuccess, sendError, parseBody } from './http.js';
 
 type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 
@@ -715,19 +677,13 @@ const server = createServer(async (req, res) => {
 	});
 
 	// Auth check (skip health + observability endpoints)
-	const unauthenticatedPaths = new Set(['/health', '/ready', '/metrics']);
-	if (AUTH_TOKEN && !unauthenticatedPaths.has(path)) {
-		const auth = req.headers.authorization;
-		if (auth !== `Bearer ${AUTH_TOKEN}`) {
-			logRequestEvent('WARN', 'Unauthorized request rejected', context, {
-				event: 'request_rejected',
-				reason: 'invalid_auth_token',
-			});
-			return sendJson(res, 401, {
-				success: false,
-				error: { tag: 'InfrastructureError', code: 'UNAUTHORIZED', message: 'Invalid auth token' },
-			});
-		}
+	const authResult = checkAuth(AUTH_TOKEN, path, req.headers.authorization);
+	if (!authResult.authorized) {
+		logRequestEvent('WARN', 'Unauthorized request rejected', context, {
+			event: 'request_rejected',
+			reason: 'invalid_auth_token',
+		});
+		return sendJson(res, authResult.statusCode, authResult.body);
 	}
 
 	try {
