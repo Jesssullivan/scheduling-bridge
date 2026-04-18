@@ -44,6 +44,11 @@ import {
 	defaultBrowserConfig,
 } from '../shared/browser-service.js';
 import {
+	readAppConfig,
+	toBrowserConfig,
+	toScraperConfig,
+} from './config.js';
+import {
 	createAcuityServiceCatalog,
 	parseStaticServicesJson,
 	type ServiceCatalogRedisL2,
@@ -77,35 +82,19 @@ import type {
 } from '../core/types.js';
 
 // =============================================================================
-// CONFIGURATION
+// CONFIGURATION (centralised — see config.ts for env-var mapping)
 // =============================================================================
 
-const PORT = Number(process.env.PORT ?? 3001);
-const AUTH_TOKEN = process.env.AUTH_TOKEN;
-const ACUITY_BASE_URL = process.env.ACUITY_BASE_URL ?? 'https://MassageIthaca.as.me';
-const COUPON_CODE = process.env.ACUITY_BYPASS_COUPON;
-const SERVICE_CACHE_TTL_MS = (() => {
-	const parsed = Number(process.env.ACUITY_SERVICE_CACHE_TTL_MS ?? 5 * 60_000);
-	return Number.isFinite(parsed) && parsed >= 0 ? parsed : 5 * 60_000;
-})();
+const appConfig = readAppConfig();
 
-const browserConfig: BrowserConfig = {
-	...defaultBrowserConfig,
-	baseUrl: ACUITY_BASE_URL,
-	headless: process.env.PLAYWRIGHT_HEADLESS !== 'false',
-	timeout: Number(process.env.PLAYWRIGHT_TIMEOUT ?? 30000),
-	executablePath: process.env.CHROMIUM_EXECUTABLE_PATH,
-	launchArgs: process.env.CHROMIUM_LAUNCH_ARGS?.split(','),
-};
+const PORT = appConfig.server.port;
+const AUTH_TOKEN = appConfig.server.authToken;
+const ACUITY_BASE_URL = appConfig.acuity.baseUrl;
+const COUPON_CODE = appConfig.acuity.couponCode;
+const SERVICE_CACHE_TTL_MS = appConfig.acuity.serviceCacheTtlMs;
 
-const scraperConfig: ScraperConfig = {
-	baseUrl: ACUITY_BASE_URL,
-	headless: browserConfig.headless,
-	timeout: browserConfig.timeout,
-	userAgent: browserConfig.userAgent,
-	executablePath: browserConfig.executablePath,
-	launchArgs: browserConfig.launchArgs ? [...browserConfig.launchArgs] : undefined,
-};
+const browserConfig: BrowserConfig = toBrowserConfig(appConfig.acuity, appConfig.browserEnv);
+const scraperConfig: ScraperConfig = toScraperConfig(appConfig.acuity, browserConfig);
 
 // =============================================================================
 // RESPONSE HELPERS
@@ -165,9 +154,9 @@ const runtimeLogFields = () => ({
 	flowOwner: 'scheduling-bridge',
 	backend: 'acuity',
 	transport: 'http-json',
-	runtimeEnvironment: process.env.DEPLOYMENT_ENVIRONMENT ?? process.env.MODAL_ENVIRONMENT,
-	releaseSha: process.env.MIDDLEWARE_RELEASE_SHA,
-	releaseVersion: process.env.MIDDLEWARE_RELEASE_VERSION ?? process.env.npm_package_version,
+	runtimeEnvironment: appConfig.release.runtimeEnvironment,
+	releaseSha: appConfig.release.sha,
+	releaseVersion: appConfig.release.version,
 });
 
 const logEvent = (
@@ -274,12 +263,9 @@ const runEffect = async <A>(
 // If REDIS_URL is missing (local dev), `redisL2` stays `undefined` and the
 // catalog falls back to its in-process single-flight path.
 
-const REDIS_URL = process.env.REDIS_URL;
-const REDIS_PASSWORD = process.env.REDIS_PASSWORD;
-
-const redisClient: IORedis | null = REDIS_URL
-	? new IORedisImpl(REDIS_URL, {
-			password: REDIS_PASSWORD,
+const redisClient: IORedis | null = appConfig.redis.url
+	? new IORedisImpl(appConfig.redis.url, {
+			password: appConfig.redis.password,
 			maxRetriesPerRequest: 3,
 		})
 	: null;
@@ -290,7 +276,7 @@ const redisClient: IORedis | null = REDIS_URL
 logEvent('INFO', 'Cache mode selected', {
 	event: 'cache_mode_selected',
 	mode: redisClient ? 'l1+l2' : 'l1-only',
-	redisConfigured: Boolean(process.env.REDIS_URL),
+	redisConfigured: Boolean(appConfig.redis.url),
 });
 
 if (redisClient) {
@@ -327,7 +313,7 @@ const serviceCatalogRedisL2: ServiceCatalogRedisL2 | undefined = redisClient
 const serviceCatalog = createAcuityServiceCatalog({
 	baseUrl: ACUITY_BASE_URL,
 	cacheTtlMs: SERVICE_CACHE_TTL_MS,
-	staticServices: parseStaticServicesJson(process.env.SERVICES_JSON),
+	staticServices: parseStaticServicesJson(appConfig.acuity.servicesJson),
 	scraperConfig,
 	logger: createServiceCatalogLogger(),
 	redisL2: serviceCatalogRedisL2,
@@ -391,11 +377,11 @@ const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
 			headless: browserConfig.headless,
 			staticServices: serviceCatalog.staticServicesCount,
 			serviceCacheTtlMs: SERVICE_CACHE_TTL_MS,
-			releaseSha: process.env.MIDDLEWARE_RELEASE_SHA,
-			releaseRef: process.env.MIDDLEWARE_RELEASE_REF,
-			releaseVersion: process.env.MIDDLEWARE_RELEASE_VERSION ?? process.env.npm_package_version,
-			releaseBuiltAt: process.env.MIDDLEWARE_RELEASE_BUILT_AT ?? process.env.MIDDLEWARE_BUILD_TIMESTAMP,
-			runtimeEnvironment: process.env.DEPLOYMENT_ENVIRONMENT ?? process.env.MODAL_ENVIRONMENT,
+			releaseSha: appConfig.release.sha,
+			releaseRef: appConfig.release.ref,
+			releaseVersion: appConfig.release.version,
+			releaseBuiltAt: appConfig.release.builtAt,
+			runtimeEnvironment: appConfig.release.runtimeEnvironment,
 		}),
 	);
 };
