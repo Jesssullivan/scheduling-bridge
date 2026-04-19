@@ -13,8 +13,8 @@ spec:
   policyTypes:
     - Ingress
 ---
-# Allow ingress to scheduling-bridge pods from:
-#   1. Same-namespace pods (N=2 replicas + Redis StatefulSet)
+# Allow ingress to scheduling-bridge middleware pods from:
+#   1. Same-namespace pods (N=2 replicas)
 #   2. Prometheus (tinyland-dev-production) for /metrics scraping
 #   3. Tailscale proxy (blahaj-ops) for tailnet-exposed service
 #
@@ -35,7 +35,7 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # Same-namespace pod-to-pod (N=2 replicas, Redis StatefulSet)
+    # Same-namespace pod-to-pod (N=2 replicas)
     - from:
         - namespaceSelector:
             matchLabels:
@@ -44,11 +44,14 @@ spec:
         - protocol: TCP
           port: 3001
 
-    # Prometheus scraping from monitoring namespace
+    # Prometheus scraping from monitoring namespace (pod-scoped)
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: tinyland-dev-production
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
       ports:
         - protocol: TCP
           port: 3001
@@ -61,3 +64,30 @@ spec:
       ports:
         - protocol: TCP
           port: 3001
+---
+# Allow ingress to Redis StatefulSet from middleware pods.
+# Without this, default-deny-ingress blocks middleware → Redis traffic.
+# (Greptile P1: Redis pods need their own allow rule)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-ingress
+  namespace: scheduling-bridge
+  labels:
+    app.kubernetes.io/part-of: tinyland
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis-scheduling-bridge
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only middleware pods can reach Redis
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: scheduling-bridge
+      ports:
+        - protocol: TCP
+          port: 6379
