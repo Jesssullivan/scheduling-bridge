@@ -1,0 +1,93 @@
+# Default-deny ingress for the scheduling-bridge namespace.
+# All ingress is blocked unless explicitly allowed by the companion policy below.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: scheduling-bridge
+  labels:
+    app.kubernetes.io/part-of: tinyland
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector: {}  # matches all pods in namespace
+  policyTypes:
+    - Ingress
+---
+# Allow ingress to scheduling-bridge middleware pods from:
+#   1. Same-namespace pods (N=2 replicas)
+#   2. Prometheus (tinyland-dev-production) for /metrics scraping
+#   3. Tailscale proxy (blahaj-ops) for tailnet-exposed service
+#
+# Egress is unrestricted — middleware must reach Acuity (HTTPS),
+# Redis (same namespace), and DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-scheduling-bridge-ingress
+  namespace: scheduling-bridge
+  labels:
+    app.kubernetes.io/part-of: tinyland
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: scheduling-bridge
+  policyTypes:
+    - Ingress
+  ingress:
+    # Same-namespace pod-to-pod (N=2 replicas)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: scheduling-bridge
+      ports:
+        - protocol: TCP
+          port: 3001
+
+    # Prometheus scraping from monitoring namespace (pod-scoped)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tinyland-dev-production
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 3001
+
+    # Tailscale proxy for tailnet access
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: blahaj-ops
+      ports:
+        - protocol: TCP
+          port: 3001
+---
+# Allow ingress to Redis StatefulSet from middleware pods.
+# Without this, default-deny-ingress blocks middleware → Redis traffic.
+# (Greptile P1: Redis pods need their own allow rule)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-ingress
+  namespace: scheduling-bridge
+  labels:
+    app.kubernetes.io/part-of: tinyland
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis-scheduling-bridge
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only middleware pods can reach Redis
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: scheduling-bridge
+      ports:
+        - protocol: TCP
+          port: 6379
