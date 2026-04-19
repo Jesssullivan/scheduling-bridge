@@ -1,0 +1,16 @@
+# SOPS configuration for acuity-middleware secrets.
+#
+# Uses the same age key as the blahaj infrastructure repo.
+# Private key: ~/.config/sops/age/keys.txt (never committed)
+#
+# Usage:
+#   sops -e deploy/k8s/secret.yaml > deploy/k8s/secret.enc.yaml   # encrypt
+#   sops -d deploy/k8s/secret.enc.yaml                             # decrypt
+#   sops -d deploy/k8s/secret.enc.yaml | kubectl apply -f -        # deploy
+creation_rules:
+  - path_regex: deploy/k8s/secret\.enc\.yaml$
+    encrypted_regex: ^(data|stringData)$
+    age: age1wc2s9pfju7haufdw0at0pm2cxx9rs9qmj80nf0nzy82w0fr0gp3skzfgds
+  - path_regex: .*\.enc\.yaml$
+    encrypted_regex: ^(data|stringData)$
+    age: age1wc2s9pfju7haufdw0at0pm2cxx9rs9qmj80nf0nzy82w0fr0gp3skzfgds
