@@ -10,3 +10,6 @@ coverage/
 out/
 MODULE.bazel.lock
 bazel-*
+
+# Plaintext secrets — only *.enc.yaml (SOPS-encrypted) should be committed
+deploy/k8s/secret.yaml
