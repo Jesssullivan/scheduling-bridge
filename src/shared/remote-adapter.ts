@@ -54,6 +54,15 @@ export interface RemoteAdapterConfig {
 	 * the middleware's DOM scraper for service listing.
 	 */
 	readonly services?: readonly Service[];
+	/**
+	 * Additional HTTP headers to include in every request to the middleware
+	 * server. Useful for request correlation IDs, tracing headers, or
+	 * tenant identification.
+	 *
+	 * Note: `Content-Type` and `Authorization` are always set by the adapter
+	 * and cannot be overridden via this field.
+	 */
+	readonly headers?: Readonly<Record<string, string>>;
 }
 
 // =============================================================================
@@ -80,6 +89,7 @@ const makeRequest = <T>(
 		try: async () => {
 			const url = `${config.baseUrl}${path}`;
 			const headers: Record<string, string> = {
+				...(config.headers ?? {}),
 				'Content-Type': 'application/json',
 			};
 			if (config.authToken) {
