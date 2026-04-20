@@ -12,3 +12,8 @@
 *.vrb
 # PDF is gitignored locally but force-added by CI on main
 *.pdf
+# figure PDFs are tracked so fresh clones can build without the plotting toolchain
+!figures/*.pdf
+# local python venv for figure regeneration
+.venv/
+__pycache__/
