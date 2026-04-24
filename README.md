@@ -1,3 +1,5 @@
+<!-- markdownlint-disable-file MD013 MD040 MD060 -->
+
 # scheduling-bridge
 
 Backend-agnostic scheduling adapter hub. Currently bridges Acuity Scheduling via Playwright browser automation, with architecture designed to support additional scheduling backends.
@@ -175,6 +177,16 @@ The current publish + deploy shape is:
 This repo is the sole owner of Acuity automation concerns. App repos and shared
 packages may consume the bridge and assert its runtime tuple, but they should
 not duplicate bridge runtime ownership or release truth logic.
+
+## Runner Authority
+
+Canonical package CI and publish now run on a repo-owned GloriousFlywheel lane.
+The current proven workflow contract is the plain repo label
+`["acuity-middleware"]`.
+
+Treat that label as the active truth surface for package authority. Do not
+describe broader repo-owned self-hosted label arrays as live contract unless
+they are reproven from current runs.
 
 ## Development
 
