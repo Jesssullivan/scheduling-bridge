@@ -1,5 +1,7 @@
 # scheduling-bridge Agent Notes
 
+<!-- markdownlint-disable MD013 -->
+
 This file is the working brief for AI agents and LLMs operating in the `acuity-middleware` repo, which publishes as `@tummycrypt/scheduling-bridge`.
 
 ## Repo Role
@@ -147,6 +149,16 @@ The repo name is still `acuity-middleware`, but the package name is `scheduling-
 Today, the publish lane is still pnpm/npm-first. Bazel metadata exists, but it
 is not yet the artifact authority. `TIN-104` exists to change that deliberately
 rather than by implication.
+
+<!-- markdownlint-enable MD013 -->
+
+Current Phase 2 runner truth:
+
+- canonical package CI/publish authority is repo-owned on GloriousFlywheel
+- the current proven runner contract is the plain repo label
+  `["acuity-middleware"]`
+- do not describe richer repo-owned self-hosted label arrays as current truth
+  unless the live workflow contract is explicitly reproven
 
 ## Important Files
 
