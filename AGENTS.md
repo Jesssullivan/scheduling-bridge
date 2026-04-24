@@ -1,6 +1,6 @@
-<!-- markdownlint-disable-file MD013 -->
-
 # scheduling-bridge Agent Notes
+
+<!-- markdownlint-disable MD013 -->
 
 This file is the working brief for AI agents and LLMs operating in the `acuity-middleware` repo, which publishes as `@tummycrypt/scheduling-bridge`.
 
@@ -149,6 +149,8 @@ The repo name is still `acuity-middleware`, but the package name is `scheduling-
 Today, the publish lane is still pnpm/npm-first. Bazel metadata exists, but it
 is not yet the artifact authority. `TIN-104` exists to change that deliberately
 rather than by implication.
+
+<!-- markdownlint-enable MD013 -->
 
 Current Phase 2 runner truth:
 

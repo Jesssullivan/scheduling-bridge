@@ -1,6 +1,6 @@
-<!-- markdownlint-disable-file MD013 MD040 MD060 -->
-
 # scheduling-bridge
+
+<!-- markdownlint-disable MD013 MD040 MD060 -->
 
 Backend-agnostic scheduling adapter hub. Currently bridges Acuity Scheduling via Playwright browser automation, with architecture designed to support additional scheduling backends.
 
@@ -157,6 +157,8 @@ pnpm install
 pnpm dev
 ```
 
+<!-- markdownlint-enable MD013 MD040 MD060 -->
+
 ## Release Authority
 
 Current release authority:
@@ -172,7 +174,8 @@ The current publish + deploy shape is:
 3. CI dry-runs the extracted Bazel package surface before release
 4. GitHub Actions publishes that extracted artifact
 5. GitHub Actions deploys the Modal runtime from `main`
-6. downstream apps consume the published package and verify the live runtime tuple via `/health`
+6. downstream apps consume the published package and verify the live runtime
+   tuple via `/health`
 
 This repo is the sole owner of Acuity automation concerns. App repos and shared
 packages may consume the bridge and assert its runtime tuple, but they should
@@ -180,8 +183,8 @@ not duplicate bridge runtime ownership or release truth logic.
 
 ## Runner Authority
 
-Canonical package CI and publish now run on a repo-owned GloriousFlywheel lane.
-The current proven workflow contract is the plain repo label
+Canonical GitHub Actions package CI and publish now run on the repo-owned
+GloriousFlywheel self-hosted runner lane with the plain repo label
 `["acuity-middleware"]`.
 
 Treat that label as the active truth surface for package authority. Do not
