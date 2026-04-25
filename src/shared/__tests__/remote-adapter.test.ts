@@ -72,6 +72,23 @@ describe('RemoteAdapterConfig.headers', () => {
 		expect(capturedHeaders[0]['Content-Type']).toBe('application/json');
 	});
 
+	it('ignores case-insensitive Content-Type override attempts', async () => {
+		const fetchMock = mockFetchSuccess();
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+		const config: RemoteAdapterConfig = {
+			baseUrl: 'https://bridge.test',
+			headers: { 'content-type': 'text/xml', 'CoNtEnT-TyPe': 'text/plain' },
+		};
+
+		const adapter = createRemoteWizardAdapter(config);
+		await Effect.runPromise(adapter.getServices());
+
+		expect(capturedHeaders[0]['Content-Type']).toBe('application/json');
+		expect(capturedHeaders[0]['content-type']).toBeUndefined();
+		expect(capturedHeaders[0]['CoNtEnT-TyPe']).toBeUndefined();
+	});
+
 	it('does not override Authorization with custom headers', async () => {
 		const fetchMock = mockFetchSuccess();
 		globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -86,6 +103,24 @@ describe('RemoteAdapterConfig.headers', () => {
 		await Effect.runPromise(adapter.getServices());
 
 		expect(capturedHeaders[0]['Authorization']).toBe('Bearer real-token');
+	});
+
+	it('ignores case-insensitive Authorization override attempts', async () => {
+		const fetchMock = mockFetchSuccess();
+		globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+		const config: RemoteAdapterConfig = {
+			baseUrl: 'https://bridge.test',
+			authToken: 'real-token',
+			headers: { authorization: 'Bearer evil-token', AUTHORIZATION: 'Bearer worse-token' },
+		};
+
+		const adapter = createRemoteWizardAdapter(config);
+		await Effect.runPromise(adapter.getServices());
+
+		expect(capturedHeaders[0]['Authorization']).toBe('Bearer real-token');
+		expect(capturedHeaders[0]['authorization']).toBeUndefined();
+		expect(capturedHeaders[0]['AUTHORIZATION']).toBeUndefined();
 	});
 
 	it('works correctly when no custom headers are provided', async () => {
@@ -106,7 +141,7 @@ describe('RemoteAdapterConfig.headers', () => {
 		expect(Object.keys(capturedHeaders[0])).toHaveLength(2);
 	});
 
-	it('preserves custom headers across multiple requests', async () => {
+	it('preserves static custom headers across multiple requests', async () => {
 		const fetchMock = mockFetchSuccess();
 		globalThis.fetch = fetchMock as unknown as typeof fetch;
 

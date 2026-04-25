@@ -56,11 +56,12 @@ export interface RemoteAdapterConfig {
 	readonly services?: readonly Service[];
 	/**
 	 * Additional HTTP headers to include in every request to the middleware
-	 * server. Useful for request correlation IDs, tracing headers, or
-	 * tenant identification.
+	 * server. Useful for request-scoped correlation IDs, tracing headers, or
+	 * tenant identification. These headers are static for the lifetime of the
+	 * adapter instance; create a new adapter when per-request values must change.
 	 *
 	 * Note: `Content-Type` and `Authorization` are always set by the adapter
-	 * and cannot be overridden via this field.
+	 * and cannot be overridden via this field, regardless of header casing.
 	 */
 	readonly headers?: Readonly<Record<string, string>>;
 }
@@ -79,6 +80,26 @@ interface RemoteResponse<T> {
 	};
 }
 
+const RESERVED_HEADER_NAMES = new Set(['authorization', 'content-type']);
+
+const buildRequestHeaders = (config: RemoteAdapterConfig): Record<string, string> => {
+	const headers: Record<string, string> = {
+		'Content-Type': 'application/json',
+	};
+
+	if (config.authToken) {
+		headers['Authorization'] = `Bearer ${config.authToken}`;
+	}
+
+	for (const [name, value] of Object.entries(config.headers ?? {})) {
+		if (!RESERVED_HEADER_NAMES.has(name.toLowerCase())) {
+			headers[name] = value;
+		}
+	}
+
+	return headers;
+};
+
 const makeRequest = <T>(
 	config: RemoteAdapterConfig,
 	path: string,
@@ -88,13 +109,7 @@ const makeRequest = <T>(
 	Effect.tryPromise({
 		try: async () => {
 			const url = `${config.baseUrl}${path}`;
-			const headers: Record<string, string> = {
-				...(config.headers ?? {}),
-				'Content-Type': 'application/json',
-			};
-			if (config.authToken) {
-				headers['Authorization'] = `Bearer ${config.authToken}`;
-			}
+			const headers = buildRequestHeaders(config);
 
 			const response = await fetch(url, {
 				method,
