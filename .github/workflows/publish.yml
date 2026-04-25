@@ -12,6 +12,11 @@ on:
         type: boolean
         default: true
 
+permissions:
+  actions: read
+  contents: read
+  packages: write
+
 jobs:
   package:
     uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@c9e81f802fe9520260a5389121f8291049e030e1
@@ -34,4 +39,5 @@ jobs:
       npm_access: public
       github_package_name: "@jesssullivan/scheduling-bridge"
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
-    secrets: inherit
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
