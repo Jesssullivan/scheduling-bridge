@@ -11,10 +11,9 @@ jobs:
   package:
     uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@c0ee4a21713eb91cc6fec2670054aab42b1aac22
     with:
-      runner_mode: shared
-      shared_runner_labels_json: '["tinyland-docker"]'
+      runner_mode: hosted
       workspace_mode: isolated
-      publish_mode: same_runner
+      publish_mode: hosted_exception
       node_versions: '["20", "22"]'
       publish_node_version: "22"
       pnpm_version: "9.15.9"
