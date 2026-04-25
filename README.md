@@ -111,7 +111,7 @@ The bridge emits NDJSON logs to stdout/stderr for runtime analysis.
 pnpm install
 pnpm dev           # Development with tsx against src/server/handler.ts
 # or
-pnpm build && pnpm start  # Production via dist/server/handler.js
+pnpm build && pnpm start  # Materialize Bazel-derived dist/ and start it
 ```
 
 ### Docker
@@ -130,7 +130,7 @@ docker run -p 3001:3001 \
 ```bash
 # Set secrets in Modal dashboard first:
 #   AUTH_TOKEN, ACUITY_BASE_URL, ACUITY_BYPASS_COUPON
-# The Modal image builds the same dist/server/handler.js artifact used by pnpm start.
+# The Modal workflow materializes the Bazel-derived pkg/ before deploy.
 modal deploy modal-app.py
 ```
 
@@ -196,9 +196,10 @@ truth. Keep private runner topology and apply details out of this public repo.
 ```bash
 pnpm install      # Install dependencies
 pnpm dev          # Start dev server with tsx
-pnpm typecheck    # Run TypeScript type checking
-pnpm build        # Compile TypeScript to dist/
-pnpm test         # Run tests
+pnpm typecheck    # Run Bazel typecheck target
+pnpm build        # Materialize local pkg/ and dist/ from bazel-bin/pkg
+pnpm test         # Run Bazel test target
+pnpm docs:generate
 ```
 
 ## License

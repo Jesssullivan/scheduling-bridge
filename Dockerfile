@@ -18,26 +18,20 @@ LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.title="scheduling-bridge"
 LABEL org.opencontainers.image.vendor="tummycrypt"
 
-# Install Node.js 22 LTS + pnpm
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+# Install Node.js 24 + pnpm
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
     apt-get install -y nodejs && \
     corepack enable && corepack prepare pnpm@9.15.9 --activate && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy package files for dependency install
+# Copy the Bazel-derived package plus lockfile for runtime dependency install.
 COPY package.json pnpm-lock.yaml ./
+COPY pkg/ ./
 
-# Install dependencies needed to build the dist/server/handler.js artifact
-RUN pnpm install --frozen-lockfile
-
-# Copy source
-COPY src/ ./src/
-COPY tsconfig.json ./
-
-# Build the production server artifact, then prune devDependencies
-RUN pnpm build && pnpm prune --prod
+RUN test -f dist/server/handler.js && \
+    pnpm install --prod --frozen-lockfile --ignore-scripts
 
 # Non-root user for security
 RUN useradd -m -s /bin/bash middleware

@@ -48,11 +48,12 @@ As of `2026-04-25`, the active structural work here is:
 
 Operationally relevant truth:
 
-- the current package metadata on `main` is `@tummycrypt/scheduling-bridge`
-  `0.4.3`
-- `0.4.3` depends on `@tummycrypt/scheduling-kit ^0.7.2`
-- `0.4.3` package metadata has landed on `main`, but npm, git tag, and GitHub
-  release state must still be verified before describing it as published
+- the pending package metadata on this branch is `@tummycrypt/scheduling-bridge`
+  `0.4.4`
+- `0.4.4` depends on `@tummycrypt/scheduling-kit ^0.7.2`
+- as of `2026-04-25`, npm `latest`, git tag `v0.4.3`, and the GitHub release
+  all point at `0.4.3`; deployed bridge runtime tuple remains a separate
+  verification surface
 - package metadata, git tags, npm dist-tags, and GitHub releases are separate
   authority surfaces until `#76` is resolved
 
@@ -146,6 +147,7 @@ Important commands:
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm docs:generate
 ```
 
 Current publish flow targets:
@@ -188,6 +190,15 @@ Current runner truth:
 - `src/adapters/acuity/steps/**`
 - `modal-app.py`
 - `Dockerfile`
+- `MODULE.bazel`
+- `BUILD.bazel`
+- `flake.nix`
+- `mkdocs.yml`
+- `docs/generated/repo-facts.md`
+- `llms.txt`
+- `scripts/build-derived-artifacts.mjs`
+- `scripts/check-artifact-authority.mjs`
+- `scripts/check-release-metadata.mjs`
 - `.github/workflows/ci.yml`
 - `.github/workflows/publish.yml`
 

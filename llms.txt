@@ -1,0 +1,75 @@
+`@tummycrypt/scheduling-bridge` publishes from this repo.
+
+Purpose:
+- remote Acuity browser automation
+- Effect-based browser and page lifecycle management
+- HTTP bridge endpoints for services, availability, slots, booking, and health
+- migration bridge between Acuity and a future homegrown backend
+
+Authority:
+- Bazel artifact truth is `//:pkg`
+- `pnpm build` materializes local `pkg/` and `dist/` from `bazel-bin/pkg`
+- CI and publish extract `./bazel-bin/pkg` / `./bazel-bin/pkg`
+- runtime start command is `node dist/server/handler.js`
+
+Toolchains:
+- Bazelisk: `8.1.1`
+- Node toolchain: `24.13.0`
+- flake Node major: `24`
+- pnpm toolchain: `9.15.9`
+- package manager: `pnpm@9.15.9`
+- engines: `>=24 <25`
+- CI node matrix: `24`
+- CI publish node: `24`
+
+Protocol:
+- version: `1.0.0`
+- flow owner: `scheduling-bridge`
+- backend: `acuity`
+- transport: `http-json`
+
+Endpoints:
+- `health` -> `/health`
+- `services` -> `/services`
+- `service` -> `/services/:id`
+- `availabilityDates` -> `/availability/dates`
+- `availabilitySlots` -> `/availability/slots`
+- `availabilityCheck` -> `/availability/check`
+- `bookingCreate` -> `/booking/create`
+- `bookingCreateWithPayment` -> `/booking/create-with-payment`
+
+Capabilities:
+- `services:list`
+- `services:get`
+- `availability:dates`
+- `availability:slots`
+- `availability:check`
+- `booking:create`
+- `booking:create-with-payment`
+- `service-catalog:static-fallback`
+- `service-catalog:business-extract`
+- `service-catalog:scraper-fallback`
+- `payment:bypass-coupon`
+
+Important commands:
+- `pnpm install --frozen-lockfile`
+- `pnpm docs:generate`
+- `pnpm typecheck`
+- `pnpm test`
+- `pnpm build`
+- `pnpm check:package`
+- `bazel build //:pkg`
+- `bazel build //:typecheck`
+- `bazel test //:test`
+
+Important files:
+- `src/server/handler.ts`
+- `src/server/health.ts`
+- `src/shared/browser-service.ts`
+- `src/shared/acuity-service-catalog.ts`
+- `src/shared/remote-adapter.ts`
+- `MODULE.bazel`
+- `BUILD.bazel`
+- `flake.nix`
+- `mkdocs.yml`
+- `docs/generated/repo-facts.md`

@@ -1,0 +1,19 @@
+site_name: scheduling-bridge
+site_description: Remote Acuity scheduling bridge and package authority docs
+repo_url: https://github.com/Jesssullivan/scheduling-bridge
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.indexes
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - pymdownx.snippets
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Runtime Contract: runtime-contract.md
+  - Build And Release: build-and-release.md
+  - Consumers: consumers.md
+  - Generated Facts: generated/repo-facts.md

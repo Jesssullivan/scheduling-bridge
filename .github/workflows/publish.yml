@@ -26,13 +26,13 @@ jobs:
       runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
       workspace_mode: isolated
       publish_mode: same_runner
-      node_versions: '["20", "22"]'
-      publish_node_version: "22"
+      node_versions: '["24"]'
+      publish_node_version: "24"
       pnpm_version: "9.15.9"
       metadata_check_command: pnpm check:release-metadata
       typecheck_command: pnpm typecheck
       unit_test_command: pnpm test
-      build_command: pnpm build
+      build_command: node scripts/check-artifact-authority.mjs
       package_check_command: pnpm check:package
       bazel_targets: "//:pkg"
       package_dir: ./bazel-bin/pkg

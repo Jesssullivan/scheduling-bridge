@@ -10,3 +10,4 @@ coverage/
 out/
 MODULE.bazel.lock
 bazel-*
+!scripts/bazel-helpers.mjs
