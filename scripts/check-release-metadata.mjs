@@ -13,10 +13,15 @@ const deployModalWorkflow = read('../.github/workflows/deploy-modal.yml');
 const dockerfile = read('../Dockerfile');
 const modalApp = read('../modal-app.py');
 const expectedPnpmVersion = packageJson.packageManager?.replace(/^pnpm@/, '');
-const expectedGitHubPackageName = '@jesssullivan/scheduling-bridge';
 const expectedRepositoryUrl = 'git+https://github.com/Jesssullivan/scheduling-bridge.git';
 const expectedHomepage = 'https://github.com/Jesssullivan/scheduling-bridge';
 const expectedBugsUrl = 'https://github.com/Jesssullivan/scheduling-bridge/issues';
+const expectedPackageBasename = packageJson.name.split('/').at(-1);
+const expectedRepositoryOwner = new URL(expectedRepositoryUrl.replace(/^git\+/, ''))
+  .pathname.split('/')
+  .filter(Boolean)[0]
+  .toLowerCase();
+const expectedGitHubPackageName = `@${expectedRepositoryOwner}/${expectedPackageBasename}`;
 
 const extract = (source, pattern, label) => {
   const match = source.match(pattern);
@@ -33,6 +38,13 @@ const parseMajor = (value, label) => {
   }
   return Number(match[1]);
 };
+
+const scalar = (value) =>
+  value
+    .trim()
+    .replace(/^(['"])(.*)\1\s*(?:#.*)?$/, '$2')
+    .replace(/\s+#.*$/, '')
+    .trim();
 
 const parseSupportedNodeMajors = (engineRange) => {
   const match = engineRange.match(/^>=(\d+)\s+<(\d+)$/);
@@ -81,7 +93,7 @@ const ciBuildCommand = extract(
   ciWorkflow,
   /build_command:\s*([^\n]+)/,
   'CI build command',
-).trim();
+);
 const publishWorkflowNodeVersion = extract(
   publishWorkflow,
   /publish_node_version:\s*"([^"]+)"/,
@@ -91,7 +103,7 @@ const publishBuildCommand = extract(
   publishWorkflow,
   /build_command:\s*([^\n]+)/,
   'publish workflow build command',
-).trim();
+);
 const dockerNodeMajor = parseMajor(
   extract(dockerfile, /setup_(\d+)\.x/, 'Docker NodeSource major'),
   'Docker NodeSource major',
@@ -101,7 +113,7 @@ const modalNodeMajor = parseMajor(
   'Modal NodeSource major',
 );
 const usesPinnedPackageWorkflow = (workflow) =>
-  /uses:\s*tinyland-inc\/ci-templates\/\.github\/workflows\/js-bazel-package\.yml@[0-9a-f]{40}/.test(
+  /uses:\s*tinyland-inc\/ci-templates\/\.github\/workflows\/js-bazel-package\.yml@[0-9a-fA-F]{40}/.test(
     workflow,
   );
 
@@ -188,12 +200,12 @@ const checks = [
   },
   {
     label: 'CI build command',
-    actual: ciBuildCommand,
+    actual: scalar(ciBuildCommand),
     expected: 'node scripts/check-artifact-authority.mjs',
   },
   {
     label: 'publish workflow build command',
-    actual: publishBuildCommand,
+    actual: scalar(publishBuildCommand),
     expected: 'node scripts/check-artifact-authority.mjs',
   },
   {
@@ -203,17 +215,17 @@ const checks = [
   },
   {
     label: 'CI runner mode',
-    actual: extract(ciWorkflow, /runner_mode:\s*([^\n]+)/, 'CI runner_mode').trim(),
+    actual: scalar(extract(ciWorkflow, /runner_mode:\s*([^\n]+)/, 'CI runner_mode')),
     expected: 'shared',
   },
   {
     label: 'CI publish mode',
-    actual: extract(ciWorkflow, /publish_mode:\s*([^\n]+)/, 'CI publish_mode').trim(),
+    actual: scalar(extract(ciWorkflow, /publish_mode:\s*([^\n]+)/, 'CI publish_mode')),
     expected: 'same_runner',
   },
   {
     label: 'CI package artifact path',
-    actual: extract(ciWorkflow, /package_dir:\s*([^\n]+)/, 'CI package_dir').trim(),
+    actual: scalar(extract(ciWorkflow, /package_dir:\s*([^\n]+)/, 'CI package_dir')),
     expected: './bazel-bin/pkg',
   },
   {
@@ -237,12 +249,14 @@ const checks = [
   },
   {
     label: 'publish packages permission',
-    actual: extract(publishWorkflow, /packages:\s*([^\n]+)/, 'publish packages permission').trim(),
+    actual: scalar(
+      extract(publishWorkflow, /packages:\s*([^\n]+)/, 'publish packages permission'),
+    ),
     expected: 'write',
   },
   {
     label: 'publish package artifact path',
-    actual: extract(publishWorkflow, /package_dir:\s*([^\n]+)/, 'publish package_dir').trim(),
+    actual: scalar(extract(publishWorkflow, /package_dir:\s*([^\n]+)/, 'publish package_dir')),
     expected: './bazel-bin/pkg',
   },
   {
