@@ -5,13 +5,13 @@
   "type": "module",
   "packageManager": "pnpm@9.15.9",
   "license": "MIT",
-  "homepage": "https://github.com/Jesssullivan/acuity-middleware",
+  "homepage": "https://github.com/Jesssullivan/scheduling-bridge",
   "bugs": {
-    "url": "https://github.com/Jesssullivan/acuity-middleware/issues"
+    "url": "https://github.com/Jesssullivan/scheduling-bridge/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Jesssullivan/acuity-middleware.git"
+    "url": "git+https://github.com/Jesssullivan/scheduling-bridge.git"
   },
   "exports": {
     ".": {
@@ -31,15 +31,20 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
-    "prepublishOnly": "pnpm check:release-metadata && pnpm build && pnpm check:package",
+    "build": "node scripts/build-derived-artifacts.mjs",
+    "prepublishOnly": "pnpm check:release-metadata && pnpm check:artifact-authority && pnpm build && pnpm check:package",
     "start": "node dist/server/handler.js",
     "dev": "tsx src/server/handler.ts",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-bazel-target.mjs test //:test",
+    "typecheck": "node scripts/run-bazel-target.mjs build //:typecheck",
+    "docs:generate": "node scripts/generate-doc-surfaces.mjs",
+    "docs:build": "pnpm docs:generate && mkdocs build --strict",
+    "docs:serve": "pnpm docs:generate && mkdocs serve",
+    "docs:check": "node scripts/generate-doc-surfaces.mjs --check",
+    "check:artifact-authority": "node scripts/check-artifact-authority.mjs",
     "check:release-metadata": "node scripts/check-release-metadata.mjs",
-    "check:package": "publint",
-    "clean": "rm -rf dist",
+    "check:package": "node scripts/check-package-surface.mjs",
+    "clean": "rm -rf dist pkg",
     "paper:build": "cd docs/paper && tectonic acuity-middleware-paper.tex",
     "paper:dev": "node docs/paper/watch.mjs"
   },
@@ -51,7 +56,7 @@
     "prom-client": "^15"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^24.0.0",
     "ioredis-mock": "^8.13.1",
     "publint": "^0.3.18",
     "tsx": "^4.0.0",
@@ -70,6 +75,6 @@
     }
   },
   "engines": {
-    "node": ">=20 <25"
+    "node": ">=24 <26"
   }
 }

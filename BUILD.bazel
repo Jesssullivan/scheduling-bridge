@@ -1,9 +1,9 @@
 """
 BUILD.bazel for @tummycrypt/scheduling-bridge.
 
-Backend-agnostic scheduling adapter hub. Dual-mode build.
-  Standalone: pnpm build     (tsc)
-  Bazel:      bazel build //:pkg
+Backend-agnostic scheduling adapter hub. Bazel owns the publishable artifact.
+  Local materialization: pnpm build
+  Bazel artifact:        bazel build //:pkg
 
 Architecture:
   //:core               - Re-exported types from scheduling-kit
