@@ -159,8 +159,8 @@ The canonical GitHub repo is `Jesssullivan/scheduling-bridge`; historical
 
 Current CI and publish workflows use the shared `js-bazel-package` workflow with:
 
-- `runner_mode: hosted`
-- `publish_mode: hosted_exception`
+- `runner_mode: shared`
+- `publish_mode: same_runner`
 - `bazel_targets: "//:pkg"`
 - `package_dir: ./bazel-bin/pkg`
 
@@ -172,9 +172,10 @@ re-opening the package authority decision.
 
 Current runner truth:
 
-- the current public workflow contract is the hosted exception above
-- do not describe self-hosted/shared runner labels as live for this repo until
-  the repo Actions runner API and a green workflow run prove them
+- the public workflow contract names the runner policy, not private runner
+  topology
+- the concrete shared-runner labels come from repository Actions variables and
+  must be proven by green workflow runs before being treated as operational truth
 - keep private runner topology, cluster names, and apply details out of this
   public repo; track those in the private infrastructure repo and Linear
 

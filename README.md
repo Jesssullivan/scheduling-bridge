@@ -185,12 +185,11 @@ not duplicate bridge runtime ownership or release truth logic.
 ## Runner Authority
 
 Package CI and publish currently use the shared `js-bazel-package` workflow with
-`runner_mode: hosted` and `publish_mode: hosted_exception`.
+`runner_mode: shared` and `publish_mode: same_runner`.
 
-Treat that hosted exception as the active public workflow truth until a
-self-hosted/shared runner lane is visible to this repository and proven by green
-workflow runs. Keep private runner topology and apply details out of this public
-repo.
+The concrete shared-runner labels come from repository Actions variables and
+must be proven by green workflow runs before they are treated as operational
+truth. Keep private runner topology and apply details out of this public repo.
 
 ## Development
 

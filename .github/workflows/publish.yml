@@ -14,11 +14,13 @@ on:
 
 jobs:
   package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@827acc1d0b614dc87f3a1b0719770150988c493b
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@c9e81f802fe9520260a5389121f8291049e030e1
     with:
-      runner_mode: hosted
+      runner_mode: shared
+      shared_runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
+      runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
       workspace_mode: isolated
-      publish_mode: hosted_exception
+      publish_mode: same_runner
       node_versions: '["20", "22"]'
       publish_node_version: "22"
       pnpm_version: "9.15.9"
