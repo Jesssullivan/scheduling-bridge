@@ -2,7 +2,9 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This file is the working brief for AI agents and LLMs operating in the `acuity-middleware` repo, which publishes as `@tummycrypt/scheduling-bridge`.
+This file is the working brief for AI agents and LLMs operating in the
+`scheduling-bridge` repo, formerly `acuity-middleware`, which publishes as
+`@tummycrypt/scheduling-bridge`.
 
 ## Repo Role
 
@@ -35,17 +37,24 @@ That makes this repo central to the migration paper and to the operational beta-
 
 ## Current Tracking
 
-As of `2026-04-15`, the active structural work here is:
+As of `2026-04-25`, the active structural work here is:
 
-- `TIN-101` mini sprint: toolchain authority and hermetic package convergence
-- `TIN-104` adopt Bazel-built artifact truth in package publish lanes
-- package dependency convergence with `@tummycrypt/scheduling-kit 0.7.x`
+- `TIN-89` package, Bazel, CI, publish, and dependency truth across shared
+  scheduling packages
+- `TIN-165` bazel-registry generation from standalone package truth
+- release, tag, and npm authority cleanup tracked in GitHub issue `#76`
+- runner reachability and shared-runner adoption, still pending proof before it
+  becomes this public repo's live workflow contract
 
 Operationally relevant truth:
 
-- the current published bridge line is `0.4.1`
-- the current ESM artifact fix bumps metadata to `0.4.2`
-- that branch aligns the bridge dependency on `@tummycrypt/scheduling-kit ^0.7.1`
+- the current package metadata on `main` is `@tummycrypt/scheduling-bridge`
+  `0.4.3`
+- `0.4.3` depends on `@tummycrypt/scheduling-kit ^0.7.2`
+- `0.4.3` package metadata has landed on `main`, but npm, git tag, and GitHub
+  release state must still be verified before describing it as published
+- package metadata, git tags, npm dist-tags, and GitHub releases are separate
+  authority surfaces until `#76` is resolved
 
 ## Deployment Truth
 
@@ -144,21 +153,30 @@ Current publish flow targets:
 - npm as `@tummycrypt/scheduling-bridge`
 - GitHub Packages as `@jesssullivan/scheduling-bridge`
 
-The repo name is still `acuity-middleware`, but the package name is `scheduling-bridge`. Preserve that distinction.
+The canonical GitHub repo is `Jesssullivan/scheduling-bridge`; historical
+`Jesssullivan/acuity-middleware` URLs may redirect. The npm package name is
+`@tummycrypt/scheduling-bridge`. Preserve that distinction.
 
-Today, the publish lane is still pnpm/npm-first. Bazel metadata exists, but it
-is not yet the artifact authority. `TIN-104` exists to change that deliberately
-rather than by implication.
+Current CI and publish workflows use the shared `js-bazel-package` workflow with:
+
+- `runner_mode: hosted`
+- `publish_mode: hosted_exception`
+- `bazel_targets: "//:pkg"`
+- `package_dir: ./bazel-bin/pkg`
+
+That means Bazel-built package output is already part of the CI/publish path.
+Do not regress publish lanes back to ad hoc pnpm packaging without explicitly
+re-opening the package authority decision.
 
 <!-- markdownlint-enable MD013 -->
 
-Current Phase 2 runner truth:
+Current runner truth:
 
-- canonical package CI/publish authority is repo-owned on GloriousFlywheel
-- the current proven runner contract is the plain repo label
-  `["acuity-middleware"]`
-- do not describe richer repo-owned self-hosted label arrays as current truth
-  unless the live workflow contract is explicitly reproven
+- the current public workflow contract is the hosted exception above
+- do not describe self-hosted/shared runner labels as live for this repo until
+  the repo Actions runner API and a green workflow run prove them
+- keep private runner topology, cluster names, and apply details out of this
+  public repo; track those in the private infrastructure repo and Linear
 
 ## Important Files
 

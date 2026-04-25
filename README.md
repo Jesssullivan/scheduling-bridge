@@ -4,7 +4,8 @@
 
 Backend-agnostic scheduling adapter hub. Currently bridges Acuity Scheduling via Playwright browser automation, with architecture designed to support additional scheduling backends.
 
-> Formerly `acuity-middleware`. The GitHub repo and npm package history retain the old name.
+> Formerly `acuity-middleware`. Historical GitHub URLs may redirect, but the
+> canonical repo is `Jesssullivan/scheduling-bridge`.
 
 ## Architecture
 
@@ -163,7 +164,7 @@ pnpm dev
 
 Current release authority:
 
-- canonical repo: `Jesssullivan/acuity-middleware`
+- canonical repo: `Jesssullivan/scheduling-bridge`
 - npm package: `@tummycrypt/scheduling-bridge`
 - GitHub Packages mirror: `@jesssullivan/scheduling-bridge`
 
@@ -183,13 +184,13 @@ not duplicate bridge runtime ownership or release truth logic.
 
 ## Runner Authority
 
-Canonical GitHub Actions package CI and publish now run on the repo-owned
-GloriousFlywheel self-hosted runner lane with the plain repo label
-`["acuity-middleware"]`.
+Package CI and publish currently use the shared `js-bazel-package` workflow with
+`runner_mode: hosted` and `publish_mode: hosted_exception`.
 
-Treat that label as the active truth surface for package authority. Do not
-describe broader repo-owned self-hosted label arrays as live contract unless
-they are reproven from current runs.
+Treat that hosted exception as the active public workflow truth until a
+self-hosted/shared runner lane is visible to this repository and proven by green
+workflow runs. Keep private runner topology and apply details out of this public
+repo.
 
 ## Development
 
