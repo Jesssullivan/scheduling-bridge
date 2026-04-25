@@ -49,11 +49,10 @@ As of `2026-04-25`, the active structural work here is:
 Operationally relevant truth:
 
 - the current package metadata on `main` is `@tummycrypt/scheduling-bridge`
-  `0.4.2`
-- `0.4.2` depends on `@tummycrypt/scheduling-kit ^0.7.2`
-- pull request `#75` is the pending `0.4.3` metadata bump for custom-header
-  support; do not describe `0.4.3` as published until tag, npm, and GitHub
-  release state are verified
+  `0.4.3`
+- `0.4.3` depends on `@tummycrypt/scheduling-kit ^0.7.2`
+- `0.4.3` package metadata has landed on `main`, but npm, git tag, and GitHub
+  release state must still be verified before describing it as published
 - package metadata, git tags, npm dist-tags, and GitHub releases are separate
   authority surfaces until `#76` is resolved
 
