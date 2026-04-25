@@ -5,13 +5,13 @@
   "type": "module",
   "packageManager": "pnpm@9.15.9",
   "license": "MIT",
-  "homepage": "https://github.com/Jesssullivan/acuity-middleware",
+  "homepage": "https://github.com/Jesssullivan/scheduling-bridge",
   "bugs": {
-    "url": "https://github.com/Jesssullivan/acuity-middleware/issues"
+    "url": "https://github.com/Jesssullivan/scheduling-bridge/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Jesssullivan/acuity-middleware.git"
+    "url": "git+https://github.com/Jesssullivan/scheduling-bridge.git"
   },
   "exports": {
     ".": {
