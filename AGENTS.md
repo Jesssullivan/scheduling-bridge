@@ -2,7 +2,9 @@
 
 <!-- markdownlint-disable MD013 -->
 
-This file is the working brief for AI agents and LLMs operating in the `acuity-middleware` repo, which publishes as `@tummycrypt/scheduling-bridge`.
+This file is the working brief for AI agents and LLMs operating in the
+`scheduling-bridge` repo, formerly `acuity-middleware`, which publishes as
+`@tummycrypt/scheduling-bridge`.
 
 ## Repo Role
 
@@ -152,7 +154,9 @@ Current publish flow targets:
 - npm as `@tummycrypt/scheduling-bridge`
 - GitHub Packages as `@jesssullivan/scheduling-bridge`
 
-The repo name is still `acuity-middleware`, but the package name is `scheduling-bridge`. Preserve that distinction.
+The canonical GitHub repo is `Jesssullivan/scheduling-bridge`; historical
+`Jesssullivan/acuity-middleware` URLs may redirect. The npm package name is
+`@tummycrypt/scheduling-bridge`. Preserve that distinction.
 
 Current CI and publish workflows use the shared `js-bazel-package` workflow with:
 

@@ -3,19 +3,19 @@
 # for running the Acuity wizard automation remotely.
 #
 # Usage:
-#   docker build -t acuity-middleware .
+#   docker build -t scheduling-bridge .
 #   docker run -p 3001:3001 \
 #     -e AUTH_TOKEN=... \
 #     -e ACUITY_BASE_URL=https://MassageIthaca.as.me \
 #     -e ACUITY_BYPASS_COUPON=... \
-#     acuity-middleware
+#     scheduling-bridge
 #
 FROM mcr.microsoft.com/playwright:v1.58.2-noble
 
-LABEL org.opencontainers.image.source="https://github.com/Jesssullivan/acuity-middleware"
+LABEL org.opencontainers.image.source="https://github.com/Jesssullivan/scheduling-bridge"
 LABEL org.opencontainers.image.description="Acuity Scheduling middleware with Playwright browser automation"
 LABEL org.opencontainers.image.licenses="MIT"
-LABEL org.opencontainers.image.title="acuity-middleware"
+LABEL org.opencontainers.image.title="scheduling-bridge"
 LABEL org.opencontainers.image.vendor="tummycrypt"
 
 # Install Node.js 22 LTS + pnpm
