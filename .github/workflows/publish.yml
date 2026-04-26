@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   package:
-    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@0d3a9c1fb5198d0670b773e78d9dad6cc5867a98
+    uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@21e0093a7586931ee69d716387e00556c6da7738
     with:
       runner_mode: shared
       shared_runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
