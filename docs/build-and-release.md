@@ -59,6 +59,38 @@ lane, but it must consume the same materialized package and launch the same
 `dist/server/handler.js` entrypoint. Provider-specific deployment mechanics
 must not fork the bridge protocol or package artifact.
 
+## Bazel Cache Contract
+
+Local Bazel use defaults to the repo-local disk cache in `.bazelrc`:
+
+```bash
+bazel build //:pkg
+bazel test //:test
+```
+
+Contributor machines can opt into a remote cache by adding a private
+`user.bazelrc`; this repository intentionally keeps private cache topology out
+of public source. CI remote-cache behavior is owned by the shared
+`js-bazel-package` workflow and its runner environment. The public contract is
+that CI must still publish the Bazel package artifact from `./bazel-bin/pkg`
+with local fallback available when the remote cache is unavailable.
+
+## Release Checklist
+
+Before cutting a bridge release, verify these surfaces together:
+
+- npm package: `@tummycrypt/scheduling-bridge`
+- GitHub Packages package: `@jesssullivan/scheduling-bridge`
+- tag and GitHub release for the package version
+- Bazel package artifact from `./bazel-bin/pkg`
+- Docker and Modal runtime images built from the materialized `pkg/` surface
+- `/health` release tuple for the deployed bridge
+
+The shared `js-bazel-package` workflow owns npm provenance when running on
+eligible hosted runners. SBOM or package attestation beyond npm provenance is
+deferred to the shared workflow contract so this repo does not grow a parallel
+release authority.
+
 ## Nix
 
 Use `nix develop` or `direnv allow` to enter the Node 24, pnpm, Bazelisk,

@@ -136,6 +136,8 @@ const usesPinnedPackageWorkflow = (workflow) =>
   /uses:\s*tinyland-inc\/ci-templates\/\.github\/workflows\/js-bazel-package\.yml@[0-9a-fA-F]{40}/.test(
     workflow,
   );
+const hasWorkflowConcurrency = (workflow) => /\nconcurrency:\n/.test(workflow);
+const doesNotInheritAllSecrets = (workflow) => !/secrets:\s*inherit/.test(workflow);
 
 const checks = [
   {
@@ -234,6 +236,21 @@ const checks = [
     expected: 'true',
   },
   {
+    label: 'CI contents permission',
+    actual: scalar(extract(ciWorkflow, /contents:\s*([^\n]+)/, 'CI contents permission')),
+    expected: 'read',
+  },
+  {
+    label: 'CI concurrency',
+    actual: String(hasWorkflowConcurrency(ciWorkflow)),
+    expected: 'true',
+  },
+  {
+    label: 'CI least privilege secrets',
+    actual: String(doesNotInheritAllSecrets(ciWorkflow)),
+    expected: 'true',
+  },
+  {
     label: 'CI runner mode',
     actual: scalar(extract(ciWorkflow, /runner_mode:\s*([^\n]+)/, 'CI runner_mode')),
     expected: 'shared',
@@ -247,6 +264,13 @@ const checks = [
     label: 'CI package artifact path',
     actual: scalar(extract(ciWorkflow, /package_dir:\s*([^\n]+)/, 'CI package_dir')),
     expected: './bazel-bin/pkg',
+  },
+  {
+    label: 'CI npm provenance intent',
+    actual: scalar(
+      extract(ciWorkflow, /npm_publish_provenance:\s*([^\n]+)/, 'CI npm provenance'),
+    ),
+    expected: 'true',
   },
   {
     label: 'CI Bazel package target',
@@ -268,6 +292,11 @@ const checks = [
     expected: 'true',
   },
   {
+    label: 'publish concurrency',
+    actual: String(hasWorkflowConcurrency(publishWorkflow)),
+    expected: 'true',
+  },
+  {
     label: 'publish packages permission',
     actual: scalar(
       extract(publishWorkflow, /packages:\s*([^\n]+)/, 'publish packages permission'),
@@ -275,9 +304,27 @@ const checks = [
     expected: 'write',
   },
   {
+    label: 'publish provenance permission',
+    actual: scalar(
+      extract(publishWorkflow, /id-token:\s*([^\n]+)/, 'publish id-token permission'),
+    ),
+    expected: 'write',
+  },
+  {
     label: 'publish package artifact path',
     actual: scalar(extract(publishWorkflow, /package_dir:\s*([^\n]+)/, 'publish package_dir')),
     expected: './bazel-bin/pkg',
+  },
+  {
+    label: 'publish npm provenance',
+    actual: scalar(
+      extract(
+        publishWorkflow,
+        /npm_publish_provenance:\s*([^\n]+)/,
+        'publish npm provenance',
+      ),
+    ),
+    expected: 'true',
   },
   {
     label: 'publish Bazel package target',

@@ -7,6 +7,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   package:
     uses: tinyland-inc/ci-templates/.github/workflows/js-bazel-package.yml@462272a83640c0fddbe2925a87064a7d2575c03a
@@ -27,6 +34,6 @@ jobs:
       bazel_targets: "//:pkg"
       package_dir: ./bazel-bin/pkg
       npm_access: public
+      npm_publish_provenance: true
       github_package_name: "@jesssullivan/scheduling-bridge"
       dry_run: true
-    secrets: inherit

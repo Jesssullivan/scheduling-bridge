@@ -15,7 +15,12 @@ on:
 permissions:
   actions: read
   contents: read
+  id-token: write
   packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   package:
@@ -37,6 +42,7 @@ jobs:
       bazel_targets: "//:pkg"
       package_dir: ./bazel-bin/pkg
       npm_access: public
+      npm_publish_provenance: true
       github_package_name: "@jesssullivan/scheduling-bridge"
       dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
     secrets:
