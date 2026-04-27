@@ -362,10 +362,11 @@ const CATALOG_REDIS_KEY = `acuity:services:v1:${ACUITY_BASE_URL}`;
 /**
  * Real-liveness readiness handler wired to the module-level singletons.
  *
- * Checks (in parallel, under ~3 s combined budget):
+ * Checks:
  *  1. Redis ping
  *  2. Browser pool `isConnected()` via BrowserProcess Effect service
  *  3. Catalog has data in L1 (getCachedCount) or L2 (Redis EXISTS)
+ *  4. If Redis + browser pass but catalog is cold, one bounded catalog warmup
  *
  * Returns HTTP 200 when all pass; 503 otherwise.
  */
@@ -380,6 +381,7 @@ const handleReady = (res: ServerResponse) =>
 		catalogL2Exists: redisClient
 			? () => redisClient!.exists(CATALOG_REDIS_KEY)
 			: null,
+		catalogWarm: async () => (await serviceCatalog.getServices()).length,
 	});
 
 const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
