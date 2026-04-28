@@ -46,7 +46,7 @@ bazel_dep(name = "aspect_rules_swc", version = "2.6.1")
 # =============================================================================
 
 # Primary dependency: scheduling-kit (peer; bridge orchestrates over kit's adapters).
-bazel_dep(name = "tummycrypt_scheduling_kit", version = "0.7.2")
+bazel_dep(name = "tummycrypt_scheduling_kit", version = "0.7.0")  # bump to 0.7.2 once registered
 
 # Auth surface (payment capability types come through tinyland-auth).
 bazel_dep(name = "tummycrypt_tinyland_auth", version = "0.3.0")
