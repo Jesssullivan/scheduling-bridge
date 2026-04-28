@@ -16,8 +16,8 @@ Architecture:
 
 load("@aspect_rules_js//npm:defs.bzl", "npm_package")
 load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
-load("@npm//:defs.bzl", "npm_link_all_packages")
-load("@npm//:vitest/package_json.bzl", vitest_bin = "bin")
+load("@tummycrypt_scheduling_bridge_npm//:defs.bzl", "npm_link_all_packages")
+load("@tummycrypt_scheduling_bridge_npm//:vitest/package_json.bzl", vitest_bin = "bin")
 
 # =============================================================================
 # npm link
