@@ -54,7 +54,9 @@ export const resolveBazelCommand = () => {
 
 export const runBazel = (...args) => {
   const bazel = resolveBazelCommand();
-  const result = run(bazel.command, [...bazel.prefixArgs, ...args]);
+  const outputUserRoot = process.env.BAZEL_OUTPUT_USER_ROOT;
+  const startupArgs = outputUserRoot ? [`--output_user_root=${outputUserRoot}`] : [];
+  const result = run(bazel.command, [...bazel.prefixArgs, ...startupArgs, ...args]);
 
   if (result.error) {
     fail(result.error.message);
