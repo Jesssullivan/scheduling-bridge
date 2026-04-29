@@ -47,23 +47,42 @@ const scalar = (value) =>
     .trim();
 
 const parseSupportedNodeMajors = (engineRange) => {
-  const match = engineRange.match(/^>=(\d+)\s+<(\d+)$/);
-  if (!match?.[1] || !match?.[2]) {
+  const majors = new Set();
+
+  for (const rawClause of engineRange.split('||')) {
+    const clause = rawClause.trim();
+    const caret = clause.match(/^\^(\d+)\.0\.0$/);
+    if (caret?.[1]) {
+      majors.add(caret[1]);
+      continue;
+    }
+
+    const bounded = clause.match(/^>=(\d+)\s+<(\d+)$/);
+    if (bounded?.[1] && bounded?.[2]) {
+      const lower = Number(bounded[1]);
+      const upper = Number(bounded[2]);
+      for (let major = lower; major < upper; major += 1) {
+        majors.add(String(major));
+      }
+      continue;
+    }
+
+    throw new Error(`Unsupported node engines clause "${clause}" in "${engineRange}"`);
+  }
+
+  const sorted = Array.from(majors).sort((a, b) => Number(a) - Number(b));
+  if (sorted.length === 0) {
     throw new Error(`Unsupported node engines range "${engineRange}"`);
   }
 
-  const lower = Number(match[1]);
-  const upper = Number(match[2]);
-
   return {
-    lower,
-    upper,
-    majors: Array.from({ length: upper - lower }, (_, index) => String(lower + index)),
+    lower: Number(sorted[0]),
+    majors: sorted,
   };
 };
 
 const supportedNodeMajors = parseSupportedNodeMajors(packageJson.engines.node);
-const canonicalNodeMajor = String(supportedNodeMajors.lower);
+const minimumConsumerNodeMajor = String(supportedNodeMajors.lower);
 const nodeTypesMajor = parseMajor(
   packageJson.devDependencies['@types/node'],
   '@types/node version',
@@ -112,6 +131,7 @@ const modalNodeMajor = parseMajor(
   extract(modalApp, /setup_(\d+)\.x/, 'Modal NodeSource major'),
   'Modal NodeSource major',
 );
+const nodeMajorSupported = (major) => supportedNodeMajors.majors.includes(String(major));
 const usesPinnedPackageWorkflow = (workflow) =>
   /uses:\s*tinyland-inc\/ci-templates\/\.github\/workflows\/js-bazel-package\.yml@[0-9a-fA-F]{40}/.test(
     workflow,
@@ -154,29 +174,29 @@ const checks = [
     expected: expectedBugsUrl,
   },
   {
-    label: 'MODULE.bazel Node major',
-    actual: String(bazelNodeMajor),
-    expected: canonicalNodeMajor,
+    label: 'MODULE.bazel Node major is supported',
+    actual: String(nodeMajorSupported(bazelNodeMajor)),
+    expected: 'true',
   },
   {
-    label: 'flake Node major',
-    actual: String(flakeNodeMajor),
-    expected: canonicalNodeMajor,
+    label: 'flake Node major is supported',
+    actual: String(nodeMajorSupported(flakeNodeMajor)),
+    expected: 'true',
   },
   {
-    label: 'Docker Node major',
-    actual: String(dockerNodeMajor),
-    expected: canonicalNodeMajor,
+    label: 'Docker Node major is supported',
+    actual: String(nodeMajorSupported(dockerNodeMajor)),
+    expected: 'true',
   },
   {
-    label: 'Modal Node major',
-    actual: String(modalNodeMajor),
-    expected: canonicalNodeMajor,
+    label: 'Modal Node major is supported',
+    actual: String(nodeMajorSupported(modalNodeMajor)),
+    expected: 'true',
   },
   {
-    label: '@types/node major',
+    label: '@types/node major matches minimum consumer Node',
     actual: String(nodeTypesMajor),
-    expected: canonicalNodeMajor,
+    expected: minimumConsumerNodeMajor,
   },
   {
     label: 'CI node versions',
@@ -184,19 +204,19 @@ const checks = [
     expected: JSON.stringify(supportedNodeMajors.majors),
   },
   {
-    label: 'publish workflow node versions',
-    actual: JSON.stringify(publishNodeVersions),
-    expected: JSON.stringify(supportedNodeMajors.majors),
+    label: 'publish workflow node versions are supported',
+    actual: String(publishNodeVersions.every(nodeMajorSupported)),
+    expected: 'true',
   },
   {
-    label: 'CI publish node version',
-    actual: ciPublishNodeVersion,
-    expected: canonicalNodeMajor,
+    label: 'CI publish node version is supported',
+    actual: String(nodeMajorSupported(ciPublishNodeVersion)),
+    expected: 'true',
   },
   {
-    label: 'publish workflow node version',
-    actual: publishWorkflowNodeVersion,
-    expected: canonicalNodeMajor,
+    label: 'publish workflow node version is supported',
+    actual: String(nodeMajorSupported(publishWorkflowNodeVersion)),
+    expected: 'true',
   },
   {
     label: 'CI build command',

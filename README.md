@@ -105,6 +105,15 @@ The bridge emits NDJSON logs to stdout/stderr for runtime analysis.
 
 ## Deployment
 
+## Node Runtime Policy
+
+The npm package supports active downstream consumer runtimes on Node 22 and
+Node 24. CI validates the host test suite on both majors.
+
+The bridge-owned Bazel toolchain, Nix dev shell, Docker image, Modal image, and
+publish workflow intentionally stay on Node 24. Downstream apps should not infer
+that they must also run Node 24 unless they deploy the bridge runtime itself.
+
 ### Standalone Node.js
 
 ```bash

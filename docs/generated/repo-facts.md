@@ -22,8 +22,8 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 - flake Node package major: `24`
 - pnpm toolchain: `9.15.9`
 - package manager: `pnpm@9.15.9`
-- engines: `>=24 <25`
-- CI node matrix: `24`
+- engines: `^22.0.0 || ^24.0.0`
+- CI node matrix: `22, 24`
 - CI publish node: `24`
 
 ## Release Surface
@@ -34,7 +34,7 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 - local build command: `node scripts/build-derived-artifacts.mjs`
 - local derived package directory: `pkg/`
 - CI typecheck command: `pnpm typecheck`
-- CI unit test command: `pnpm test`
+- CI unit test command: `pnpm test:host && pnpm test`
 - CI build command: `node scripts/check-artifact-authority.mjs`
 - runtime start command: `node dist/server/handler.js`
 
