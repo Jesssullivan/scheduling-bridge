@@ -10,21 +10,21 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 ## Package Identity
 
 - package: `@tummycrypt/scheduling-bridge`
-- package version: `0.4.4`
-- Bazel module version: `0.4.4`
-- Bazel package stanza: `@tummycrypt/scheduling-bridge@0.4.4`
+- package version: `0.4.5`
+- Bazel module version: `0.4.5`
+- Bazel package stanza: `@tummycrypt/scheduling-bridge@0.4.5`
 - repository: `git+https://github.com/Jesssullivan/scheduling-bridge.git`
 
 ## Toolchains
 
 - Bazelisk version file: `8.1.1`
-- Bazel Node toolchain: `24.13.0`
-- flake Node package major: `24`
+- Bazel Node toolchain: `22.13.1`
+- flake Node package major: `22`
 - pnpm toolchain: `9.15.9`
 - package manager: `pnpm@9.15.9`
-- engines: `>=24 <25`
-- CI node matrix: `24`
-- CI publish node: `24`
+- engines: `>=22 <25`
+- CI node matrix: `22, 24`
+- CI publish node: `22`
 
 ## Release Surface
 

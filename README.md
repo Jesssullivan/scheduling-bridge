@@ -107,6 +107,11 @@ The bridge emits NDJSON logs to stdout/stderr for runtime analysis.
 
 ### Standalone Node.js
 
+The npm package supports Node.js 22 through Node.js 24. Modal and Docker
+deployment images intentionally run Node.js 24; downstream app consumers on
+Node.js 22 should consume the published package rather than infer runtime
+policy from the Modal/Docker images.
+
 ```bash
 pnpm install
 pnpm dev           # Development with tsx against src/server/handler.ts

@@ -1,6 +1,6 @@
 {
   "name": "@tummycrypt/scheduling-bridge",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Backend-agnostic scheduling adapter hub with Playwright automation",
   "type": "module",
   "packageManager": "pnpm@9.15.9",
@@ -56,7 +56,7 @@
     "prom-client": "^15"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^22.0.0",
     "ioredis-mock": "^8.13.1",
     "publint": "^0.3.18",
     "tsx": "^4.0.0",
@@ -75,6 +75,6 @@
     }
   },
   "engines": {
-    "node": ">=24 <25"
+    "node": ">=22 <25"
   }
 }

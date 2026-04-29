@@ -14,13 +14,13 @@ Authority:
 
 Toolchains:
 - Bazelisk: `8.1.1`
-- Node toolchain: `24.13.0`
-- flake Node major: `24`
+- Node toolchain: `22.13.1`
+- flake Node major: `22`
 - pnpm toolchain: `9.15.9`
 - package manager: `pnpm@9.15.9`
-- engines: `>=24 <25`
-- CI node matrix: `24`
-- CI publish node: `24`
+- engines: `>=22 <25`
+- CI node matrix: `22, 24`
+- CI publish node: `22`
 
 Protocol:
 - version: `1.0.0`

@@ -20,7 +20,7 @@ Adapter targets:
 
 module(
     name = "tummycrypt_scheduling_bridge",
-    version = "0.4.4",
+    version = "0.4.5",
     compatibility_level = 1,
 )
 
@@ -56,7 +56,7 @@ bazel_dep(name = "tummycrypt_tinyland_auth", version = "0.3.0")
 # =============================================================================
 
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
-node.toolchain(node_version = "24.13.0")
+node.toolchain(node_version = "22.13.1")
 
 # =============================================================================
 # pnpm toolchain

@@ -63,7 +63,11 @@ const parseSupportedNodeMajors = (engineRange) => {
 };
 
 const supportedNodeMajors = parseSupportedNodeMajors(packageJson.engines.node);
-const canonicalNodeMajor = String(supportedNodeMajors.lower);
+const packageNodeMajor = String(supportedNodeMajors.lower);
+const runtimeNodeMajor = String(supportedNodeMajors.upper - 1);
+const validationNodeMajors = Array.from(
+  new Set([packageNodeMajor, runtimeNodeMajor]),
+);
 const nodeTypesMajor = parseMajor(
   packageJson.devDependencies['@types/node'],
   '@types/node version',
@@ -156,47 +160,47 @@ const checks = [
   {
     label: 'MODULE.bazel Node major',
     actual: String(bazelNodeMajor),
-    expected: canonicalNodeMajor,
+    expected: packageNodeMajor,
   },
   {
     label: 'flake Node major',
     actual: String(flakeNodeMajor),
-    expected: canonicalNodeMajor,
+    expected: packageNodeMajor,
   },
   {
     label: 'Docker Node major',
     actual: String(dockerNodeMajor),
-    expected: canonicalNodeMajor,
+    expected: runtimeNodeMajor,
   },
   {
     label: 'Modal Node major',
     actual: String(modalNodeMajor),
-    expected: canonicalNodeMajor,
+    expected: runtimeNodeMajor,
   },
   {
     label: '@types/node major',
     actual: String(nodeTypesMajor),
-    expected: canonicalNodeMajor,
+    expected: packageNodeMajor,
   },
   {
     label: 'CI node versions',
     actual: JSON.stringify(ciNodeVersions),
-    expected: JSON.stringify(supportedNodeMajors.majors),
+    expected: JSON.stringify(validationNodeMajors),
   },
   {
     label: 'publish workflow node versions',
     actual: JSON.stringify(publishNodeVersions),
-    expected: JSON.stringify(supportedNodeMajors.majors),
+    expected: JSON.stringify(validationNodeMajors),
   },
   {
     label: 'CI publish node version',
     actual: ciPublishNodeVersion,
-    expected: canonicalNodeMajor,
+    expected: packageNodeMajor,
   },
   {
     label: 'publish workflow node version',
     actual: publishWorkflowNodeVersion,
-    expected: canonicalNodeMajor,
+    expected: packageNodeMajor,
   },
   {
     label: 'CI build command',

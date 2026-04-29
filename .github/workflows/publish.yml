@@ -26,8 +26,8 @@ jobs:
       runner_labels_json: ${{ vars.PRIMARY_LINUX_RUNNER_LABELS_JSON }}
       workspace_mode: isolated
       publish_mode: same_runner
-      node_versions: '["24"]'
-      publish_node_version: "24"
+      node_versions: '["22","24"]'
+      publish_node_version: "22"
       pnpm_version: "9.15.9"
       metadata_check_command: pnpm check:release-metadata
       typecheck_command: pnpm typecheck

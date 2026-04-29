@@ -49,8 +49,10 @@ As of `2026-04-25`, the active structural work here is:
 Operationally relevant truth:
 
 - the pending package metadata on this branch is `@tummycrypt/scheduling-bridge`
-  `0.4.4`
-- `0.4.4` depends on `@tummycrypt/scheduling-kit ^0.7.4`
+  `0.4.5`
+- `0.4.5` depends on `@tummycrypt/scheduling-kit ^0.7.4`
+- the public npm package supports Node 22 through Node 24; Modal and Docker
+  deployment images intentionally remain on Node 24
 - as of `2026-04-25`, npm `latest`, git tag `v0.4.3`, and the GitHub release
   all point at `0.4.3`; deployed bridge runtime tuple remains a separate
   verification surface

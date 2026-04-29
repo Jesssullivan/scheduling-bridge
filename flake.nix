@@ -41,7 +41,7 @@
             docsPython
             git
             jdk21_headless
-            nodejs_24
+            nodejs_22
             pnpm
             playwright-driver.browsers
             ripgrep

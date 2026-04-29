@@ -27,5 +27,7 @@ through Bazel so local and CI paths exercise the same package graph.
 
 ## Nix
 
-Use `nix develop` or `direnv allow` to enter the Node 24, pnpm, Bazelisk,
-Playwright, MkDocs, and paper-tooling shell.
+Use `nix develop` or `direnv allow` to enter the Node 22 package-validation
+shell with pnpm, Bazelisk, Playwright, MkDocs, and paper tooling. Modal and
+Docker deployment images remain on Node 24, so release checks validate the
+package on Node 22 and Node 24 while keeping runtime image policy explicit.
