@@ -38,6 +38,14 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 - CI build command: `node scripts/check-artifact-authority.mjs`
 - runtime start command: `node dist/server/handler.js`
 
+## Runtime Provider Truth
+
+- provider-agnostic contract: Node HTTP server plus `/health` tuple
+- current live primary provider: Modal, until `TIN-189` closes
+- active next-primary lane: K8s/container runtime from infrastructure
+- forward consumer env names: `SCHEDULING_BRIDGE_URL` and
+  `SCHEDULING_BRIDGE_AUTH_TOKEN`
+
 ## Exported Entry Points
 
 | Export | Types | Runtime |

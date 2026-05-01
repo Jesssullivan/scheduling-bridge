@@ -105,6 +105,20 @@ The bridge emits NDJSON logs to stdout/stderr for runtime analysis.
 
 ## Deployment
 
+### Runtime Provider Truth
+
+The stable bridge contract is the Node HTTP server, protocol surface, and
+`/health` tuple. Modal is the current live primary deployment provider, but it
+is not the name of the consumer contract.
+
+- Current live primary: Modal, until the `TIN-189` K8s parity bake is accepted.
+- Active next-primary lane: K8s/container runtime managed from infrastructure.
+- Compatibility target: Docker image with the same `dist/server/handler.js`
+  entrypoint.
+- Consumer apps should configure the remote bridge with
+  `SCHEDULING_BRIDGE_URL` and `SCHEDULING_BRIDGE_AUTH_TOKEN`; legacy
+  `MODAL_*` names are transition aliases in consumer/infra repos.
+
 ## Node Runtime Policy
 
 The npm package supports active downstream consumer runtimes on Node 22 and
@@ -145,7 +159,7 @@ modal deploy modal-app.py
 
 #### Supported deployment path
 
-The supported deployment path for the live Acuity bridge is:
+The current Modal deployment path for the live Acuity bridge is:
 
 1. merge to `main`
 2. let `.github/workflows/deploy-modal.yml` deploy `modal-app.py`
@@ -183,7 +197,7 @@ The current publish + deploy shape is:
 2. Bazel validates/builds the publishable artifact
 3. CI dry-runs the extracted Bazel package surface before release
 4. GitHub Actions publishes that extracted artifact
-5. GitHub Actions deploys the Modal runtime from `main`
+5. GitHub Actions deploys the current Modal runtime from `main`
 6. downstream apps consume the published package and verify the live runtime
    tuple via `/health`
 

@@ -182,6 +182,14 @@ This page is generated from \`package.json\`, \`MODULE.bazel\`, \`BUILD.bazel\`,
 - CI build command: \`${ciBuildCommand}\`
 - runtime start command: \`${pkg.scripts.start}\`
 
+## Runtime Provider Truth
+
+- provider-agnostic contract: Node HTTP server plus \`/health\` tuple
+- current live primary provider: Modal, until \`TIN-189\` closes
+- active next-primary lane: K8s/container runtime from infrastructure
+- forward consumer env names: \`SCHEDULING_BRIDGE_URL\` and
+  \`SCHEDULING_BRIDGE_AUTH_TOKEN\`
+
 ## Exported Entry Points
 
 | Export | Types | Runtime |
@@ -220,6 +228,10 @@ const llms = [
   '- `pnpm build` materializes local `pkg/` and `dist/` from `bazel-bin/pkg`',
   `- CI and publish extract \`${ciPackageDir}\` / \`${publishPackageDir}\``,
   `- runtime start command is \`${pkg.scripts.start}\``,
+  '- provider-agnostic runtime contract is the Node HTTP server plus `/health` tuple',
+  '- Modal is the current live primary provider until `TIN-189` closes',
+  '- K8s/container execution is the active next-primary lane from infrastructure',
+  '- consumer apps should use `SCHEDULING_BRIDGE_URL` and `SCHEDULING_BRIDGE_AUTH_TOKEN`',
   '',
   'Toolchains:',
   `- Bazelisk: \`${bazelVersion}\``,

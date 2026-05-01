@@ -16,7 +16,7 @@ It owns:
 - Playwright orchestration
 - Effect-based resource management around browser/page lifecycle
 - remote HTTP endpoints for services, availability, slots, booking, and health
-- Modal and Docker deployment surfaces
+- bridge runtime packaging for Modal, Docker, and Kubernetes/container targets
 
 It does **not** own:
 
@@ -24,6 +24,8 @@ It does **not** own:
 - application-specific environment switching
 - site-specific admin UI
 - reusable, backend-agnostic UI components
+- Kubernetes cluster state or public edge routing; those live in the
+  infrastructure repo
 
 ## Strategic Goal
 
@@ -42,7 +44,9 @@ As of `2026-04-25`, the active structural work here is:
 - `TIN-89` package, Bazel, CI, publish, and dependency truth across shared
   scheduling packages
 - `TIN-165` bazel-registry generation from standalone package truth
+- `TIN-189` Modal-to-K8s bridge migration and parity bake
 - release, tag, and npm authority cleanup tracked in GitHub issue `#76`
+- runtime/provider decoupling tracked in GitHub issue `#44`
 - runner reachability and shared-runner adoption, still pending proof before it
   becomes this public repo's live workflow contract
 
@@ -51,17 +55,34 @@ Operationally relevant truth:
 - the pending package metadata on this branch is `@tummycrypt/scheduling-bridge`
   `0.4.5`
 - `0.4.5` depends on `@tummycrypt/scheduling-kit ^0.7.4`
-- as of `2026-04-29`, npm `latest`, git tag `v0.4.4`, and the GitHub release
-  all point at `0.4.4`; deployed bridge runtime tuple remains a separate
-  verification surface
+- as of `2026-04-30`, npm `latest` and git tag `v0.4.5` point at `0.4.5`;
+  deployed bridge runtime tuple remains a separate verification surface
 - package metadata, git tags, npm dist-tags, and GitHub releases are separate
   authority surfaces until `#76` is resolved
 
 ## Deployment Truth
 
+### Runtime Contract
+
+The provider-agnostic bridge contract is the Node HTTP server plus `/health`
+runtime tuple. Consumers should talk about this service as the scheduling
+bridge, not as "Modal", unless they are discussing the Modal deployment itself.
+
+Current provider truth:
+
+- Modal remains the current live primary remote bridge surface until `TIN-189`
+  closes and the K8s parity bake is accepted.
+- K8s is an active shadow and next-primary execution lane, but cluster state,
+  tailnet exposure, and public-edge routing are infrastructure concerns.
+- Docker/container execution must mirror the same built Node entrypoint so K8s
+  and other providers do not become separate runtime implementations.
+- Downstream apps should configure bridge endpoints with
+  `SCHEDULING_BRIDGE_URL` / `SCHEDULING_BRIDGE_AUTH_TOKEN`; legacy `MODAL_*`
+  names are compatibility aliases outside this repo, not the forward contract.
+
 ### Modal
 
-Modal is the primary remote deployment surface.
+Modal is the current live primary remote deployment surface.
 
 Important facts:
 
@@ -69,11 +90,13 @@ Important facts:
 - the Modal image must stay aligned with the same built artifact used by `pnpm start`
 - warm-container behavior and concurrency settings are part of the real latency story
 
-### Docker
+### Docker / K8s Container
 
-Docker should mirror the same entrypoint and runtime assumptions as Modal.
+Docker and K8s containers should mirror the same entrypoint and runtime
+assumptions as Modal.
 
-If Modal and Docker drift from the actual Node entrypoint, that is an operational bug.
+If Modal, Docker, and K8s drift from the actual Node entrypoint, that is an
+operational bug.
 
 ### Release Coordination
 
