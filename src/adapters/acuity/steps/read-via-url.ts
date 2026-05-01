@@ -17,6 +17,7 @@ import { observePageOpEffect } from '../../../shared/metrics.js';
 import { WizardStepError } from '../errors.js';
 import { Selectors } from '../selectors.js';
 import { parseSlotText, buildIsoDatetime } from '../slot-parser.js';
+import { navigateToMonth, parseYearMonthKey } from '../wizard-calendar.js';
 import {
 	buildSlotReadProfileEvent,
 	createSlotReadProfile,
@@ -44,6 +45,35 @@ const navigateForUrlRead = async (page: Page, url: URL, timeout: number): Promis
 	// useful. Bound the network-idle wait so empty days do not become 30s 500s.
 	await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout });
 	await page.waitForLoadState('networkidle', { timeout: Math.min(timeout, 5000) }).catch(() => {});
+};
+
+const navigateToServiceCalendar = (
+	page: Page,
+	url: URL,
+	timeout: number,
+	step: 'read-availability' | 'read-slots',
+): Effect.Effect<void, WizardStepError> =>
+	Effect.tryPromise({
+		try: () => navigateForUrlRead(page, url, timeout),
+		catch: (e) => new WizardStepError({ step, message: `Navigation failed: ${e}` }),
+	});
+
+const navigateToTargetMonth = (
+	page: Page,
+	targetMonth: string | undefined,
+	step: 'read-availability' | 'read-slots',
+): Effect.Effect<void, WizardStepError> => {
+	if (!targetMonth) return Effect.void;
+
+	const parsed = parseYearMonthKey(targetMonth);
+	if (!parsed) {
+		return Effect.fail(new WizardStepError({
+			step,
+			message: `Invalid target month: ${targetMonth}`,
+		}));
+	}
+
+	return navigateToMonth(page, parsed.month, parsed.year, step);
 };
 
 const readEnabledCalendarDates = (
@@ -95,12 +125,9 @@ export const readDatesViaUrl = (
 
 		const url = new URL(config.baseUrl);
 		url.searchParams.set('appointmentType', serviceId);
-		if (targetMonth) url.searchParams.set('month', targetMonth);
 
-		yield* Effect.tryPromise({
-			try: () => navigateForUrlRead(page, url, config.timeout),
-			catch: (e) => new WizardStepError({ step: 'read-availability', message: `Navigation failed: ${e}` }),
-		});
+		yield* navigateToServiceCalendar(page, url, config.timeout, 'read-availability');
+		yield* navigateToTargetMonth(page, targetMonth, 'read-availability');
 
 		// Wait for calendar tiles using the Selectors registry
 		const calendarSelector = Selectors.calendarDay.join(', ');
@@ -133,6 +160,7 @@ export const readDatesViaUrl = (
 			try: () => navigateForUrlRead(page, url, config.timeout),
 			catch: (e) => new WizardStepError({ step: 'read-availability', message: `Retry navigation failed: ${e}` }),
 		});
+		yield* navigateToTargetMonth(page, targetMonth, 'read-availability');
 		yield* Effect.tryPromise({
 			try: () => page.waitForSelector(calendarSelector, { timeout: 10000 }),
 			catch: () => null,
@@ -178,12 +206,11 @@ export const readSlotsViaUrl = (
 		const url = new URL(config.baseUrl);
 		url.searchParams.set('appointmentType', serviceId);
 		url.searchParams.set('date', date);
+		const targetMonth = date.slice(0, 7);
 
 		const navigationStartedAt = Date.now();
-		yield* Effect.tryPromise({
-			try: () => navigateForUrlRead(page, url, config.timeout),
-			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Navigation failed: ${e}` }),
-		});
+		yield* navigateToServiceCalendar(page, url, config.timeout, 'read-slots');
+		yield* navigateToTargetMonth(page, targetMonth, 'read-slots');
 		navigationMs = Date.now() - navigationStartedAt;
 
 		// Click the target date on the calendar. Disabled dates are a valid

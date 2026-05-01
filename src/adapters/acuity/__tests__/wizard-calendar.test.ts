@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MONTH_NAMES } from '../wizard-calendar.js';
+import { MONTH_NAMES, parseYearMonthKey } from '../wizard-calendar.js';
 
 describe('MONTH_NAMES', () => {
 	it('has 12 entries', () => {
@@ -24,5 +24,18 @@ describe('MONTH_NAMES', () => {
 		expect(MONTH_NAMES.indexOf('march')).toBe(2);
 		expect(MONTH_NAMES.indexOf('december')).toBe(11);
 		expect(MONTH_NAMES.indexOf('invalid')).toBe(-1);
+	});
+});
+
+describe('parseYearMonthKey', () => {
+	it('parses a YYYY-MM key to zero-based calendar month', () => {
+		expect(parseYearMonthKey('2026-07')).toEqual({ year: 2026, month: 6 });
+	});
+
+	it('rejects malformed or out-of-range month keys', () => {
+		expect(parseYearMonthKey('2026-7')).toBeNull();
+		expect(parseYearMonthKey('2026-00')).toBeNull();
+		expect(parseYearMonthKey('2026-13')).toBeNull();
+		expect(parseYearMonthKey('july-2026')).toBeNull();
 	});
 });

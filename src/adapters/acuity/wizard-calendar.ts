@@ -19,6 +19,24 @@ export const MONTH_NAMES: readonly string[] = [
 	'july', 'august', 'september', 'october', 'november', 'december',
 ];
 
+export interface CalendarMonth {
+	readonly month: number;
+	readonly year: number;
+}
+
+export const parseYearMonthKey = (value: string): CalendarMonth | null => {
+	const match = value.match(/^(\d{4})-(\d{2})$/);
+	if (!match) return null;
+
+	const year = Number(match[1]);
+	const month = Number(match[2]) - 1;
+	if (!Number.isInteger(year) || !Number.isInteger(month) || month < 0 || month > 11) {
+		return null;
+	}
+
+	return { month, year };
+};
+
 // =============================================================================
 // CALENDAR MONTH PARSING
 // =============================================================================
@@ -32,7 +50,7 @@ export const MONTH_NAMES: readonly string[] = [
  */
 export const getCurrentCalendarMonth = (
 	page: Page,
-): Effect.Effect<{ month: number; year: number } | null, never> =>
+): Effect.Effect<CalendarMonth | null, never> =>
 	Effect.gen(function* () {
 		for (let attempt = 0; attempt < 3; attempt++) {
 			if (attempt > 0) {

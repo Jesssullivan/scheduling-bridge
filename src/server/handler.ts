@@ -88,6 +88,14 @@ const SERVICE_CACHE_TTL_MS = (() => {
 	const parsed = Number(process.env.ACUITY_SERVICE_CACHE_TTL_MS ?? 5 * 60_000);
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : 5 * 60_000;
 })();
+const READ_CACHE_TTL_SECONDS = (() => {
+	const parsed = Number(process.env.ACUITY_READ_CACHE_TTL_SECONDS ?? 20 * 60);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 20 * 60;
+})();
+const EMPTY_READ_CACHE_TTL_SECONDS = (() => {
+	const parsed = Number(process.env.ACUITY_EMPTY_READ_CACHE_TTL_SECONDS ?? 2 * 60);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 2 * 60;
+})();
 
 const browserConfig: BrowserConfig = {
 	...defaultBrowserConfig,
@@ -336,6 +344,62 @@ const serviceCatalog = createAcuityServiceCatalog({
 const isSchedulingError = (error: unknown): error is SchedulingError =>
 	typeof error === 'object' && error !== null && '_tag' in error;
 
+const getBridgeReadCached = async <A>(key: string): Promise<A | undefined> => {
+	if (!redisClient) return undefined;
+	try {
+		const raw = await redisClient.get(key);
+		return raw ? (JSON.parse(raw) as A) : undefined;
+	} catch (error) {
+		logEvent('ERROR', 'Bridge read cache get failed', {
+			event: 'bridge_read_cache_get_failed',
+			error: describeLogValue(error),
+		});
+		return undefined;
+	}
+};
+
+const setBridgeReadCached = async <A>(
+	key: string,
+	value: A,
+	ttlSeconds: number,
+): Promise<void> => {
+	if (!redisClient) return;
+	try {
+		await redisClient.set(key, JSON.stringify(value), 'EX', ttlSeconds);
+	} catch (error) {
+		logEvent('ERROR', 'Bridge read cache set failed', {
+			event: 'bridge_read_cache_set_failed',
+			error: describeLogValue(error),
+		});
+	}
+};
+
+const runCachedBridgeRead = async <A>(
+	context: RequestContext,
+	cacheKind: string,
+	cacheKey: string,
+	read: () => Promise<Result<A>>,
+): Promise<Result<A>> => {
+	const cached = await getBridgeReadCached<A>(cacheKey);
+	if (cached !== undefined) {
+		logRequestEvent('INFO', 'Bridge read cache hit', context, {
+			event: 'bridge_read_cache_hit',
+			cacheKind,
+		});
+		return { ok: true, value: cached };
+	}
+
+	const result = await read();
+	if (!result.ok) return result;
+
+	const ttlSeconds =
+		Array.isArray(result.value) && result.value.length === 0
+			? EMPTY_READ_CACHE_TTL_SECONDS
+			: READ_CACHE_TTL_SECONDS;
+	await setBridgeReadCached(cacheKey, result.value, ttlSeconds);
+	return result;
+};
+
 const resolveServiceName = async (serviceId: string, serviceName?: string): Promise<string> => {
 	try {
 		return await serviceCatalog.resolveServiceName(serviceId, serviceName);
@@ -449,15 +513,18 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 
 const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
 	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
+	const targetMonth = body.startDate?.slice(0, 7);
 	logRequestEvent('INFO', 'Availability dates requested', context, {
 		event: 'availability_dates_requested',
 		serviceId: body.serviceId,
 		serviceName: body.serviceName,
 		startDate: body.startDate,
 	});
-	const result = isAcuityAppointmentTypeId(body.serviceId)
-		? await runEffect(readDatesViaUrl(body.serviceId, body.startDate?.slice(0, 7)))
-		: await (async () => {
+	const cacheKey = `bridge-read:v2:dates:${ACUITY_BASE_URL}:${body.serviceId}:${targetMonth ?? 'current'}`;
+	const result = await runCachedBridgeRead(context, 'availability_dates', cacheKey, () =>
+		isAcuityAppointmentTypeId(body.serviceId)
+			? runEffect(readDatesViaUrl(body.serviceId, targetMonth))
+			: (async () => {
 				const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
 				logRequestEvent('INFO', 'Availability dates resolved service name', context, {
 					event: 'availability_dates_resolved_service',
@@ -468,11 +535,12 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 				return runEffect(
 					readAvailableDates({
 						serviceName,
-						targetMonth: body.startDate?.slice(0, 7),
+						targetMonth,
 						monthsToScan: 2,
 					}),
 				);
-			})();
+			})(),
+	);
 
 	if (!result.ok) {
 		const err = result.error;
@@ -500,15 +568,17 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, c
 		serviceName: body.serviceName,
 		date: body.date,
 	});
-	const result = isAcuityAppointmentTypeId(body.serviceId)
-		? await runEffect(
+	const cacheKey = `bridge-read:v2:slots:${ACUITY_BASE_URL}:${body.serviceId}:${body.date}`;
+	const result = await runCachedBridgeRead(context, 'availability_slots', cacheKey, () =>
+		isAcuityAppointmentTypeId(body.serviceId)
+			? runEffect(
 				readSlotsViaUrl(
 					body.serviceId,
 					body.date,
 					createSlotReadTelemetryContext(context, 'availability_slots'),
 				),
 			)
-		: await (async () => {
+			: (async () => {
 				const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
 				logRequestEvent('INFO', 'Availability slots resolved service name', context, {
 					event: 'availability_slots_resolved_service',
@@ -522,7 +592,8 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, c
 						date: body.date,
 					}),
 				);
-			})();
+			})(),
+	);
 
 	if (!result.ok) {
 		const err = result.error;
