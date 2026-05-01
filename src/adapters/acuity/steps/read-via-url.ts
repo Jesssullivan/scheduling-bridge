@@ -179,9 +179,10 @@ export const readSlotsViaUrl = (
 		});
 		navigationMs = Date.now() - navigationStartedAt;
 
-		// Click the target date on the calendar
+		// Click the target date on the calendar. Disabled dates are a valid
+		// "no availability" result, not a scrape failure.
 		const tileSelector = Selectors.calendarDay[0];
-		yield* Effect.tryPromise({
+		const clickedTargetDate = yield* Effect.tryPromise({
 			try: async () => {
 				const calendarReadyStartedAt = Date.now();
 				await page.waitForSelector(tileSelector, { timeout: 10000 }).catch(() => {});
@@ -197,19 +198,61 @@ export const readSlotsViaUrl = (
 						const d = new Date(label);
 						if (d.toISOString().slice(0, 10) === date) {
 							matchedDateFound = true;
-							await tile.click();
-							break;
+							const disabled = await tile.evaluate((el) => {
+								const button = el as HTMLButtonElement;
+								return (
+									button.disabled ||
+									button.getAttribute('aria-disabled') === 'true' ||
+									button.classList.contains('react-calendar__tile--disabled')
+								);
+							});
+							if (disabled) {
+								dateSelectMs = Date.now() - dateSelectStartedAt;
+								return false;
+							}
+							await tile.click({ timeout: Math.min(config.timeout, 5000) });
+							dateSelectMs = Date.now() - dateSelectStartedAt;
+
+							const settleStartedAt = Date.now();
+							await page.waitForTimeout(2000);
+							postClickSettleMs = Date.now() - settleStartedAt;
+							return true;
 						}
 					}
 				}
 				dateSelectMs = Date.now() - dateSelectStartedAt;
-
-				const settleStartedAt = Date.now();
-				await page.waitForTimeout(2000);
-				postClickSettleMs = Date.now() - settleStartedAt;
+				return false;
 			},
 			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Date click failed: ${e}` }),
 		});
+
+		if (!clickedTargetDate) {
+			const profile = createSlotReadProfile({
+				serviceId,
+				date,
+				thresholdMs: profileConfig.thresholdMs,
+				calendarTileCount,
+				matchedDateFound,
+				slotCount: 0,
+				parsedSlotCount: 0,
+				phases: {
+					navigationMs,
+					calendarReadyMs,
+					dateSelectMs,
+					postClickSettleMs,
+					slotWaitMs,
+					slotDomReadMs,
+					parseMs,
+				},
+				context,
+			});
+
+			if (shouldLogSlotReadProfile(profile, profileConfig)) {
+				ndjsonLog('INFO', 'Slot read profile', { ...buildSlotReadProfileEvent(profile) });
+			}
+
+			return [];
+		}
 
 		// Read time slots using the Selectors registry
 		const slotSelector = Selectors.timeSlot[0]; // button.time-selection
