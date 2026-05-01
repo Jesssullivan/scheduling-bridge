@@ -39,6 +39,13 @@ export interface UrlSlotResult {
 	readonly available: boolean;
 }
 
+const navigateForUrlRead = async (page: Page, url: URL, timeout: number): Promise<void> => {
+	// Acuity can leave background requests open long after the calendar DOM is
+	// useful. Bound the network-idle wait so empty days do not become 30s 500s.
+	await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout });
+	await page.waitForLoadState('networkidle', { timeout: Math.min(timeout, 5000) }).catch(() => {});
+};
+
 const readEnabledCalendarDates = (
 	page: Page,
 	tileSelector: string,
@@ -91,7 +98,7 @@ export const readDatesViaUrl = (
 		if (targetMonth) url.searchParams.set('month', targetMonth);
 
 		yield* Effect.tryPromise({
-			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
+			try: () => navigateForUrlRead(page, url, config.timeout),
 			catch: (e) => new WizardStepError({ step: 'read-availability', message: `Navigation failed: ${e}` }),
 		});
 
@@ -123,7 +130,7 @@ export const readDatesViaUrl = (
 		// Final fallback: reload once and retry the DOM read. This is still cheaper
 		// than returning a false-empty month to the app and stranding the calendar.
 		yield* Effect.tryPromise({
-			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
+			try: () => navigateForUrlRead(page, url, config.timeout),
 			catch: (e) => new WizardStepError({ step: 'read-availability', message: `Retry navigation failed: ${e}` }),
 		});
 		yield* Effect.tryPromise({
@@ -174,7 +181,7 @@ export const readSlotsViaUrl = (
 
 		const navigationStartedAt = Date.now();
 		yield* Effect.tryPromise({
-			try: () => page.goto(url.toString(), { waitUntil: 'networkidle', timeout: config.timeout }),
+			try: () => navigateForUrlRead(page, url, config.timeout),
 			catch: (e) => new WizardStepError({ step: 'read-slots', message: `Navigation failed: ${e}` }),
 		});
 		navigationMs = Date.now() - navigationStartedAt;
