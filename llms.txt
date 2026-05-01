@@ -11,6 +11,10 @@ Authority:
 - `pnpm build` materializes local `pkg/` and `dist/` from `bazel-bin/pkg`
 - CI and publish extract `./bazel-bin/pkg` / `./bazel-bin/pkg`
 - runtime start command is `node dist/server/handler.js`
+- provider-agnostic runtime contract is the Node HTTP server plus `/health` tuple
+- Modal is the current live primary provider until `TIN-189` closes
+- K8s/container execution is the active next-primary lane from infrastructure
+- consumer apps should use `SCHEDULING_BRIDGE_URL` and `SCHEDULING_BRIDGE_AUTH_TOKEN`
 
 Toolchains:
 - Bazelisk: `8.1.1`
