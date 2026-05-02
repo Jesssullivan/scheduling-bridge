@@ -52,13 +52,13 @@ As of `2026-04-25`, the active structural work here is:
 
 Operationally relevant truth:
 
-- the pending package metadata on this branch is `@tummycrypt/scheduling-bridge`
-  `0.4.5`
-- `0.4.5` depends on `@tummycrypt/scheduling-kit ^0.7.4`
-- as of `2026-04-30`, npm `latest` and git tag `v0.4.5` point at `0.4.5`;
-  deployed bridge runtime tuple remains a separate verification surface
-- package metadata, git tags, npm dist-tags, and GitHub releases are separate
-  authority surfaces until `#76` is resolved
+- current package metadata is `@tummycrypt/scheduling-bridge` `0.4.6`
+- `0.4.6` depends on `@tummycrypt/scheduling-kit ^0.7.5`
+- as of `2026-05-02`, npm `latest`, git tag `v0.4.6`, and the K8s bridge
+  shadow runtime are aligned on the `0.4.6` release edge
+- package metadata, git tags, npm dist-tags, GitHub releases, and deployed
+  bridge runtime tuples remain separate authority surfaces and should be
+  verified explicitly
 
 ## Deployment Truth
 
@@ -70,10 +70,12 @@ bridge, not as "Modal", unless they are discussing the Modal deployment itself.
 
 Current provider truth:
 
-- Modal remains the current live primary remote bridge surface until `TIN-189`
-  closes and the K8s parity bake is accepted.
-- K8s is an active shadow and next-primary execution lane, but cluster state,
-  tailnet exposure, and public-edge routing are infrastructure concerns.
+- K8s/container execution is the accepted next-production bridge route and is
+  the current K8s shadow runtime for MassageIthaca scheduling-bridge traffic.
+- Modal remains legacy proofing/fallback context, and may still serve stable
+  live consumer traffic until that traffic is deliberately moved to K8s.
+- Cluster state, tailnet exposure, and public-edge routing are infrastructure
+  concerns outside this repo.
 - Docker/container execution must mirror the same built Node entrypoint so K8s
   and other providers do not become separate runtime implementations.
 - Downstream apps should configure bridge endpoints with
@@ -82,18 +84,20 @@ Current provider truth:
 
 ### Modal
 
-Modal is the current live primary remote deployment surface.
+Modal is the legacy proofing/fallback remote deployment surface.
 
 Important facts:
 
 - the deployed server should run `dist/server/handler.js`
 - the Modal image must stay aligned with the same built artifact used by `pnpm start`
 - warm-container behavior and concurrency settings are part of the real latency story
+- Modal-specific docs and workflows are retained until fallback/live-beta
+  traffic is retired deliberately
 
 ### Docker / K8s Container
 
-Docker and K8s containers should mirror the same entrypoint and runtime
-assumptions as Modal.
+Docker and K8s containers should mirror the same `dist/server/handler.js`
+entrypoint and runtime assumptions as every other provider.
 
 If Modal, Docker, and K8s drift from the actual Node entrypoint, that is an
 operational bug.

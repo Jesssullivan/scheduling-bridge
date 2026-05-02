@@ -185,8 +185,8 @@ This page is generated from \`package.json\`, \`MODULE.bazel\`, \`BUILD.bazel\`,
 ## Runtime Provider Truth
 
 - provider-agnostic contract: Node HTTP server plus \`/health\` tuple
-- current live primary provider: Modal, until \`TIN-189\` closes
-- active next-primary lane: K8s/container runtime from infrastructure
+- accepted next-production provider: K8s/container runtime from infrastructure
+- fallback/proofing provider: Modal, until remaining live traffic moves
 - forward consumer env names: \`SCHEDULING_BRIDGE_URL\` and
   \`SCHEDULING_BRIDGE_AUTH_TOKEN\`
 
@@ -229,8 +229,8 @@ const llms = [
   `- CI and publish extract \`${ciPackageDir}\` / \`${publishPackageDir}\``,
   `- runtime start command is \`${pkg.scripts.start}\``,
   '- provider-agnostic runtime contract is the Node HTTP server plus `/health` tuple',
-  '- Modal is the current live primary provider until `TIN-189` closes',
-  '- K8s/container execution is the active next-primary lane from infrastructure',
+  '- K8s/container execution is the accepted next-production provider from infrastructure',
+  '- Modal remains fallback/proofing context until remaining live traffic moves',
   '- consumer apps should use `SCHEDULING_BRIDGE_URL` and `SCHEDULING_BRIDGE_AUTH_TOKEN`',
   '',
   'Toolchains:',

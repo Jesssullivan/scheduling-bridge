@@ -108,11 +108,13 @@ The bridge emits NDJSON logs to stdout/stderr for runtime analysis.
 ### Runtime Provider Truth
 
 The stable bridge contract is the Node HTTP server, protocol surface, and
-`/health` tuple. Modal is the current live primary deployment provider, but it
-is not the name of the consumer contract.
+`/health` tuple. Provider names are deployment details, not the consumer
+contract.
 
-- Current live primary: Modal, until the `TIN-189` K8s parity bake is accepted.
-- Active next-primary lane: K8s/container runtime managed from infrastructure.
+- Accepted next-production route: K8s/container runtime managed from
+  infrastructure.
+- Current fallback/proofing provider: Modal, retained until remaining stable
+  consumer traffic is deliberately moved.
 - Compatibility target: Docker image with the same `dist/server/handler.js`
   entrypoint.
 - Consumer apps should configure the remote bridge with
@@ -157,9 +159,9 @@ docker run -p 3001:3001 \
 modal deploy modal-app.py
 ```
 
-#### Supported deployment path
+#### Supported fallback deployment path
 
-The current Modal deployment path for the live Acuity bridge is:
+The Modal deployment path remains available for fallback/proofing traffic:
 
 1. merge to `main`
 2. let `.github/workflows/deploy-modal.yml` deploy `modal-app.py`
@@ -169,7 +171,8 @@ The current Modal deployment path for the live Acuity bridge is:
 
 Operationally, this means:
 
-- Modal deployment is part of release truth, not a side channel
+- Modal deployment can be part of release truth when it is the selected
+  provider, not a side channel
 - the live bridge should be identified by the `/health` release + protocol tuple
 - downstream apps should validate the tuple they expect before making rollout claims
 
@@ -197,8 +200,10 @@ The current publish + deploy shape is:
 2. Bazel validates/builds the publishable artifact
 3. CI dry-runs the extracted Bazel package surface before release
 4. GitHub Actions publishes that extracted artifact
-5. GitHub Actions deploys the current Modal runtime from `main`
-6. downstream apps consume the published package and verify the live runtime
+5. GitHub Actions can deploy the Modal fallback runtime from `main`
+6. infrastructure can deploy the K8s/container runtime from the same package
+   artifact and image entrypoint
+7. downstream apps consume the published package and verify the live runtime
    tuple via `/health`
 
 This repo is the sole owner of Acuity automation concerns. App repos and shared

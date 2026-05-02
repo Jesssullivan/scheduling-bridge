@@ -53,9 +53,10 @@ runtime image, and package CI must prove both supported consumer majors.
 
 ## Runtime Provider Policy
 
-Modal is the current live primary bridge provider until `TIN-189` closes and the
-K8s parity bake is accepted. K8s/container execution is the active next-primary
-lane, but it must consume the same materialized package and launch the same
+K8s/container execution is the accepted next-production bridge route. Modal
+remains legacy proofing/fallback context, and may still serve stable live
+consumer traffic until that traffic is deliberately moved. Every provider must
+consume the same materialized package and launch the same
 `dist/server/handler.js` entrypoint. Provider-specific deployment mechanics
 must not fork the bridge protocol or package artifact.
 
@@ -83,7 +84,8 @@ Before cutting a bridge release, verify these surfaces together:
 - GitHub Packages package: `@jesssullivan/scheduling-bridge`
 - tag and GitHub release for the package version
 - Bazel package artifact from `./bazel-bin/pkg`
-- Docker and Modal runtime images built from the materialized `pkg/` surface
+- Docker, K8s/container, and Modal fallback runtime images built from the
+  materialized `pkg/` surface
 - `/health` release tuple for the deployed bridge
 
 The shared `js-bazel-package` workflow owns npm provenance when running on
