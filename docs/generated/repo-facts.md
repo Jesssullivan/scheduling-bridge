@@ -41,8 +41,8 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 ## Runtime Provider Truth
 
 - provider-agnostic contract: Node HTTP server plus `/health` tuple
-- current live primary provider: Modal, until `TIN-189` closes
-- active next-primary lane: K8s/container runtime from infrastructure
+- accepted next-production provider: K8s/container runtime from infrastructure
+- fallback/proofing provider: Modal, until remaining live traffic moves
 - forward consumer env names: `SCHEDULING_BRIDGE_URL` and
   `SCHEDULING_BRIDGE_AUTH_TOKEN`
 
