@@ -49,6 +49,10 @@ import {
 	type ServiceCatalogRedisL2,
 } from '../shared/acuity-service-catalog.js';
 import { getCached as redisL2GetCached, RedisL2 } from '../shared/redis-l2.js';
+import {
+	runBridgeReadCached,
+	type BridgeReadCacheClient,
+} from '../shared/bridge-read-cache.js';
 import { metrics, renderMetrics } from '../shared/metrics.js';
 import { toSchedulingError, type MiddlewareError } from '../adapters/acuity/errors.js';
 import {
@@ -344,60 +348,33 @@ const serviceCatalog = createAcuityServiceCatalog({
 const isSchedulingError = (error: unknown): error is SchedulingError =>
 	typeof error === 'object' && error !== null && '_tag' in error;
 
-const getBridgeReadCached = async <A>(key: string): Promise<A | undefined> => {
-	if (!redisClient) return undefined;
-	try {
-		const raw = await redisClient.get(key);
-		return raw ? (JSON.parse(raw) as A) : undefined;
-	} catch (error) {
-		logEvent('ERROR', 'Bridge read cache get failed', {
-			event: 'bridge_read_cache_get_failed',
-			error: describeLogValue(error),
-		});
-		return undefined;
-	}
-};
-
-const setBridgeReadCached = async <A>(
-	key: string,
-	value: A,
-	ttlSeconds: number,
-): Promise<void> => {
-	if (!redisClient) return;
-	try {
-		await redisClient.set(key, JSON.stringify(value), 'EX', ttlSeconds);
-	} catch (error) {
-		logEvent('ERROR', 'Bridge read cache set failed', {
-			event: 'bridge_read_cache_set_failed',
-			error: describeLogValue(error),
-		});
-	}
-};
-
 const runCachedBridgeRead = async <A>(
 	context: RequestContext,
 	cacheKind: string,
 	cacheKey: string,
 	read: () => Promise<Result<A>>,
 ): Promise<Result<A>> => {
-	const cached = await getBridgeReadCached<A>(cacheKey);
-	if (cached !== undefined) {
-		logRequestEvent('INFO', 'Bridge read cache hit', context, {
-			event: 'bridge_read_cache_hit',
-			cacheKind,
-		});
-		return { ok: true, value: cached };
-	}
-
-	const result = await read();
-	if (!result.ok) return result;
-
-	const ttlSeconds =
-		Array.isArray(result.value) && result.value.length === 0
-			? EMPTY_READ_CACHE_TTL_SECONDS
-			: READ_CACHE_TTL_SECONDS;
-	await setBridgeReadCached(cacheKey, result.value, ttlSeconds);
-	return result;
+	return runBridgeReadCached({
+		redisClient: redisClient as BridgeReadCacheClient | null,
+		cacheKind,
+		cacheKey,
+		ttlSeconds: READ_CACHE_TTL_SECONDS,
+		emptyTtlSeconds: EMPTY_READ_CACHE_TTL_SECONDS,
+		read,
+		log: ({ event, cacheKind, waitMs, error }) => {
+			logRequestEvent(
+				error ? 'ERROR' : 'INFO',
+				'Bridge read cache event',
+				context,
+				{
+					event,
+					cacheKind,
+					...(waitMs === undefined ? {} : { waitMs }),
+					...(error === undefined ? {} : { error: describeLogValue(error) }),
+				},
+			);
+		},
+	});
 };
 
 const resolveServiceName = async (serviceId: string, serviceName?: string): Promise<string> => {
