@@ -102,7 +102,7 @@ describe("runBridgeReadCached", () => {
 
   it("keeps the default wait budget above the observed Acuity cold-read envelope", () => {
     expect(BRIDGE_READ_CACHE_DEFAULTS.waitTimeoutMs).toBeGreaterThanOrEqual(
-      35_000,
+      55_000,
     );
     expect(BRIDGE_READ_CACHE_DEFAULTS.lockTtlMs).toBeGreaterThan(
       BRIDGE_READ_CACHE_DEFAULTS.waitTimeoutMs,
@@ -144,6 +144,34 @@ describe("runBridgeReadCached", () => {
       value: [{ datetime: "2026-05-04T15:00:00" }],
     });
     expect(read).toHaveBeenCalledTimes(1);
+    expect(events.map((event) => event.event)).toContain(
+      "bridge_read_cache_wait_timeout",
+    );
+  });
+
+  it("can return a timeout result instead of amplifying origin reads", async () => {
+    await mock.set("lock:busy-slot-key", "winner-token", "PX", 30_000, "NX");
+    const read = vi.fn(async () => ({
+      ok: true as const,
+      value: [{ datetime: "2026-05-04T15:00:00" }],
+    }));
+    const timeoutError = new Error("still waiting for winner");
+
+    const result = await runBridgeReadCached({
+      redisClient: mock as unknown as BridgeReadCacheClient,
+      cacheKind: "availability_slots",
+      cacheKey: "busy-slot-key",
+      ttlSeconds: 60,
+      emptyTtlSeconds: 10,
+      read,
+      log: (event) => events.push(event),
+      waitTimeoutMs: 30,
+      pollIntervalMs: 5,
+      waitTimeoutResult: () => ({ ok: false, error: timeoutError }),
+    });
+
+    expect(result).toEqual({ ok: false, error: timeoutError });
+    expect(read).not.toHaveBeenCalled();
     expect(events.map((event) => event.event)).toContain(
       "bridge_read_cache_wait_timeout",
     );

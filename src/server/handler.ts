@@ -84,6 +84,7 @@ import type {
 	Service,
 	SchedulingError,
 } from '../core/types.js';
+import { Errors } from '../core/types.js';
 
 // =============================================================================
 // CONFIGURATION
@@ -104,6 +105,14 @@ const READ_CACHE_TTL_SECONDS = (() => {
 const EMPTY_READ_CACHE_TTL_SECONDS = (() => {
 	const parsed = Number(process.env.ACUITY_EMPTY_READ_CACHE_TTL_SECONDS ?? 2 * 60);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : 2 * 60;
+})();
+const READ_CACHE_LOCK_TTL_MS = (() => {
+	const parsed = Number(process.env.ACUITY_READ_CACHE_LOCK_TTL_MS ?? 90_000);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 90_000;
+})();
+const READ_CACHE_WAIT_TIMEOUT_MS = (() => {
+	const parsed = Number(process.env.ACUITY_READ_CACHE_WAIT_TIMEOUT_MS ?? 55_000);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 55_000;
 })();
 const SLOT_PREWARM_LIMIT = getSlotPrewarmLimit();
 
@@ -366,6 +375,15 @@ const runCachedBridgeRead = async <A>(
 		cacheKey,
 		ttlSeconds: READ_CACHE_TTL_SECONDS,
 		emptyTtlSeconds: EMPTY_READ_CACHE_TTL_SECONDS,
+		lockTtlMs: READ_CACHE_LOCK_TTL_MS,
+		waitTimeoutMs: READ_CACHE_WAIT_TIMEOUT_MS,
+		waitTimeoutResult: (waitMs) => ({
+			ok: false,
+			error: Errors.infrastructure(
+				'TIMEOUT',
+				`Timed out after ${waitMs}ms waiting for ${cacheKind} cache fill`,
+			),
+		}),
 		read,
 		log: ({ event, cacheKind, waitMs, error }) => {
 			logRequestEvent(
