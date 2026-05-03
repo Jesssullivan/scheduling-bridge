@@ -1,6 +1,7 @@
 import { type AddressInfo } from 'node:net';
 import { Effect } from 'effect';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BrowserError } from '../../adapters/acuity/errors.js';
 
 const readViaUrlMocks = vi.hoisted(() => ({
 	readDatesViaUrl: vi.fn(),
@@ -233,5 +234,29 @@ describe('POST /availability/dates cache prewarm', () => {
 			},
 		});
 		expect(readViaUrlMocks.readDatesViaUrl).not.toHaveBeenCalled();
+	});
+
+	it('surfaces Acuity date-read failures without caching them as empty results', async () => {
+		readViaUrlMocks.readDatesViaUrl.mockImplementationOnce(() =>
+			Effect.fail(new BrowserError({ reason: 'PAGE_FAILED' })),
+		);
+		const running = await listen();
+		activeServer = running.server;
+
+		const response = await postAvailabilityDates(running.baseUrl, '2026-07-01');
+
+		expect(response.status).toBe(500);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: {
+				tag: 'InfrastructureError',
+				code: 'NETWORK',
+			},
+		});
+		expect(
+			redisState.values.get(
+				`bridge-read:v2:dates:${baseUrl}:${serviceId}:2026-07`,
+			),
+		).toBeUndefined();
 	});
 });

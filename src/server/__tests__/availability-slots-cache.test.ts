@@ -240,4 +240,41 @@ describe('POST /availability/slots read cache', () => {
 		});
 		expect(readViaUrlMocks.readSlotsViaUrl).not.toHaveBeenCalled();
 	});
+
+	it('rejects unauthenticated slot requests before cache lookup or Acuity reads', async () => {
+		process.env.AUTH_TOKEN = 'bridge-secret';
+		const running = await listen();
+		activeServer = running.server;
+
+		const response = await postAvailabilitySlots(running.baseUrl);
+
+		expect(response.status).toBe(401);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: {
+				tag: 'InfrastructureError',
+				code: 'UNAUTHORIZED',
+			},
+		});
+		expect(readViaUrlMocks.readSlotsViaUrl).not.toHaveBeenCalled();
+	});
+
+	it('does not run slot reads for unsupported methods', async () => {
+		const running = await listen();
+		activeServer = running.server;
+
+		const response = await fetch(`${running.baseUrl}/availability/slots`, {
+			method: 'GET',
+		});
+
+		expect(response.status).toBe(404);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: {
+				tag: 'InfrastructureError',
+				code: 'NOT_FOUND',
+			},
+		});
+		expect(readViaUrlMocks.readSlotsViaUrl).not.toHaveBeenCalled();
+	});
 });
