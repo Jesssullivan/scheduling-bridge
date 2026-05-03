@@ -46,6 +46,15 @@ export interface NavigateResult {
 	readonly selectedTime: string;
 }
 
+export const normalizeServiceNameForMatch = (name: string): string =>
+	name.trim().replace(/\s+/g, ' ').toLowerCase();
+
+export const serviceNameMatches = (candidateName: string, requestedName: string): boolean => {
+	const candidate = normalizeServiceNameForMatch(candidateName);
+	const requested = normalizeServiceNameForMatch(requestedName);
+	return candidate.length > 0 && requested.length > 0 && candidate.includes(requested);
+};
+
 // =============================================================================
 // IMPLEMENTATION
 // =============================================================================
@@ -150,7 +159,7 @@ const selectService = (
 				for (const item of items) {
 					const nameEl = await item.$(Selectors.serviceName[0]);
 					const name = await nameEl?.textContent();
-					if (name && name.trim().toLowerCase().includes(serviceName.toLowerCase())) {
+					if (name && serviceNameMatches(name, serviceName)) {
 						return item;
 					}
 				}

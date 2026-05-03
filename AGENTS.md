@@ -52,10 +52,10 @@ As of `2026-04-25`, the active structural work here is:
 
 Operationally relevant truth:
 
-- current package metadata is `@tummycrypt/scheduling-bridge` `0.4.7`
-- `0.4.7` depends on `@tummycrypt/scheduling-kit ^0.7.5`
-- as of `2026-05-02`, npm `latest`, git tag `v0.4.6`, and the K8s bridge
-  shadow runtime are aligned on the previous `0.4.6` release edge
+- current package metadata is `@tummycrypt/scheduling-bridge` `0.4.8`
+- `0.4.8` depends on `@tummycrypt/scheduling-kit ^0.7.5`
+- as of `2026-05-03`, npm `latest`, git tag `v0.4.8`, and the K8s bridge
+  shadow runtime are aligned on the current `0.4.8` release edge
 - package metadata, git tags, npm dist-tags, GitHub releases, and deployed
   bridge runtime tuples remain separate authority surfaces and should be
   verified explicitly

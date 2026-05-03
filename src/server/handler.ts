@@ -790,7 +790,7 @@ const handleCreateBookingWithPayment = async (
 	const result = await runEffect(
 		Effect.gen(function* () {
 			yield* navigateToBooking({
-				serviceName,
+				serviceName: serviceName ?? request.serviceId,
 				datetime: request.datetime,
 				client: request.client,
 				appointmentTypeId: request.serviceId,
