@@ -15,6 +15,10 @@ describe('metrics', () => {
 	it('exposes required SLIs from spec §6.1', () => {
 		const names = metrics.registry.getMetricsAsArray().map((m) => m.name);
 		expect(names).toContain('acuity_browser_active_sessions');
+		expect(names).toContain('acuity_browser_page_limiter_active');
+		expect(names).toContain('acuity_browser_page_limiter_queued');
+		expect(names).toContain('acuity_browser_page_acquire_duration_seconds');
+		expect(names).toContain('acuity_browser_page_acquire_timeouts_total');
 		expect(names).toContain('acuity_page_operations_duration_seconds');
 		expect(names).toContain('acuity_cache_hit_ratio');
 		expect(names).toContain('acuity_service_catalog_scrape_total');
@@ -31,6 +35,8 @@ describe('metrics', () => {
 		const text = await renderMetrics();
 		expect(text).toContain('# HELP acuity_browser_active_sessions');
 		expect(text).toContain('# TYPE acuity_browser_active_sessions gauge');
+		expect(text).toContain('# HELP acuity_browser_page_limiter_active');
+		expect(text).toContain('# TYPE acuity_browser_page_limiter_queued gauge');
 		// Histogram exposition: per-bucket cumulative, total sum, total count.
 		expect(text).toContain('acuity_page_operations_duration_seconds_bucket{');
 		expect(text).toContain('acuity_page_operations_duration_seconds_sum');
@@ -112,6 +118,54 @@ describe('bridge read cache metrics wiring', () => {
 			{ cache_kind: 'availability_dates' },
 		);
 		expect(after).toBe(before + 1);
+	});
+});
+
+describe('browser page limiter metrics wiring', () => {
+	const gaugeValue = async (metricName: string): Promise<number> => {
+		const metric = metrics.registry.getSingleMetric(metricName);
+		const snap = await metric?.get();
+		return (snap?.values[0]?.value as number | undefined) ?? 0;
+	};
+
+	const histogramCount = async (outcome: string): Promise<number> => {
+		const snap = await metrics.browserPageAcquireDuration.get();
+		return (
+			snap.values.find(
+				(v) =>
+					v.metricName ===
+						'acuity_browser_page_acquire_duration_seconds_count' &&
+					v.labels.outcome === outcome,
+			)?.value ?? 0
+		);
+	};
+
+	const timeoutCount = async (): Promise<number> => {
+		const snap = await metrics.browserPageAcquireTimeoutsTotal.get();
+		return (snap.values[0]?.value as number | undefined) ?? 0;
+	};
+
+	it('records limiter active and queued gauges', async () => {
+		metrics.setBrowserPageLimiterState(2, 1);
+		expect(await gaugeValue('acuity_browser_page_limiter_active')).toBe(2);
+		expect(await gaugeValue('acuity_browser_page_limiter_queued')).toBe(1);
+
+		metrics.setBrowserPageLimiterState(0, 0);
+		expect(await gaugeValue('acuity_browser_page_limiter_active')).toBe(0);
+		expect(await gaugeValue('acuity_browser_page_limiter_queued')).toBe(0);
+	});
+
+	it('records acquire duration and timeout counters', async () => {
+		const successBefore = await histogramCount('success');
+		const timeoutBefore = await histogramCount('timeout');
+		const timeoutCounterBefore = await timeoutCount();
+
+		metrics.recordBrowserPageAcquire('success', 25);
+		metrics.recordBrowserPageAcquire('timeout', 10000);
+
+		expect(await histogramCount('success')).toBe(successBefore + 1);
+		expect(await histogramCount('timeout')).toBe(timeoutBefore + 1);
+		expect(await timeoutCount()).toBe(timeoutCounterBefore + 1);
 	});
 });
 
