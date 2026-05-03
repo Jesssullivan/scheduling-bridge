@@ -86,6 +86,8 @@ dashboard state when `/health` is available.
 | `CHROMIUM_LAUNCH_ARGS` | No | -- | Comma-separated Chromium args |
 | `SERVICES_JSON` | No | -- | Optional static service catalog to bypass live Acuity reads |
 | `ACUITY_SERVICE_CACHE_TTL_MS` | No | `300000` | TTL for cached live service catalogs before BUSINESS/scraper refresh |
+| `ACUITY_URL_READ_NETWORK_IDLE_MS` | No | `1500` | Bounded post-navigation network-idle settle for direct URL availability reads; set `0` to skip |
+| `ACUITY_SLOT_PREWARM_LIMIT` | No | `1` | Number of first available dates to warm in the slots cache after a successful Acuity dates read; max `3`, set `0` to disable |
 | `SCHEDULING_BRIDGE_SLOT_PROFILE_THRESHOLD_MS` | No | `1500` | Threshold in ms for logging long-tail slot-read profile events |
 | `SCHEDULING_BRIDGE_PROFILE_SLOT_READS` | No | `false` | Force logging of slot-read profile events even when under threshold |
 | `MIDDLEWARE_RELEASE_SHA` | No | -- | Release commit SHA exposed via `/health` |
