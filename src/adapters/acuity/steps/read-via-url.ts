@@ -47,6 +47,26 @@ const navigateForUrlRead = async (page: Page, url: URL, timeout: number): Promis
 	await page.waitForLoadState('networkidle', { timeout: Math.min(timeout, 5000) }).catch(() => {});
 };
 
+const postClickSlotSettleMs = (): number => {
+	const raw = Number(process.env.ACUITY_POST_CLICK_SLOT_SETTLE_MS);
+	return Number.isFinite(raw) && raw >= 0 ? raw : 900;
+};
+
+const waitForSlotUiAfterDateClick = async (
+	page: Page,
+	slotSelector: string,
+	timeout: number,
+): Promise<void> => {
+	const waitMs = Math.min(timeout, postClickSlotSettleMs());
+	if (waitMs <= 0) return;
+
+	await Promise.race([
+		page.waitForSelector(slotSelector, { timeout: waitMs }).then(() => undefined),
+		page.waitForLoadState('networkidle', { timeout: waitMs }).then(() => undefined).catch(() => undefined),
+		page.waitForTimeout(waitMs).then(() => undefined),
+	]).catch(() => undefined);
+};
+
 const navigateToServiceCalendar = (
 	page: Page,
 	url: URL,
@@ -207,6 +227,8 @@ export const readSlotsViaUrl = (
 		url.searchParams.set('appointmentType', serviceId);
 		url.searchParams.set('date', date);
 		const targetMonth = date.slice(0, 7);
+		const slotSelector = Selectors.timeSlot[0]; // button.time-selection
+		const fallbackSelector = Selectors.timeSlot.join(', ');
 
 		const navigationStartedAt = Date.now();
 		yield* navigateToServiceCalendar(page, url, config.timeout, 'read-slots');
@@ -244,14 +266,14 @@ export const readSlotsViaUrl = (
 								dateSelectMs = Date.now() - dateSelectStartedAt;
 								return false;
 							}
-							await tile.click({ timeout: Math.min(config.timeout, 5000) });
-							dateSelectMs = Date.now() - dateSelectStartedAt;
+								await tile.click({ timeout: Math.min(config.timeout, 5000) });
+								dateSelectMs = Date.now() - dateSelectStartedAt;
 
-							const settleStartedAt = Date.now();
-							await page.waitForTimeout(2000);
-							postClickSettleMs = Date.now() - settleStartedAt;
-							return true;
-						}
+								const settleStartedAt = Date.now();
+								await waitForSlotUiAfterDateClick(page, fallbackSelector, config.timeout);
+								postClickSettleMs = Date.now() - settleStartedAt;
+								return true;
+							}
 					}
 				}
 				dateSelectMs = Date.now() - dateSelectStartedAt;
@@ -288,10 +310,8 @@ export const readSlotsViaUrl = (
 			return [];
 		}
 
-		// Read time slots using the Selectors registry
-		const slotSelector = Selectors.timeSlot[0]; // button.time-selection
-		const fallbackSelector = Selectors.timeSlot.join(', ');
-		const slotWaitStartedAt = Date.now();
+			// Read time slots using the Selectors registry
+			const slotWaitStartedAt = Date.now();
 		yield* Effect.tryPromise({
 			try: () => page.waitForSelector(fallbackSelector, { timeout: 10000 }),
 			catch: () => null,

@@ -55,6 +55,29 @@ const serviceCatalogRefreshDuration = new Histogram({
 	registers: [registry],
 });
 
+const bridgeReadCacheEventsTotal = new Counter({
+	name: 'acuity_bridge_read_cache_events_total',
+	help: 'Bridge availability read cache events by cache kind and event',
+	labelNames: ['cache_kind', 'event'],
+	registers: [registry],
+});
+
+const bridgeReadCacheWaitDuration = new Histogram({
+	name: 'acuity_bridge_read_cache_wait_duration_seconds',
+	help: 'Time spent waiting for another bridge reader to publish a cached value',
+	labelNames: ['cache_kind', 'outcome'],
+	buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60],
+	registers: [registry],
+});
+
+const bridgeReadDuration = new Histogram({
+	name: 'acuity_bridge_read_duration_seconds',
+	help: 'Wall time for uncached bridge availability reads',
+	labelNames: ['cache_kind'],
+	buckets: [0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60],
+	registers: [registry],
+});
+
 // ─── Derived cache hit-ratio ─────────────────────────────────────────────────
 //
 // `cacheHitRatio` is a derived gauge — prom-client cannot compute it for us,
@@ -104,6 +127,36 @@ export const _resetCacheHitRatioForTests = (): void => {
 	cacheHitCount = 0;
 	cacheMissCount = 0;
 	cacheHitRatio.set(1);
+};
+
+export const recordBridgeReadCacheEvent = (
+	cacheKind: string,
+	event: string,
+): void => {
+	bridgeReadCacheEventsTotal.inc({ cache_kind: cacheKind, event });
+};
+
+export const recordBridgeReadCacheWait = (
+	cacheKind: string,
+	outcome: 'hit' | 'timeout',
+	waitMs: number,
+): void => {
+	bridgeReadCacheWaitDuration.observe(
+		{ cache_kind: cacheKind, outcome },
+		Math.max(0, waitMs) / 1000,
+	);
+};
+
+export const observeBridgeRead = async <A>(
+	cacheKind: string,
+	fn: () => Promise<A>,
+): Promise<A> => {
+	const end = bridgeReadDuration.startTimer({ cache_kind: cacheKind });
+	try {
+		return await fn();
+	} finally {
+		end();
+	}
 };
 
 // ─── Page-operation timer helper ─────────────────────────────────────────────
@@ -163,8 +216,14 @@ export const metrics = {
 	cacheHitRatio,
 	serviceCatalogScrapeTotal,
 	serviceCatalogRefreshDuration,
+	bridgeReadCacheEventsTotal,
+	bridgeReadCacheWaitDuration,
+	bridgeReadDuration,
 	recordCacheHit,
 	recordCacheMiss,
+	recordBridgeReadCacheEvent,
+	recordBridgeReadCacheWait,
+	observeBridgeRead,
 	observePageOp,
 	observePageOpEffect,
 	trackBrowserSession,

@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { metrics } from "./metrics.js";
 
 export interface BridgeReadCacheClient {
   get(key: string): Promise<string | null>;
@@ -95,18 +96,30 @@ export const runBridgeReadCached = async <A, E>({
   waitTimeoutMs = BRIDGE_READ_CACHE_DEFAULTS.waitTimeoutMs,
   pollIntervalMs = BRIDGE_READ_CACHE_DEFAULTS.pollIntervalMs,
 }: RunBridgeReadCachedOptions<A, E>): Promise<BridgeReadResult<A, E>> => {
-  if (!redisClient) return read();
+  const record = (event: string): void => {
+    metrics.recordBridgeReadCacheEvent(cacheKind, event);
+  };
+  const observeRead = (): Promise<BridgeReadResult<A, E>> =>
+    metrics.observeBridgeRead(cacheKind, read);
+
+  if (!redisClient) {
+    record("bypass");
+    return observeRead();
+  }
 
   try {
     const cached = await readCached<A>(redisClient, cacheKey);
     if (cached !== undefined) {
+      record("hit");
       log?.({ event: "bridge_read_cache_hit", cacheKind });
       return { ok: true, value: cached };
     }
   } catch (error) {
+    record("get_failed");
     log?.({ event: "bridge_read_cache_get_failed", cacheKind, error });
-    return read();
+    return observeRead();
   }
+  record("miss");
 
   const token = randomBytes(16).toString("hex");
   const keyLock = lockKey(cacheKey);
@@ -115,13 +128,15 @@ export const runBridgeReadCached = async <A, E>({
     acquired =
       (await redisClient.set(keyLock, token, "PX", lockTtlMs, "NX")) === "OK";
   } catch (error) {
+    record("lock_failed");
     log?.({ event: "bridge_read_cache_lock_failed", cacheKind, error });
-    return read();
+    return observeRead();
   }
 
   if (acquired) {
     try {
-      const result = await read();
+      record("lock_winner");
+      const result = await observeRead();
       if (!result.ok) return result;
 
       try {
@@ -132,6 +147,7 @@ export const runBridgeReadCached = async <A, E>({
           valueTtlSeconds(result.value, ttlSeconds, emptyTtlSeconds),
         );
       } catch (error) {
+        record("set_failed");
         log?.({ event: "bridge_read_cache_set_failed", cacheKind, error });
       }
 
@@ -140,6 +156,7 @@ export const runBridgeReadCached = async <A, E>({
       try {
         await redisClient.eval(LUA_CAS_DEL, 1, keyLock, token);
       } catch (error) {
+        record("unlock_failed");
         log?.({ event: "bridge_read_cache_unlock_failed", cacheKind, error });
       }
     }
@@ -152,23 +169,30 @@ export const runBridgeReadCached = async <A, E>({
     try {
       const cached = await readCached<A>(redisClient, cacheKey);
       if (cached !== undefined) {
+        const waitMs = Date.now() - startedAt;
+        record("wait_hit");
+        metrics.recordBridgeReadCacheWait(cacheKind, "hit", waitMs);
         log?.({
           event: "bridge_read_cache_wait",
           cacheKind,
-          waitMs: Date.now() - startedAt,
+          waitMs,
         });
         return { ok: true, value: cached };
       }
     } catch (error) {
+      record("get_failed");
       log?.({ event: "bridge_read_cache_get_failed", cacheKind, error });
       break;
     }
   }
 
+  const waitMs = Date.now() - startedAt;
+  record("wait_timeout");
+  metrics.recordBridgeReadCacheWait(cacheKind, "timeout", waitMs);
   log?.({
     event: "bridge_read_cache_wait_timeout",
     cacheKind,
-    waitMs: Date.now() - startedAt,
+    waitMs,
   });
-  return read();
+  return observeRead();
 };
