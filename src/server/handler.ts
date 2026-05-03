@@ -73,6 +73,11 @@ import {
 import { buildHealthPayload } from './health.js';
 import { handleReady as _handleReady } from './ready.js';
 import {
+	buildAvailabilityDatesCacheKey,
+	getDatePrewarmMonths,
+	selectDatePrewarmMonths,
+} from './date-prewarm.js';
+import {
 	buildAvailabilitySlotsCacheKey,
 	getSlotPrewarmLimit,
 	selectSlotPrewarmDates,
@@ -114,6 +119,7 @@ const READ_CACHE_WAIT_TIMEOUT_MS = (() => {
 	const parsed = Number(process.env.ACUITY_READ_CACHE_WAIT_TIMEOUT_MS ?? 55_000);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : 55_000;
 })();
+const DATE_PREWARM_MONTHS = getDatePrewarmMonths();
 const SLOT_PREWARM_LIMIT = getSlotPrewarmLimit();
 
 const browserConfig: BrowserConfig = {
@@ -417,6 +423,42 @@ const resolveServiceName = async (serviceId: string, serviceName?: string): Prom
 
 const isAcuityAppointmentTypeId = (serviceId: string): boolean => /^\d+$/.test(serviceId);
 
+const scheduleDatePrewarm = (
+	context: RequestContext,
+	serviceId: string,
+	currentMonth: string | undefined,
+): void => {
+	if (!redisClient || DATE_PREWARM_MONTHS <= 0 || !isAcuityAppointmentTypeId(serviceId)) {
+		return;
+	}
+
+	for (const month of selectDatePrewarmMonths(currentMonth, DATE_PREWARM_MONTHS)) {
+		const cacheKey = buildAvailabilityDatesCacheKey(ACUITY_BASE_URL, serviceId, month);
+		void runCachedBridgeRead(context, 'availability_dates', cacheKey, () =>
+			runEffect(readDatesViaUrl(serviceId, month)),
+		).then((result) => {
+			if (!result.ok) {
+				logRequestEvent('WARN', 'Availability dates prewarm failed', context, {
+					event: 'availability_dates_prewarm_failed',
+					serviceId,
+					targetMonth: month,
+					errorTag: result.error._tag,
+					errorCode: 'code' in result.error ? result.error.code : 'UNKNOWN',
+					errorMessage: 'message' in result.error ? result.error.message : 'Date prewarm failed',
+				});
+				return;
+			}
+
+			logRequestEvent('INFO', 'Availability dates prewarm completed', context, {
+				event: 'availability_dates_prewarm_completed',
+				serviceId,
+				targetMonth: month,
+				dateCount: Array.isArray(result.value) ? result.value.length : undefined,
+			});
+		});
+	}
+};
+
 const scheduleSlotPrewarm = (
 	context: RequestContext,
 	serviceId: string,
@@ -575,7 +617,11 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 		serviceName: body.serviceName,
 		startDate: body.startDate,
 	});
-	const cacheKey = `bridge-read:v2:dates:${ACUITY_BASE_URL}:${body.serviceId}:${targetMonth ?? 'current'}`;
+	const cacheKey = buildAvailabilityDatesCacheKey(
+		ACUITY_BASE_URL,
+		body.serviceId,
+		targetMonth ?? 'current',
+	);
 	const result = await runCachedBridgeRead(context, 'availability_dates', cacheKey, () =>
 		isAcuityAppointmentTypeId(body.serviceId)
 			? runEffect(readDatesViaUrl(body.serviceId, targetMonth))
@@ -612,6 +658,7 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Availability lookup failed' },
 		});
 	}
+	scheduleDatePrewarm(context, body.serviceId, targetMonth);
 	scheduleSlotPrewarm(context, body.serviceId, result.value);
 	sendSuccess(res, result.value);
 };
