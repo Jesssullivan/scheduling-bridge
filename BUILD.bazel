@@ -173,7 +173,13 @@ vitest_bin.vitest_test(
         "tsconfig.json",
         ":node_modules/vitest",
         "vitest.config.ts",
-    ] + glob(["src/**/*.ts"]),
+    ] + glob([
+        "src/**/*.ts",
+        "tests/**/*.ts",
+        "parity/**/*.ts",
+        "bench/**/*.ts",
+        "bench/**/*.js",
+    ]),
     args = [
         "run",
         "--reporter=verbose",
