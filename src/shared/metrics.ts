@@ -11,7 +11,8 @@ import {
  * Prometheus metrics registry for the acuity-middleware bridge.
  *
  * Scope: Kubernetes phase 1.0 observability. SLIs are the canonical set
- * enumerated in spec §6.1 — do not extend this list without a spec update.
+ * enumerated in spec §6.1. TIN-92 adds page-limiter metrics so K8s HPA
+ * decisions can distinguish browser-slot contention from upstream Acuity cost.
  *
  * The `Registry` is a module-level singleton. In tests, a shared registry
  * means counters accumulate across files — assertions should be written as
@@ -24,6 +25,32 @@ collectDefaultMetrics({ register: registry, prefix: 'acuity_' });
 const browserActiveSessions = new Gauge({
 	name: 'acuity_browser_active_sessions',
 	help: 'Current number of open Playwright browser contexts',
+	registers: [registry],
+});
+
+const browserPageLimiterActive = new Gauge({
+	name: 'acuity_browser_page_limiter_active',
+	help: 'Current number of acquired browser page concurrency slots',
+	registers: [registry],
+});
+
+const browserPageLimiterQueued = new Gauge({
+	name: 'acuity_browser_page_limiter_queued',
+	help: 'Current number of requests waiting for a browser page concurrency slot',
+	registers: [registry],
+});
+
+const browserPageAcquireDuration = new Histogram({
+	name: 'acuity_browser_page_acquire_duration_seconds',
+	help: 'Time spent waiting to acquire a browser page concurrency slot',
+	labelNames: ['outcome'],
+	buckets: [0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+	registers: [registry],
+});
+
+const browserPageAcquireTimeoutsTotal = new Counter({
+	name: 'acuity_browser_page_acquire_timeouts_total',
+	help: 'Browser page concurrency slot acquisition timeouts',
 	registers: [registry],
 });
 
@@ -136,6 +163,24 @@ export const recordBridgeReadCacheEvent = (
 	bridgeReadCacheEventsTotal.inc({ cache_kind: cacheKind, event });
 };
 
+export const setBrowserPageLimiterState = (
+	active: number,
+	queued: number,
+): void => {
+	browserPageLimiterActive.set(Math.max(0, active));
+	browserPageLimiterQueued.set(Math.max(0, queued));
+};
+
+export const recordBrowserPageAcquire = (
+	outcome: 'success' | 'timeout',
+	waitMs: number,
+): void => {
+	browserPageAcquireDuration.observe({ outcome }, Math.max(0, waitMs) / 1000);
+	if (outcome === 'timeout') {
+		browserPageAcquireTimeoutsTotal.inc();
+	}
+};
+
 export const recordBridgeReadCacheWait = (
 	cacheKind: string,
 	outcome: 'hit' | 'timeout',
@@ -212,6 +257,10 @@ export const trackBrowserSession = <A, E, R>(
 export const metrics = {
 	registry,
 	browserActiveSessions,
+	browserPageLimiterActive,
+	browserPageLimiterQueued,
+	browserPageAcquireDuration,
+	browserPageAcquireTimeoutsTotal,
 	pageOperationsDuration,
 	cacheHitRatio,
 	serviceCatalogScrapeTotal,
@@ -221,6 +270,8 @@ export const metrics = {
 	bridgeReadDuration,
 	recordCacheHit,
 	recordCacheMiss,
+	setBrowserPageLimiterState,
+	recordBrowserPageAcquire,
 	recordBridgeReadCacheEvent,
 	recordBridgeReadCacheWait,
 	observeBridgeRead,

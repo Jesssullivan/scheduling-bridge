@@ -95,16 +95,24 @@ export const createPageConcurrencyLimiter = (): PageConcurrencyLimiter => {
 		readonly resolve: (release: () => void) => void;
 		readonly reject: (error: Error) => void;
 		readonly maxConcurrent: number;
+		readonly startedAt: number;
 		timeout: ReturnType<typeof setTimeout> | undefined;
 	}[] = [];
 
+	const recordState = () => {
+		metrics.setBrowserPageLimiterState(active, queue.length);
+	};
+
 	const releaseOne = () => {
 		active = Math.max(0, active - 1);
+		recordState();
 		drain();
 	};
 
-	const grant = (resolve: (release: () => void) => void) => {
+	const grant = (resolve: (release: () => void) => void, startedAt: number) => {
 		active += 1;
+		recordState();
+		metrics.recordBrowserPageAcquire('success', Date.now() - startedAt);
 		let released = false;
 		resolve(() => {
 			if (released) return;
@@ -120,7 +128,8 @@ export const createPageConcurrencyLimiter = (): PageConcurrencyLimiter => {
 			const next = queue.shift();
 			if (!next) return;
 			if (next.timeout) clearTimeout(next.timeout);
-			grant(next.resolve);
+			recordState();
+			grant(next.resolve, next.startedAt);
 		}
 	};
 
@@ -130,8 +139,9 @@ export const createPageConcurrencyLimiter = (): PageConcurrencyLimiter => {
 		acquire: (maxConcurrent, timeoutMs) =>
 			new Promise((resolve, reject) => {
 				const max = Math.max(1, Math.floor(maxConcurrent));
+				const startedAt = Date.now();
 				if (active < max) {
-					grant(resolve);
+					grant(resolve, startedAt);
 					return;
 				}
 				const entry = {
@@ -139,13 +149,20 @@ export const createPageConcurrencyLimiter = (): PageConcurrencyLimiter => {
 					reject,
 					timeout: undefined as ReturnType<typeof setTimeout> | undefined,
 					maxConcurrent: max,
+					startedAt,
 				};
-				entry.timeout = setTimeout(() => {
-					const index = queue.indexOf(entry);
-					if (index >= 0) queue.splice(index, 1);
-					reject(new Error('Timed out waiting for bridge browser page slot'));
-				}, Math.max(1, timeoutMs));
+				entry.timeout = setTimeout(
+					() => {
+						const index = queue.indexOf(entry);
+						if (index >= 0) queue.splice(index, 1);
+						recordState();
+						metrics.recordBrowserPageAcquire('timeout', Date.now() - startedAt);
+						reject(new Error('Timed out waiting for bridge browser page slot'));
+					},
+					Math.max(1, timeoutMs),
+				);
 				queue.push(entry);
+				recordState();
 			}),
 	};
 };
