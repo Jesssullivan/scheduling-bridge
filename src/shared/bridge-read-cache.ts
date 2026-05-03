@@ -40,11 +40,12 @@ export interface RunBridgeReadCachedOptions<A, E> {
   readonly lockTtlMs?: number;
   readonly waitTimeoutMs?: number;
   readonly pollIntervalMs?: number;
+  readonly waitTimeoutResult?: (waitMs: number) => BridgeReadResult<A, E>;
 }
 
 export const BRIDGE_READ_CACHE_DEFAULTS = {
-  lockTtlMs: 60_000,
-  waitTimeoutMs: 35_000,
+  lockTtlMs: 90_000,
+  waitTimeoutMs: 55_000,
   pollIntervalMs: 50,
 } as const;
 
@@ -95,6 +96,7 @@ export const runBridgeReadCached = async <A, E>({
   lockTtlMs = BRIDGE_READ_CACHE_DEFAULTS.lockTtlMs,
   waitTimeoutMs = BRIDGE_READ_CACHE_DEFAULTS.waitTimeoutMs,
   pollIntervalMs = BRIDGE_READ_CACHE_DEFAULTS.pollIntervalMs,
+  waitTimeoutResult,
 }: RunBridgeReadCachedOptions<A, E>): Promise<BridgeReadResult<A, E>> => {
   const record = (event: string): void => {
     metrics.recordBridgeReadCacheEvent(cacheKind, event);
@@ -194,5 +196,8 @@ export const runBridgeReadCached = async <A, E>({
     cacheKind,
     waitMs,
   });
+  const timeoutResult = waitTimeoutResult?.(waitMs);
+  if (timeoutResult) return timeoutResult;
+
   return observeRead();
 };
