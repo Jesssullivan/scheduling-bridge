@@ -176,6 +176,16 @@ const sendError = (res: ServerResponse, status: number, err: SchedulingError) =>
 		},
 	});
 
+const sendValidationError = (res: ServerResponse, code: string, message: string) =>
+	sendJson(res, 400, {
+		success: false,
+		error: {
+			tag: 'ValidationError',
+			code,
+			message,
+		},
+	});
+
 const parseBody = async (req: IncomingMessage): Promise<unknown> => {
 	const chunks: Buffer[] = [];
 	for await (const chunk of req) {
@@ -368,6 +378,17 @@ const serviceCatalog = createAcuityServiceCatalog({
 
 const isSchedulingError = (error: unknown): error is SchedulingError =>
 	typeof error === 'object' && error !== null && '_tag' in error;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isNonEmptyString = (value: unknown): value is string =>
+	typeof value === 'string' && value.trim().length > 0;
+
+const optionalString = (value: unknown): string | undefined | null => {
+	if (value === undefined) return undefined;
+	return typeof value === 'string' ? value : null;
+};
 
 const runCachedBridgeRead = async <A>(
 	context: RequestContext,
@@ -609,7 +630,19 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 };
 
 const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
-	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
+	const rawBody = await parseBody(req);
+	if (!isRecord(rawBody) || !isNonEmptyString(rawBody.serviceId)) {
+		return sendValidationError(res, 'serviceId', 'serviceId is required');
+	}
+	const serviceName = optionalString(rawBody.serviceName);
+	if (serviceName === null) {
+		return sendValidationError(res, 'serviceName', 'serviceName must be a string');
+	}
+	const startDate = optionalString(rawBody.startDate);
+	if (startDate === null) {
+		return sendValidationError(res, 'startDate', 'startDate must be a string');
+	}
+	const body = { serviceId: rawBody.serviceId, serviceName, startDate };
 	const targetMonth = body.startDate?.slice(0, 7);
 	logRequestEvent('INFO', 'Availability dates requested', context, {
 		event: 'availability_dates_requested',
@@ -664,7 +697,18 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 };
 
 const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
-	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; date: string };
+	const rawBody = await parseBody(req);
+	if (!isRecord(rawBody) || !isNonEmptyString(rawBody.serviceId)) {
+		return sendValidationError(res, 'serviceId', 'serviceId is required');
+	}
+	if (!isNonEmptyString(rawBody.date)) {
+		return sendValidationError(res, 'date', 'date is required');
+	}
+	const serviceName = optionalString(rawBody.serviceName);
+	if (serviceName === null) {
+		return sendValidationError(res, 'serviceName', 'serviceName must be a string');
+	}
+	const body = { serviceId: rawBody.serviceId, serviceName, date: rawBody.date };
 	logRequestEvent('INFO', 'Availability slots requested', context, {
 		event: 'availability_slots_requested',
 		serviceId: body.serviceId,

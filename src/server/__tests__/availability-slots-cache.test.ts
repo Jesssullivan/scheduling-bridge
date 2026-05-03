@@ -99,11 +99,14 @@ const listen = async () => {
 	};
 };
 
-const postAvailabilitySlots = async (url: string): Promise<Response> =>
+const postAvailabilitySlots = async (
+	url: string,
+	body: unknown = { serviceId, date: slotDate },
+): Promise<Response> =>
 	fetch(`${url}/availability/slots`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ serviceId, date: slotDate }),
+		body: JSON.stringify(body),
 	});
 
 describe('POST /availability/slots read cache', () => {
@@ -118,6 +121,7 @@ describe('POST /availability/slots read cache', () => {
 		process.env.ACUITY_BASE_URL = baseUrl;
 		process.env.ACUITY_EMPTY_READ_CACHE_TTL_SECONDS = '7';
 		process.env.ACUITY_READ_CACHE_TTL_SECONDS = '60';
+		process.env.ACUITY_READ_CACHE_WAIT_TIMEOUT_MS = '10';
 		process.env.REDIS_URL = 'redis://unit.test:6379';
 		delete process.env.REDIS_PASSWORD;
 		delete process.env.AUTH_TOKEN;
@@ -143,6 +147,7 @@ describe('POST /availability/slots read cache', () => {
 		delete process.env.ACUITY_BASE_URL;
 		delete process.env.ACUITY_EMPTY_READ_CACHE_TTL_SECONDS;
 		delete process.env.ACUITY_READ_CACHE_TTL_SECONDS;
+		delete process.env.ACUITY_READ_CACHE_WAIT_TIMEOUT_MS;
 		delete process.env.REDIS_URL;
 		delete process.env.REDIS_PASSWORD;
 		delete process.env.AUTH_TOKEN;
@@ -197,5 +202,42 @@ describe('POST /availability/slots read cache', () => {
 			'EX',
 			7,
 		);
+	});
+
+	it('returns timeout instead of rereading Acuity when another caller owns the cache fill', async () => {
+		redisState.values.set(`lock:${slotCacheKey}`, 'winner-token');
+		const running = await listen();
+		activeServer = running.server;
+
+		const response = await postAvailabilitySlots(running.baseUrl);
+
+		expect(response.status).toBe(500);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: {
+				tag: 'InfrastructureError',
+				code: 'TIMEOUT',
+			},
+		});
+		expect(readViaUrlMocks.readSlotsViaUrl).not.toHaveBeenCalled();
+	});
+
+	it('rejects missing service id before cache lookup or Acuity reads', async () => {
+		const running = await listen();
+		activeServer = running.server;
+
+		const response = await postAvailabilitySlots(running.baseUrl, {
+			date: slotDate,
+		});
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: {
+				tag: 'ValidationError',
+				code: 'serviceId',
+			},
+		});
+		expect(readViaUrlMocks.readSlotsViaUrl).not.toHaveBeenCalled();
 	});
 });

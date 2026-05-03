@@ -100,11 +100,12 @@ const listen = async () => {
 const postAvailabilityDates = async (
 	url: string,
 	startDate: string,
+	body: unknown = { serviceId, startDate },
 ): Promise<Response> =>
 	fetch(`${url}/availability/dates`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ serviceId, startDate }),
+		body: JSON.stringify(body),
 	});
 
 describe('POST /availability/dates cache prewarm', () => {
@@ -211,5 +212,26 @@ describe('POST /availability/dates cache prewarm', () => {
 			},
 			{ timeout: 5_000 },
 		);
+	});
+
+	it('rejects missing service id before cache lookup or Acuity reads', async () => {
+		const running = await listen();
+		activeServer = running.server;
+
+		const response = await postAvailabilityDates(
+			running.baseUrl,
+			'2026-07-01',
+			{ startDate: '2026-07-01' },
+		);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: {
+				tag: 'ValidationError',
+				code: 'serviceId',
+			},
+		});
+		expect(readViaUrlMocks.readDatesViaUrl).not.toHaveBeenCalled();
 	});
 });
