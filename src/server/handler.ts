@@ -72,6 +72,11 @@ import {
 } from '../adapters/acuity/steps/read-via-url.js';
 import { buildHealthPayload } from './health.js';
 import { handleReady as _handleReady } from './ready.js';
+import {
+	buildAvailabilitySlotsCacheKey,
+	getSlotPrewarmLimit,
+	selectSlotPrewarmDates,
+} from './slot-prewarm.js';
 import { ndjsonLog } from '../shared/logger.js';
 import type {
 	Booking,
@@ -100,6 +105,7 @@ const EMPTY_READ_CACHE_TTL_SECONDS = (() => {
 	const parsed = Number(process.env.ACUITY_EMPTY_READ_CACHE_TTL_SECONDS ?? 2 * 60);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : 2 * 60;
 })();
+const SLOT_PREWARM_LIMIT = getSlotPrewarmLimit();
 
 const browserConfig: BrowserConfig = {
 	...defaultBrowserConfig,
@@ -393,6 +399,60 @@ const resolveServiceName = async (serviceId: string, serviceName?: string): Prom
 
 const isAcuityAppointmentTypeId = (serviceId: string): boolean => /^\d+$/.test(serviceId);
 
+const scheduleSlotPrewarm = (
+	context: RequestContext,
+	serviceId: string,
+	dates: readonly { date?: unknown }[],
+): void => {
+	if (!redisClient || SLOT_PREWARM_LIMIT <= 0 || !isAcuityAppointmentTypeId(serviceId)) {
+		return;
+	}
+
+	const prewarmDates = selectSlotPrewarmDates(dates, SLOT_PREWARM_LIMIT);
+	if (prewarmDates.length === 0) return;
+
+	logRequestEvent('INFO', 'Availability slot prewarm queued', context, {
+		event: 'availability_slot_prewarm_queued',
+		serviceId,
+		dates: prewarmDates,
+		limit: SLOT_PREWARM_LIMIT,
+	});
+
+	void (async () => {
+		for (const date of prewarmDates) {
+			const startedAt = Date.now();
+			const cacheKey = buildAvailabilitySlotsCacheKey(ACUITY_BASE_URL, serviceId, date);
+			const result = await runCachedBridgeRead(context, 'availability_slots', cacheKey, () =>
+				runEffect(
+					readSlotsViaUrl(
+						serviceId,
+						date,
+						createSlotReadTelemetryContext(context, 'availability_slots_prewarm'),
+					),
+				),
+			);
+
+			logRequestEvent(result.ok ? 'INFO' : 'WARN', 'Availability slot prewarm completed', context, {
+				event: 'availability_slot_prewarm_completed',
+				serviceId,
+				date,
+				durationMs: Date.now() - startedAt,
+				ok: result.ok,
+				...(result.ok
+					? { slots: Array.isArray(result.value) ? result.value.length : undefined }
+					: { error: describeLogValue(result.error) }),
+			});
+		}
+	})().catch((error) => {
+		logRequestEvent('ERROR', 'Availability slot prewarm failed', context, {
+			event: 'availability_slot_prewarm_failed',
+			serviceId,
+			dates: prewarmDates,
+			error: describeLogValue(error),
+		});
+	});
+};
+
 // =============================================================================
 // ROUTE HANDLERS
 // =============================================================================
@@ -534,6 +594,7 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Availability lookup failed' },
 		});
 	}
+	scheduleSlotPrewarm(context, body.serviceId, result.value);
 	sendSuccess(res, result.value);
 };
 
@@ -545,7 +606,7 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, c
 		serviceName: body.serviceName,
 		date: body.date,
 	});
-	const cacheKey = `bridge-read:v2:slots:${ACUITY_BASE_URL}:${body.serviceId}:${body.date}`;
+	const cacheKey = buildAvailabilitySlotsCacheKey(ACUITY_BASE_URL, body.serviceId, body.date);
 	const result = await runCachedBridgeRead(context, 'availability_slots', cacheKey, () =>
 		isAcuityAppointmentTypeId(body.serviceId)
 			? runEffect(

@@ -40,11 +40,28 @@ export interface UrlSlotResult {
 	readonly available: boolean;
 }
 
+const DEFAULT_URL_READ_NETWORK_IDLE_MS = 1500;
+
+export const urlReadNetworkIdleTimeoutMs = (
+	timeout: number,
+	env: Record<string, string | undefined> = process.env,
+): number => {
+	const raw = env.ACUITY_URL_READ_NETWORK_IDLE_MS;
+	const parsed = raw === undefined || raw === '' ? DEFAULT_URL_READ_NETWORK_IDLE_MS : Number(raw);
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		return Math.min(timeout, DEFAULT_URL_READ_NETWORK_IDLE_MS);
+	}
+	return Math.min(timeout, Math.floor(parsed));
+};
+
 const navigateForUrlRead = async (page: Page, url: URL, timeout: number): Promise<void> => {
 	// Acuity can leave background requests open long after the calendar DOM is
 	// useful. Bound the network-idle wait so empty days do not become 30s 500s.
 	await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout });
-	await page.waitForLoadState('networkidle', { timeout: Math.min(timeout, 5000) }).catch(() => {});
+	const networkIdleTimeout = urlReadNetworkIdleTimeoutMs(timeout);
+	if (networkIdleTimeout > 0) {
+		await page.waitForLoadState('networkidle', { timeout: networkIdleTimeout }).catch(() => {});
+	}
 };
 
 const postClickSlotSettleMs = (): number => {
