@@ -41,6 +41,7 @@ export interface UrlSlotResult {
 }
 
 const DEFAULT_URL_READ_NETWORK_IDLE_MS = 1500;
+const DEFAULT_EMPTY_DATE_SETTLE_MS = 2500;
 
 export const urlReadNetworkIdleTimeoutMs = (
 	timeout: number,
@@ -50,6 +51,18 @@ export const urlReadNetworkIdleTimeoutMs = (
 	const parsed = raw === undefined || raw === '' ? DEFAULT_URL_READ_NETWORK_IDLE_MS : Number(raw);
 	if (!Number.isFinite(parsed) || parsed < 0) {
 		return Math.min(timeout, DEFAULT_URL_READ_NETWORK_IDLE_MS);
+	}
+	return Math.min(timeout, Math.floor(parsed));
+};
+
+export const dateEmptySettleTimeoutMs = (
+	timeout: number,
+	env: Record<string, string | undefined> = process.env,
+): number => {
+	const raw = env.ACUITY_EMPTY_DATE_SETTLE_MS;
+	const parsed = raw === undefined || raw === '' ? DEFAULT_EMPTY_DATE_SETTLE_MS : Number(raw);
+	if (!Number.isFinite(parsed) || parsed < 0) {
+		return Math.min(timeout, DEFAULT_EMPTY_DATE_SETTLE_MS);
 	}
 	return Math.min(timeout, Math.floor(parsed));
 };
@@ -124,6 +137,7 @@ const readEnabledCalendarDates = (
 			document.querySelectorAll(sel).forEach(tile => {
 				if ((tile as HTMLButtonElement).disabled) return;
 				if (tile.classList.contains(neighboringClass)) return;
+				if (tile.classList.contains('neighboringMonth')) return;
 
 				const abbr = tile.querySelector('abbr');
 				const label = abbr?.getAttribute('aria-label') || tile.getAttribute('data-date') || '';
@@ -138,6 +152,37 @@ const readEnabledCalendarDates = (
 		}, tileSelector),
 		catch: (e) => new WizardStepError({ step: 'read-availability', message: `Calendar read failed: ${e}` }),
 	});
+
+const waitForEnabledCalendarDate = (
+	page: Page,
+	tileSelector: string,
+	timeout: number,
+): Effect.Effect<void, never> =>
+	Effect.tryPromise({
+		try: async () => {
+			const waitMs = dateEmptySettleTimeoutMs(timeout);
+			if (waitMs <= 0) return;
+
+			await page.waitForFunction((sel) => {
+				const neighboringClasses = [
+					'react-calendar__tile--neighboringMonth',
+					'neighboringMonth',
+				];
+				return Array.from(document.querySelectorAll(sel)).some(tile => {
+					const button = tile as HTMLButtonElement;
+					if (button.disabled || button.getAttribute('aria-disabled') === 'true') return false;
+					if (neighboringClasses.some(className => tile.classList.contains(className))) return false;
+
+					const abbr = tile.querySelector('abbr');
+					const label = abbr?.getAttribute('aria-label') || tile.getAttribute('data-date') || '';
+					if (!label) return false;
+
+					return !Number.isNaN(new Date(label).getTime());
+				});
+			}, tileSelector, { timeout: waitMs }).catch(() => {});
+		},
+		catch: () => undefined,
+	}).pipe(Effect.ignore);
 
 // =============================================================================
 // READ DATES VIA URL PARAM
@@ -180,28 +225,9 @@ export const readDatesViaUrl = (
 		}
 
 		// Acuity occasionally paints the calendar shell before enabled dates are attached.
-		// Give the same page a short second chance before treating the month as empty.
-		yield* Effect.tryPromise({
-			try: () => page.waitForTimeout(750),
-			catch: () => null,
-		}).pipe(Effect.ignore);
-
-		dates = yield* readEnabledCalendarDates(page, tileSelector);
-		if (dates.length > 0) {
-			return dates;
-		}
-
-		// Final fallback: reload once and retry the DOM read. This is still cheaper
-		// than returning a false-empty month to the app and stranding the calendar.
-		yield* Effect.tryPromise({
-			try: () => navigateForUrlRead(page, url, config.timeout),
-			catch: (e) => new WizardStepError({ step: 'read-availability', message: `Retry navigation failed: ${e}` }),
-		});
-		yield* navigateToTargetMonth(page, targetMonth, 'read-availability');
-		yield* Effect.tryPromise({
-			try: () => page.waitForSelector(calendarSelector, { timeout: 10000 }),
-			catch: () => null,
-		}).pipe(Effect.ignore);
+		// Wait briefly for enabled tiles on the same page, but do not re-run a full
+		// deep-month navigation when the target month is legitimately empty.
+		yield* waitForEnabledCalendarDate(page, tileSelector, config.timeout);
 
 		return yield* readEnabledCalendarDates(page, tileSelector);
 	}));
