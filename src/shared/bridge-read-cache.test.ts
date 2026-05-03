@@ -7,6 +7,7 @@ import {
   type BridgeReadCacheClient,
   type BridgeReadCacheEvent,
 } from "./bridge-read-cache.js";
+import { metrics } from "./metrics.js";
 
 describe("runBridgeReadCached", () => {
   let mock: IORedisMock;
@@ -34,6 +35,17 @@ describe("runBridgeReadCached", () => {
       pollIntervalMs: 10,
     });
 
+  const metricCount = async (event: string): Promise<number> => {
+    const snap = await metrics.bridgeReadCacheEventsTotal.get();
+    return (
+      snap.values.find(
+        (value) =>
+          value.labels.cache_kind === "availability_slots" &&
+          value.labels.event === event,
+      )?.value ?? 0
+    );
+  };
+
   it("returns a cached value without running the bridge read", async () => {
     await mock.set(
       "slot-key",
@@ -43,6 +55,7 @@ describe("runBridgeReadCached", () => {
       ok: true as const,
       value: [{ datetime: "fresh" }],
     }));
+    const beforeHitCount = await metricCount("hit");
 
     const result = await run("slot-key", read);
 
@@ -54,6 +67,7 @@ describe("runBridgeReadCached", () => {
     expect(events.map((event) => event.event)).toContain(
       "bridge_read_cache_hit",
     );
+    expect(await metricCount("hit")).toBe(beforeHitCount + 1);
   });
 
   it("single-flights concurrent misses so only one caller reads Acuity", async () => {
@@ -66,6 +80,7 @@ describe("runBridgeReadCached", () => {
         value: [{ datetime: `2026-05-03T14:0${calls}:00` }],
       };
     });
+    const beforeWaitHitCount = await metricCount("wait_hit");
 
     const results = await Promise.all(
       Array.from({ length: 5 }, () => run("shared-slot-key", read)),
@@ -81,6 +96,7 @@ describe("runBridgeReadCached", () => {
     expect(events.map((event) => event.event)).toContain(
       "bridge_read_cache_wait",
     );
+    expect(await metricCount("wait_hit")).toBeGreaterThan(beforeWaitHitCount);
     expect(await mock.get("lock:shared-slot-key")).toBeNull();
   });
 

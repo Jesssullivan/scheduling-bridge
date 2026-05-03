@@ -19,6 +19,9 @@ describe('metrics', () => {
 		expect(names).toContain('acuity_cache_hit_ratio');
 		expect(names).toContain('acuity_service_catalog_scrape_total');
 		expect(names).toContain('acuity_service_catalog_refresh_duration_seconds');
+		expect(names).toContain('acuity_bridge_read_cache_events_total');
+		expect(names).toContain('acuity_bridge_read_cache_wait_duration_seconds');
+		expect(names).toContain('acuity_bridge_read_duration_seconds');
 	});
 
 	it('renders Prometheus text format', async () => {
@@ -46,6 +49,68 @@ describe('metrics', () => {
 			(await metrics.serviceCatalogScrapeTotal.get()).values.find(
 				(v) => v.labels.source === 'lock_winner',
 			)?.value ?? 0;
+		expect(after).toBe(before + 1);
+	});
+});
+
+describe('bridge read cache metrics wiring', () => {
+	const counterValue = async (
+		cacheKind: string,
+		event: string,
+	): Promise<number> => {
+		const snap = await metrics.bridgeReadCacheEventsTotal.get();
+		return snap.values.find(
+			(v) =>
+				v.labels.cache_kind === cacheKind &&
+				v.labels.event === event,
+		)?.value ?? 0;
+	};
+
+	const histogramCount = async (
+		metricName: string,
+		labels: Record<string, string>,
+	): Promise<number> => {
+		const metric = metrics.registry.getSingleMetric(metricName);
+		const snap = await metric?.get();
+		const countName = `${metricName}_count`;
+		return snap?.values.find((v) => {
+			if (v.metricName !== countName) return false;
+			return Object.entries(labels).every(
+				([key, value]) => v.labels[key] === value,
+			);
+		})?.value ?? 0;
+	};
+
+	it('increments fixed-label cache event counters', async () => {
+		const before = await counterValue('availability_slots', 'hit');
+		metrics.recordBridgeReadCacheEvent('availability_slots', 'hit');
+		const after = await counterValue('availability_slots', 'hit');
+		expect(after).toBe(before + 1);
+	});
+
+	it('records wait duration samples by outcome', async () => {
+		const before = await histogramCount(
+			'acuity_bridge_read_cache_wait_duration_seconds',
+			{ cache_kind: 'availability_slots', outcome: 'hit' },
+		);
+		metrics.recordBridgeReadCacheWait('availability_slots', 'hit', 250);
+		const after = await histogramCount(
+			'acuity_bridge_read_cache_wait_duration_seconds',
+			{ cache_kind: 'availability_slots', outcome: 'hit' },
+		);
+		expect(after).toBe(before + 1);
+	});
+
+	it('records uncached bridge read duration samples', async () => {
+		const before = await histogramCount(
+			'acuity_bridge_read_duration_seconds',
+			{ cache_kind: 'availability_dates' },
+		);
+		await metrics.observeBridgeRead('availability_dates', async () => 42);
+		const after = await histogramCount(
+			'acuity_bridge_read_duration_seconds',
+			{ cache_kind: 'availability_dates' },
+		);
 		expect(after).toBe(before + 1);
 	});
 });
