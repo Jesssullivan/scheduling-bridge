@@ -73,6 +73,11 @@ import {
 import { buildHealthPayload } from './health.js';
 import { handleReady as _handleReady } from './ready.js';
 import {
+	buildAvailabilityDatesCacheKey,
+	getDatePrewarmMonths,
+	selectDatePrewarmMonths,
+} from './date-prewarm.js';
+import {
 	buildAvailabilitySlotsCacheKey,
 	getSlotPrewarmLimit,
 	selectSlotPrewarmDates,
@@ -134,6 +139,7 @@ const READ_CACHE_WAIT_TIMEOUT_MS = (() => {
 	const parsed = Number(process.env.ACUITY_READ_CACHE_WAIT_TIMEOUT_MS ?? 55_000);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : 55_000;
 })();
+const DATE_PREWARM_MONTHS = getDatePrewarmMonths();
 const SLOT_PREWARM_LIMIT = getSlotPrewarmLimit();
 
 const browserConfig: BrowserConfig = {
@@ -187,6 +193,16 @@ const sendError = (res: ServerResponse, status: number, err: SchedulingError) =>
 			tag: err._tag,
 			code: 'code' in err ? (err as { code: string }).code : err._tag,
 			message: 'message' in err ? (err as { message: string }).message : 'Unknown error',
+		},
+	});
+
+const sendValidationError = (res: ServerResponse, code: string, message: string) =>
+	sendJson(res, 400, {
+		success: false,
+		error: {
+			tag: 'ValidationError',
+			code,
+			message,
 		},
 	});
 
@@ -408,6 +424,17 @@ const serviceCatalog = createAcuityServiceCatalog({
 const isSchedulingError = (error: unknown): error is SchedulingError =>
 	typeof error === 'object' && error !== null && '_tag' in error;
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isNonEmptyString = (value: unknown): value is string =>
+	typeof value === 'string' && value.trim().length > 0;
+
+const optionalString = (value: unknown): string | undefined | null => {
+	if (value === undefined) return undefined;
+	return typeof value === 'string' ? value : null;
+};
+
 const runCachedBridgeRead = async <A>(
 	context: RequestContext,
 	cacheKind: string,
@@ -461,6 +488,42 @@ const resolveServiceName = async (serviceId: string, serviceName?: string): Prom
 };
 
 const isAcuityAppointmentTypeId = (serviceId: string): boolean => /^\d+$/.test(serviceId);
+
+const scheduleDatePrewarm = (
+	context: RequestContext,
+	serviceId: string,
+	currentMonth: string | undefined,
+): void => {
+	if (!redisClient || DATE_PREWARM_MONTHS <= 0 || !isAcuityAppointmentTypeId(serviceId)) {
+		return;
+	}
+
+	for (const month of selectDatePrewarmMonths(currentMonth, DATE_PREWARM_MONTHS)) {
+		const cacheKey = buildAvailabilityDatesCacheKey(ACUITY_BASE_URL, serviceId, month);
+		void runCachedBridgeRead(context, 'availability_dates', cacheKey, () =>
+			runEffect(acuitySteps.readDatesViaUrl(serviceId, month)),
+		).then((result) => {
+			if (!result.ok) {
+				logRequestEvent('WARN', 'Availability dates prewarm failed', context, {
+					event: 'availability_dates_prewarm_failed',
+					serviceId,
+					targetMonth: month,
+					errorTag: result.error._tag,
+					errorCode: 'code' in result.error ? result.error.code : 'UNKNOWN',
+					errorMessage: 'message' in result.error ? result.error.message : 'Date prewarm failed',
+				});
+				return;
+			}
+
+			logRequestEvent('INFO', 'Availability dates prewarm completed', context, {
+				event: 'availability_dates_prewarm_completed',
+				serviceId,
+				targetMonth: month,
+				dateCount: Array.isArray(result.value) ? result.value.length : undefined,
+			});
+		});
+	}
+};
 
 const scheduleSlotPrewarm = (
 	context: RequestContext,
@@ -612,7 +675,19 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 };
 
 const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
-	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; startDate?: string };
+	const rawBody = await parseBody(req);
+	if (!isRecord(rawBody) || !isNonEmptyString(rawBody.serviceId)) {
+		return sendValidationError(res, 'serviceId', 'serviceId is required');
+	}
+	const serviceName = optionalString(rawBody.serviceName);
+	if (serviceName === null) {
+		return sendValidationError(res, 'serviceName', 'serviceName must be a string');
+	}
+	const startDate = optionalString(rawBody.startDate);
+	if (startDate === null) {
+		return sendValidationError(res, 'startDate', 'startDate must be a string');
+	}
+	const body = { serviceId: rawBody.serviceId, serviceName, startDate };
 	const targetMonth = body.startDate?.slice(0, 7);
 	logRequestEvent('INFO', 'Availability dates requested', context, {
 		event: 'availability_dates_requested',
@@ -620,7 +695,11 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 		serviceName: body.serviceName,
 		startDate: body.startDate,
 	});
-	const cacheKey = `bridge-read:v2:dates:${ACUITY_BASE_URL}:${body.serviceId}:${targetMonth ?? 'current'}`;
+	const cacheKey = buildAvailabilityDatesCacheKey(
+		ACUITY_BASE_URL,
+		body.serviceId,
+		targetMonth ?? 'current',
+	);
 	const result = await runCachedBridgeRead(context, 'availability_dates', cacheKey, () =>
 		isAcuityAppointmentTypeId(body.serviceId)
 			? runEffect(acuitySteps.readDatesViaUrl(body.serviceId, targetMonth))
@@ -657,12 +736,24 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Availability lookup failed' },
 		});
 	}
+	scheduleDatePrewarm(context, body.serviceId, targetMonth);
 	scheduleSlotPrewarm(context, body.serviceId, result.value);
 	sendSuccess(res, result.value);
 };
 
 const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
-	const body = (await parseBody(req)) as { serviceId: string; serviceName?: string; date: string };
+	const rawBody = await parseBody(req);
+	if (!isRecord(rawBody) || !isNonEmptyString(rawBody.serviceId)) {
+		return sendValidationError(res, 'serviceId', 'serviceId is required');
+	}
+	if (!isNonEmptyString(rawBody.date)) {
+		return sendValidationError(res, 'date', 'date is required');
+	}
+	const serviceName = optionalString(rawBody.serviceName);
+	if (serviceName === null) {
+		return sendValidationError(res, 'serviceName', 'serviceName must be a string');
+	}
+	const body = { serviceId: rawBody.serviceId, serviceName, date: rawBody.date };
 	logRequestEvent('INFO', 'Availability slots requested', context, {
 		event: 'availability_slots_requested',
 		serviceId: body.serviceId,
