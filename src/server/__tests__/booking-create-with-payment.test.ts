@@ -42,7 +42,21 @@ const bookingRequest = {
 };
 
 const listen = async () => {
-	const { server } = await import('../handler.js');
+	const {
+		server,
+		__runEffectWithoutBrowserForTest,
+		__setAcuityStepOverridesForTest,
+		__setEffectRunnerForTest,
+	} = await import('../handler.js');
+	__setEffectRunnerForTest(__runEffectWithoutBrowserForTest);
+	__setAcuityStepOverridesForTest({
+		navigateToBooking: stepMocks.navigateToBooking,
+		fillFormFields: stepMocks.fillFormFields,
+		bypassPayment: stepMocks.bypassPayment,
+		submitBooking: stepMocks.submitBooking,
+		extractConfirmation: stepMocks.extractConfirmation,
+		toBooking: stepMocks.toBooking,
+	});
 	await new Promise<void>((resolve) => {
 		server.listen(0, '127.0.0.1', resolve);
 	});
