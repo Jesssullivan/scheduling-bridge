@@ -86,8 +86,25 @@ vi.mock('ioredis', () => {
 const serviceId = '53178494';
 const baseUrl = 'https://MassageIthaca.as.me';
 
+const mockAcuityModules = () => {
+	vi.doMock('../../adapters/acuity/steps/read-via-url.js', () => readViaUrlMocks);
+	vi.doMock('../../adapters/acuity/steps/index.js', () => stepMocks);
+};
+
 const listen = async () => {
-	const { server } = await import('../handler.js');
+	const {
+		server,
+		__runEffectWithoutBrowserForTest,
+		__setEffectRunnerForTest,
+		__setAcuityStepOverridesForTest,
+	} = await import('../handler.js');
+	__setEffectRunnerForTest(__runEffectWithoutBrowserForTest);
+	__setAcuityStepOverridesForTest({
+		readDatesViaUrl: readViaUrlMocks.readDatesViaUrl,
+		readSlotsViaUrl: readViaUrlMocks.readSlotsViaUrl,
+		readAvailableDates: stepMocks.readAvailableDates,
+		readTimeSlots: stepMocks.readTimeSlots,
+	});
 	await new Promise<void>((resolve) => {
 		server.listen(0, '127.0.0.1', resolve);
 	});
@@ -114,6 +131,7 @@ describe('POST /availability/dates cache prewarm', () => {
 
 	beforeEach(() => {
 		vi.resetModules();
+		mockAcuityModules();
 		vi.clearAllMocks();
 		redisState.values.clear();
 		redisState.instances.length = 0;

@@ -91,6 +91,26 @@ import type {
 } from '../core/types.js';
 import { Errors } from '../core/types.js';
 
+const acuitySteps = {
+	navigateToBooking,
+	fillFormFields,
+	bypassPayment,
+	generateCouponCode,
+	submitBooking,
+	extractConfirmation,
+	toBooking,
+	readAvailableDates,
+	readTimeSlots,
+	readDatesViaUrl,
+	readSlotsViaUrl,
+};
+
+export const __setAcuityStepOverridesForTest = (
+	overrides: Partial<typeof acuitySteps>,
+) => {
+	Object.assign(acuitySteps, overrides);
+};
+
 // =============================================================================
 // CONFIGURATION
 // =============================================================================
@@ -284,12 +304,9 @@ const browserRuntime = ManagedRuntime.make(BrowserProcessLive(browserConfig));
 
 type Result<A> = { ok: true; value: A } | { ok: false; error: SchedulingError };
 
-const runEffect = async <A>(
-	effect: Effect.Effect<A, MiddlewareError | undefined, BrowserService | Scope.Scope>,
-): Promise<Result<A>> => {
-	const exit = await browserRuntime.runPromiseExit(
-		Effect.scoped(effect.pipe(Effect.provide(BrowserSessionLive))),
-	);
+const exitToResult = <A>(
+	exit: Exit.Exit<A, MiddlewareError | undefined>,
+): Result<A> => {
 	if (Exit.isSuccess(exit)) {
 		return { ok: true, value: exit.value };
 	}
@@ -298,6 +315,34 @@ const runEffect = async <A>(
 		return { ok: false, error: toSchedulingError(failure.value) };
 	}
 	return { ok: false, error: { _tag: 'InfrastructureError', code: 'UNKNOWN', message: Cause.pretty(exit.cause) } };
+};
+
+type RunEffect = <A>(
+	effect: Effect.Effect<A, MiddlewareError | undefined, BrowserService | Scope.Scope>,
+) => Promise<Result<A>>;
+
+const runEffectWithBrowser: RunEffect = async <A>(
+	effect: Effect.Effect<A, MiddlewareError | undefined, BrowserService | Scope.Scope>,
+): Promise<Result<A>> => {
+	const exit = await browserRuntime.runPromiseExit(
+		Effect.scoped(effect.pipe(Effect.provide(BrowserSessionLive))),
+	);
+	return exitToResult(exit);
+};
+
+let runEffect: RunEffect = runEffectWithBrowser;
+
+export const __runEffectWithoutBrowserForTest: RunEffect = async <A>(
+	effect: Effect.Effect<A, MiddlewareError | undefined, BrowserService | Scope.Scope>,
+): Promise<Result<A>> => {
+	const exit = await Effect.runPromiseExit(
+		effect as Effect.Effect<A, MiddlewareError | undefined, never>,
+	);
+	return exitToResult(exit);
+};
+
+export const __setEffectRunnerForTest = (runner: RunEffect | null) => {
+	runEffect = runner ?? runEffectWithBrowser;
 };
 
 // =============================================================================
@@ -456,7 +501,7 @@ const scheduleDatePrewarm = (
 	for (const month of selectDatePrewarmMonths(currentMonth, DATE_PREWARM_MONTHS)) {
 		const cacheKey = buildAvailabilityDatesCacheKey(ACUITY_BASE_URL, serviceId, month);
 		void runCachedBridgeRead(context, 'availability_dates', cacheKey, () =>
-			runEffect(readDatesViaUrl(serviceId, month)),
+			runEffect(acuitySteps.readDatesViaUrl(serviceId, month)),
 		).then((result) => {
 			if (!result.ok) {
 				logRequestEvent('WARN', 'Availability dates prewarm failed', context, {
@@ -505,7 +550,7 @@ const scheduleSlotPrewarm = (
 			const cacheKey = buildAvailabilitySlotsCacheKey(ACUITY_BASE_URL, serviceId, date);
 			const result = await runCachedBridgeRead(context, 'availability_slots', cacheKey, () =>
 				runEffect(
-					readSlotsViaUrl(
+					acuitySteps.readSlotsViaUrl(
 						serviceId,
 						date,
 						createSlotReadTelemetryContext(context, 'availability_slots_prewarm'),
@@ -657,7 +702,7 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 	);
 	const result = await runCachedBridgeRead(context, 'availability_dates', cacheKey, () =>
 		isAcuityAppointmentTypeId(body.serviceId)
-			? runEffect(readDatesViaUrl(body.serviceId, targetMonth))
+			? runEffect(acuitySteps.readDatesViaUrl(body.serviceId, targetMonth))
 			: (async () => {
 				const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
 				logRequestEvent('INFO', 'Availability dates resolved service name', context, {
@@ -667,7 +712,7 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 					startDate: body.startDate,
 				});
 				return runEffect(
-					readAvailableDates({
+					acuitySteps.readAvailableDates({
 						serviceName,
 						targetMonth,
 						monthsToScan: 2,
@@ -719,7 +764,7 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, c
 	const result = await runCachedBridgeRead(context, 'availability_slots', cacheKey, () =>
 		isAcuityAppointmentTypeId(body.serviceId)
 			? runEffect(
-				readSlotsViaUrl(
+				acuitySteps.readSlotsViaUrl(
 					body.serviceId,
 					body.date,
 					createSlotReadTelemetryContext(context, 'availability_slots'),
@@ -734,7 +779,7 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, c
 					date: body.date,
 				});
 				return runEffect(
-					readTimeSlots({
+					acuitySteps.readTimeSlots({
 						serviceName,
 						date: body.date,
 					}),
@@ -771,7 +816,7 @@ const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse, contex
 	});
 	const result = isAcuityAppointmentTypeId(body.serviceId)
 		? await runEffect(
-				readSlotsViaUrl(
+				acuitySteps.readSlotsViaUrl(
 					body.serviceId,
 					date,
 					createSlotReadTelemetryContext(context, 'availability_check'),
@@ -780,7 +825,7 @@ const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse, contex
 		: await (async () => {
 				const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
 				return runEffect(
-					readTimeSlots({
+					acuitySteps.readTimeSlots({
 						serviceName,
 						date,
 					}),
@@ -821,16 +866,16 @@ const handleCreateBooking = async (req: IncomingMessage, res: ServerResponse, co
 
 	const result = await runEffect(
 		Effect.gen(function* () {
-			yield* navigateToBooking({
+			yield* acuitySteps.navigateToBooking({
 				serviceName: serviceName ?? request.serviceId,
 				datetime: request.datetime,
 				client: request.client,
 				appointmentTypeId: request.serviceId,
 			});
-			yield* fillFormFields({ client: request.client, customFields: request.client.customFields });
-			yield* submitBooking();
-			const confirmation = yield* extractConfirmation();
-			return toBooking(confirmation, request, '', 'acuity');
+			yield* acuitySteps.fillFormFields({ client: request.client, customFields: request.client.customFields });
+			yield* acuitySteps.submitBooking();
+			const confirmation = yield* acuitySteps.extractConfirmation();
+			return acuitySteps.toBooking(confirmation, request, '', 'acuity');
 		}),
 	);
 
@@ -880,17 +925,17 @@ const handleCreateBookingWithPayment = async (
 
 	const result = await runEffect(
 		Effect.gen(function* () {
-			yield* navigateToBooking({
+			yield* acuitySteps.navigateToBooking({
 				serviceName,
 				datetime: request.datetime,
 				client: request.client,
 				appointmentTypeId: request.serviceId,
 			});
-			yield* fillFormFields({ client: request.client, customFields: request.client.customFields });
-			yield* bypassPayment(coupon);
-			yield* submitBooking();
-			const confirmation = yield* extractConfirmation();
-			return toBooking(
+			yield* acuitySteps.fillFormFields({ client: request.client, customFields: request.client.customFields });
+			yield* acuitySteps.bypassPayment(coupon);
+			yield* acuitySteps.submitBooking();
+			const confirmation = yield* acuitySteps.extractConfirmation();
+			return acuitySteps.toBooking(
 				confirmation,
 				request,
 				paymentRef,
