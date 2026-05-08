@@ -3,7 +3,7 @@
  *
  * Acuity's React SPA (2026) does NOT support deep-linking via query params.
  * Instead, we click through the 5-step wizard:
- *   1. Service page (massageithaca.as.me) → find service → click "Book"
+ *   1. Service page (<tenant>.as.me) → find service → click "Book"
  *   2. Calendar page → navigate to target month → click target day
  *   3. Time slots → click matching slot → "Select and continue"
  *   4. Land on client form (fields empty — filling is a separate step)

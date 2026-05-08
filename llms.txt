@@ -13,7 +13,7 @@ Authority:
 - runtime start command is `node dist/server/handler.js`
 - provider-agnostic runtime contract is the Node HTTP server plus `/health` tuple
 - K8s/container execution is the accepted next-production provider from infrastructure
-- Modal remains fallback/proofing context until remaining live traffic moves
+- Modal is legacy proofing context with automatic deploys disabled during TIN-981
 - consumer apps should use `SCHEDULING_BRIDGE_URL` and `SCHEDULING_BRIDGE_AUTH_TOKEN`
 
 Toolchains:
@@ -27,7 +27,7 @@ Toolchains:
 - CI publish node: `24`
 
 Protocol:
-- version: `1.0.0`
+- version: `1.1.0`
 - flow owner: `scheduling-bridge`
 - backend: `acuity`
 - transport: `http-json`
@@ -39,8 +39,12 @@ Endpoints:
 - `availabilityDates` -> `/availability/dates`
 - `availabilitySlots` -> `/availability/slots`
 - `availabilityCheck` -> `/availability/check`
+- `availabilityRefresh` -> `/availability/refresh`
+- `availabilitySnapshot` -> `/availability/snapshot`
 - `bookingCreate` -> `/booking/create`
 - `bookingCreateWithPayment` -> `/booking/create-with-payment`
+- `bookingJobs` -> `/booking/jobs`
+- `jobStatus` -> `/jobs/:operationId`
 
 Capabilities:
 - `services:list`
@@ -48,8 +52,12 @@ Capabilities:
 - `availability:dates`
 - `availability:slots`
 - `availability:check`
+- `availability:refresh-async`
+- `availability:snapshot`
 - `booking:create`
-- `booking:create-with-payment`
+- `booking:create-with-payment:deprecated`
+- `booking:create-with-payment-async`
+- `booking:job-status`
 - `service-catalog:static-fallback`
 - `service-catalog:business-extract`
 - `service-catalog:scraper-fallback`

@@ -1,23 +1,12 @@
 name: Deploy Modal
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'modal-app.py'
-      - 'src/**'
-      - 'BUILD.bazel'
-      - 'MODULE.bazel'
-      - '.bazelversion'
-      - '.npmrc'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'scripts/build-derived-artifacts.mjs'
-      - 'scripts/bazel-helpers.mjs'
-      - 'tsconfig.json'
-      - '.github/workflows/deploy-modal.yml'
   workflow_dispatch:
     inputs:
+      acknowledge_legacy_modal:
+        description: 'Type legacy-modal to acknowledge this path is decommissioning-only'
+        required: true
+        type: string
       modal_environment:
         description: 'Modal environment name (optional)'
         required: false
@@ -38,6 +27,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: ${{ github.event.inputs.acknowledge_legacy_modal == 'legacy-modal' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

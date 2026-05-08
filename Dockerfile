@@ -6,7 +6,7 @@
 #   docker build -t scheduling-bridge .
 #   docker run -p 3001:3001 \
 #     -e AUTH_TOKEN=... \
-#     -e ACUITY_BASE_URL=https://MassageIthaca.as.me \
+#     -e ACUITY_BASE_URL=https://example.as.me \
 #     -e ACUITY_BYPASS_COUPON=... \
 #     scheduling-bridge
 #

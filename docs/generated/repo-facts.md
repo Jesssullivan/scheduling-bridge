@@ -10,9 +10,9 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 ## Package Identity
 
 - package: `@tummycrypt/scheduling-bridge`
-- package version: `0.4.10`
-- Bazel module version: `0.4.10`
-- Bazel package stanza: `@tummycrypt/scheduling-bridge@0.4.10`
+- package version: `0.5.0`
+- Bazel module version: `0.5.0`
+- Bazel package stanza: `@tummycrypt/scheduling-bridge@0.5.0`
 - repository: `git+https://github.com/Jesssullivan/scheduling-bridge.git`
 
 ## Toolchains
@@ -42,7 +42,7 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 
 - provider-agnostic contract: Node HTTP server plus `/health` tuple
 - accepted next-production provider: K8s/container runtime from infrastructure
-- fallback/proofing provider: Modal, until remaining live traffic moves
+- legacy proofing provider: Modal, automatic deploys disabled during TIN-981
 - forward consumer env names: `SCHEDULING_BRIDGE_URL` and
   `SCHEDULING_BRIDGE_AUTH_TOKEN`
 
@@ -55,7 +55,7 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 
 ## Protocol Surface
 
-- protocol version: `1.0.0`
+- protocol version: `1.1.0`
 - flow owner: `scheduling-bridge`
 - transport: `http-json`
 - backend: `acuity`
@@ -70,8 +70,12 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 | `availabilityDates` | `/availability/dates` |
 | `availabilitySlots` | `/availability/slots` |
 | `availabilityCheck` | `/availability/check` |
+| `availabilityRefresh` | `/availability/refresh` |
+| `availabilitySnapshot` | `/availability/snapshot` |
 | `bookingCreate` | `/booking/create` |
 | `bookingCreateWithPayment` | `/booking/create-with-payment` |
+| `bookingJobs` | `/booking/jobs` |
+| `jobStatus` | `/jobs/:operationId` |
 
 ### Capabilities
 
@@ -80,8 +84,12 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 - `availability:dates`
 - `availability:slots`
 - `availability:check`
+- `availability:refresh-async`
+- `availability:snapshot`
 - `booking:create`
-- `booking:create-with-payment`
+- `booking:create-with-payment:deprecated`
+- `booking:create-with-payment-async`
+- `booking:job-status`
 - `service-catalog:static-fallback`
 - `service-catalog:business-extract`
 - `service-catalog:scraper-fallback`

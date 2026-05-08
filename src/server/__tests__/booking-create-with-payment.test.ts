@@ -133,7 +133,7 @@ describe('POST /booking/create-with-payment', () => {
 		delete process.env.ACUITY_BYPASS_COUPON;
 	});
 
-	it('uses the static catalog service name, bypass coupon, and payment reference', async () => {
+	it('rejects the synchronous paid booking endpoint so consumers migrate to async jobs', async () => {
 		const running = await listen();
 		activeServer = running.server;
 
@@ -152,37 +152,19 @@ describe('POST /booking/create-with-payment', () => {
 
 		const body = await response.json();
 
-		expect(response.status).toBe(200);
+		expect(response.status).toBe(410);
 		expect(body).toMatchObject({
-			success: true,
-			data: {
-				id: 'apt_123',
-				paymentRef: '[STRIPE] Transaction: pi_test_123',
+			success: false,
+			error: {
+				tag: 'Deprecated',
+				code: 'ASYNC_REQUIRED',
 			},
 		});
-		expect(stepMocks.navigateToBooking).toHaveBeenCalledWith(
-			expect.objectContaining({
-				serviceName: service.name,
-				datetime: bookingRequest.datetime,
-				appointmentTypeId: service.id,
-			}),
-		);
-		expect(stepMocks.bypassPayment).toHaveBeenCalledWith('TEST-100');
-		expect(stepMocks.toBooking).toHaveBeenCalledWith(
-			expect.anything(),
-			expect.objectContaining({ serviceId: service.id }),
-			'pi_test_123',
-			'stripe',
-			expect.objectContaining({
-				name: service.name,
-				duration: service.duration,
-				price: service.price,
-				currency: service.currency,
-			}),
-		);
+		expect(stepMocks.navigateToBooking).not.toHaveBeenCalled();
+		expect(stepMocks.bypassPayment).not.toHaveBeenCalled();
 	});
 
-	it('accepts a request-scoped coupon code override', async () => {
+	it('does not run the old sync endpoint even when a request-scoped coupon is present', async () => {
 		const running = await listen();
 		activeServer = running.server;
 
@@ -200,11 +182,11 @@ describe('POST /booking/create-with-payment', () => {
 			},
 		);
 
-		expect(response.status).toBe(200);
-		expect(stepMocks.bypassPayment).toHaveBeenCalledWith('REQUEST-100');
+		expect(response.status).toBe(410);
+		expect(stepMocks.bypassPayment).not.toHaveBeenCalled();
 	});
 
-	it('rejects paid booking finalization before navigation when no bypass coupon is configured', async () => {
+	it('fails fast before sync paid booking validation when no bypass coupon is configured', async () => {
 		delete process.env.ACUITY_BYPASS_COUPON;
 		const running = await listen();
 		activeServer = running.server;
@@ -224,12 +206,12 @@ describe('POST /booking/create-with-payment', () => {
 
 		const body = await response.json();
 
-		expect(response.status).toBe(400);
+		expect(response.status).toBe(410);
 		expect(body).toMatchObject({
 			success: false,
 			error: {
-				tag: 'ValidationError',
-				code: 'couponCode',
+				tag: 'Deprecated',
+				code: 'ASYNC_REQUIRED',
 			},
 		});
 		expect(stepMocks.navigateToBooking).not.toHaveBeenCalled();

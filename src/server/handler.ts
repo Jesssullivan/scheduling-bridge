@@ -3,7 +3,7 @@
  *
  * Standalone Node.js HTTP server wrapping the Effect TS wizard programs.
  * Designed to run inside a Docker container with Playwright + Chromium
- * on Modal Labs, Fly.io, or any host.
+ * on Kubernetes, Docker, or any host.
  *
  * Endpoints:
  *   GET  /health                    - Health check
@@ -12,8 +12,12 @@
  *   POST /availability/dates        - Available dates for a service
  *   POST /availability/slots        - Time slots for a date
  *   POST /availability/check        - Check if a slot is available
+ *   POST /availability/refresh      - Enqueue async availability refresh
+ *   GET  /availability/snapshot     - Read latest availability snapshot
  *   POST /booking/create            - Create booking (standard)
- *   POST /booking/create-with-payment - Create booking with payment ref (coupon bypass)
+ *   POST /booking/create-with-payment - Deprecated sync paid booking endpoint
+ *   POST /booking/jobs              - Enqueue async paid booking job
+ *   GET  /jobs/:operationId         - Read async job status
  *
  * Environment variables:
  *   PORT                - Server port (default: 3001)
@@ -83,6 +87,18 @@ import {
 	selectSlotPrewarmDates,
 } from './slot-prewarm.js';
 import { ndjsonLog } from '../shared/logger.js';
+import {
+	createInMemoryBridgeAsyncStore,
+	type BridgeAsyncStore,
+} from '../async/store.js';
+import { createPostgresBridgeAsyncStore } from '../async/postgres-store.js';
+import type {
+	AvailabilitySnapshotKind,
+	BridgeAdapterProfile,
+	BridgeJobCommand,
+	BridgeJobRecord,
+	EnqueueBridgeJobResponse,
+} from '../async/types.js';
 import type {
 	Booking,
 	BookingRequest,
@@ -117,7 +133,7 @@ export const __setAcuityStepOverridesForTest = (
 
 const PORT = Number(process.env.PORT ?? 3001);
 const AUTH_TOKEN = process.env.AUTH_TOKEN;
-const ACUITY_BASE_URL = process.env.ACUITY_BASE_URL ?? 'https://MassageIthaca.as.me';
+const ACUITY_BASE_URL = process.env.ACUITY_BASE_URL ?? 'https://example.as.me';
 const COUPON_CODE = process.env.ACUITY_BYPASS_COUPON;
 const SERVICE_CACHE_TTL_MS = (() => {
 	const parsed = Number(process.env.ACUITY_SERVICE_CACHE_TTL_MS ?? 5 * 60_000);
@@ -362,6 +378,7 @@ export const __setEffectRunnerForTest = (runner: RunEffect | null) => {
 // If REDIS_URL is missing (local dev), `redisL2` stays `undefined` and the
 // catalog falls back to its in-process single-flight path.
 
+const BRIDGE_DATABASE_URL = process.env.BRIDGE_DATABASE_URL;
 const REDIS_URL = process.env.REDIS_URL;
 const REDIS_PASSWORD = process.env.REDIS_PASSWORD;
 
@@ -420,6 +437,46 @@ const serviceCatalog = createAcuityServiceCatalog({
 	logger: createServiceCatalogLogger(),
 	redisL2: serviceCatalogRedisL2,
 });
+
+let closeBridgeAsyncStore: (() => Promise<void>) | null = null;
+
+const createBridgeAsyncStore = (): BridgeAsyncStore => {
+	if (BRIDGE_DATABASE_URL) {
+		const store = createPostgresBridgeAsyncStore({
+			connectionString: BRIDGE_DATABASE_URL,
+			ssl: process.env.BRIDGE_DATABASE_SSL === 'true',
+			migrate: process.env.BRIDGE_DATABASE_MIGRATE !== 'false',
+		});
+		closeBridgeAsyncStore = store.close;
+		void store.ready().catch((error) => {
+			logEvent('ERROR', 'Bridge async Postgres store migration failed', {
+				event: 'bridge_async_store_ready_failed',
+				error: describeLogValue(error),
+			});
+		});
+		logEvent('INFO', 'Bridge async store selected', {
+			event: 'bridge_async_store_selected',
+			mode: 'postgres',
+			migrate: process.env.BRIDGE_DATABASE_MIGRATE !== 'false',
+		});
+		return store;
+	}
+	logEvent('INFO', 'Bridge async store selected', {
+		event: 'bridge_async_store_selected',
+		mode: 'memory',
+	});
+	return createInMemoryBridgeAsyncStore();
+};
+
+let bridgeAsyncStore: BridgeAsyncStore = createBridgeAsyncStore();
+
+export const __setBridgeAsyncStoreForTest = (store: BridgeAsyncStore | null) => {
+	if (closeBridgeAsyncStore) {
+		void closeBridgeAsyncStore().catch(() => undefined);
+		closeBridgeAsyncStore = null;
+	}
+	bridgeAsyncStore = store ?? createInMemoryBridgeAsyncStore();
+};
 
 const isSchedulingError = (error: unknown): error is SchedulingError =>
 	typeof error === 'object' && error !== null && '_tag' in error;
@@ -488,6 +545,62 @@ const resolveServiceName = async (serviceId: string, serviceName?: string): Prom
 };
 
 const isAcuityAppointmentTypeId = (serviceId: string): boolean => /^\d+$/.test(serviceId);
+
+const adapterProfile = (): BridgeAdapterProfile => ({
+	backend: 'acuity',
+	baseUrl: ACUITY_BASE_URL,
+	selectorProfile: process.env.ACUITY_SELECTOR_PROFILE,
+	adminApiConfigured: process.env.ACUITY_ADMIN_API_CONFIGURED === 'true',
+});
+
+const jobStatusUrl = (operationId: string): string =>
+	`/jobs/${encodeURIComponent(operationId)}`;
+
+const toEnqueueResponse = (job: BridgeJobRecord): EnqueueBridgeJobResponse => ({
+	operationId: job.operationId,
+	status: job.status,
+	statusUrl: jobStatusUrl(job.operationId),
+});
+
+const sendAccepted = <T>(res: ServerResponse, data: T) =>
+	sendJson(res, 202, { success: true, data });
+
+const snapshotTimestamps = (observedAt = new Date()) => {
+	const staleAfterMs = Number(process.env.BRIDGE_SNAPSHOT_STALE_MS ?? 5 * 60_000);
+	const expiresAfterMs = Number(process.env.BRIDGE_SNAPSHOT_EXPIRES_MS ?? 30 * 60_000);
+	return {
+		observedAt: observedAt.toISOString(),
+		staleAt: new Date(observedAt.getTime() + staleAfterMs).toISOString(),
+		expiresAt: new Date(observedAt.getTime() + expiresAfterMs).toISOString(),
+	};
+};
+
+const recordAvailabilitySnapshot = async (
+	kind: AvailabilitySnapshotKind,
+	serviceId: string,
+	scope: string,
+	value: readonly unknown[],
+	context: RequestContext,
+) => {
+	try {
+		await bridgeAsyncStore.upsertAvailabilitySnapshot({
+			kind,
+			serviceId,
+			scope,
+			adapterProfile: adapterProfile(),
+			value: value as never,
+			...snapshotTimestamps(),
+		});
+	} catch (error) {
+		logRequestEvent('WARN', 'Availability snapshot write failed', context, {
+			event: 'availability_snapshot_write_failed',
+			kind,
+			serviceId,
+			scope,
+			error: describeLogValue(error),
+		});
+	}
+};
 
 const scheduleDatePrewarm = (
 	context: RequestContext,
@@ -736,6 +849,13 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Availability lookup failed' },
 		});
 	}
+	await recordAvailabilitySnapshot(
+		'dates',
+		body.serviceId,
+		targetMonth ?? 'current',
+		Array.isArray(result.value) ? result.value : [],
+		context,
+	);
 	scheduleDatePrewarm(context, body.serviceId, targetMonth);
 	scheduleSlotPrewarm(context, body.serviceId, result.value);
 	sendSuccess(res, result.value);
@@ -802,6 +922,13 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, c
 			error: { tag: err._tag ?? 'InfrastructureError', code: 'code' in err ? (err as {code:string}).code : 'UNKNOWN', message: 'message' in err ? (err as {message:string}).message : 'Slot lookup failed' },
 		});
 	}
+	await recordAvailabilitySnapshot(
+		'slots',
+		body.serviceId,
+		body.date,
+		Array.isArray(result.value) ? result.value : [],
+		context,
+	);
 	sendSuccess(res, result.value);
 };
 
@@ -893,72 +1020,193 @@ const handleCreateBooking = async (req: IncomingMessage, res: ServerResponse, co
 	sendSuccess(res, result.value);
 };
 
-const handleCreateBookingWithPayment = async (
+const handleDeprecatedSyncPaymentBooking = (res: ServerResponse) =>
+	sendJson(res, 410, {
+		success: false,
+		error: {
+			tag: 'Deprecated',
+			code: 'ASYNC_REQUIRED',
+			message: 'Use POST /booking/jobs and poll GET /jobs/:operationId',
+		},
+	});
+
+const handleEnqueueBookingJob = async (
 	req: IncomingMessage,
 	res: ServerResponse,
 	context: RequestContext,
 ) => {
-	const body = (await parseBody(req)) as {
-		request: BookingRequest;
-		paymentRef: string;
-		paymentProcessor: string;
-		couponCode?: string;
-	};
-	const { request, paymentRef, paymentProcessor } = body;
-	const coupon = body.couponCode ?? COUPON_CODE;
-
-	if (!coupon) {
+	const rawBody = await parseBody(req);
+	if (!isRecord(rawBody)) {
+		return sendValidationError(res, 'body', 'Request body must be an object');
+	}
+	if (!isRecord(rawBody.request)) {
+		return sendValidationError(res, 'request', 'request is required');
+	}
+	if (!isNonEmptyString(rawBody.paymentRef)) {
+		return sendValidationError(res, 'paymentRef', 'paymentRef is required');
+	}
+	if (!isNonEmptyString(rawBody.paymentProcessor)) {
+		return sendValidationError(res, 'paymentProcessor', 'paymentProcessor is required');
+	}
+	const coupon = optionalString(rawBody.couponCode) ?? COUPON_CODE;
+	const profile = adapterProfile();
+	const couponBypassRequired = Boolean(coupon) || !profile.adminApiConfigured;
+	if (couponBypassRequired && !coupon) {
 		return sendJson(res, 400, {
 			success: false,
 			error: { tag: 'ValidationError', code: 'couponCode', message: 'Coupon code is required for payment bypass' },
 		});
 	}
-
+	const idempotencyKey = optionalString(rawBody.idempotencyKey) ?? undefined;
+	const request = rawBody.request as unknown as BookingRequest;
 	const serviceName = await resolveServiceName(request.serviceId);
-	const service = serviceCatalog.getCachedService(request.serviceId);
-	logRequestEvent('INFO', 'Booking create with payment requested', context, {
-		event: 'booking_create_with_payment_requested',
+	const job: BridgeJobCommand = {
+		kind: 'booking_create_with_payment',
+		command: {
+			request,
+			paymentRef: rawBody.paymentRef,
+			paymentProcessor: rawBody.paymentProcessor,
+			couponCode: coupon,
+			serviceName,
+			adapterProfile: profile,
+			couponBypassRequired,
+			executionPreference: 'auto',
+		},
+	};
+	const record = await bridgeAsyncStore.enqueueJob(job, { idempotencyKey });
+
+	logRequestEvent('INFO', 'Booking async job enqueued', context, {
+		event: 'booking_job_enqueued',
+		operationId: record.operationId,
+		status: record.status,
 		serviceId: request.serviceId,
 		datetime: request.datetime,
-		paymentProcessor,
+		idempotent: Boolean(idempotencyKey),
 	});
 
-	const result = await runEffect(
-		Effect.gen(function* () {
-			yield* acuitySteps.navigateToBooking({
-				serviceName: serviceName ?? request.serviceId,
-				datetime: request.datetime,
-				client: request.client,
-				appointmentTypeId: request.serviceId,
-			});
-			yield* acuitySteps.fillFormFields({ client: request.client, customFields: request.client.customFields });
-			yield* acuitySteps.bypassPayment(coupon);
-			yield* acuitySteps.submitBooking();
-			const confirmation = yield* acuitySteps.extractConfirmation();
-			return acuitySteps.toBooking(
-				confirmation,
-				request,
-				paymentRef,
-				paymentProcessor,
-				service ? { name: service.name, duration: service.duration, price: service.price, currency: service.currency } : undefined,
-			);
-		}),
-	);
+	return sendAccepted(res, toEnqueueResponse(record));
+};
 
-	if (!result.ok) {
-		logRequestEvent('ERROR', 'Booking create with payment failed', context, {
-			event: 'booking_create_with_payment_failed',
-			serviceId: request.serviceId,
-			datetime: request.datetime,
-			paymentProcessor,
-			errorTag: result.error._tag,
-			errorCode: 'code' in result.error ? result.error.code : 'UNKNOWN',
-			errorMessage:
-				'message' in result.error ? result.error.message : 'Booking create with payment failed',
-		});
-		return sendError(res, 500, result.error);
+const handleEnqueueAvailabilityRefresh = async (
+	req: IncomingMessage,
+	res: ServerResponse,
+	context: RequestContext,
+) => {
+	const rawBody = await parseBody(req);
+	if (!isRecord(rawBody)) {
+		return sendValidationError(res, 'body', 'Request body must be an object');
 	}
-	sendSuccess(res, result.value);
+	const kind = rawBody.kind;
+	if (kind !== 'dates' && kind !== 'slots') {
+		return sendValidationError(res, 'kind', 'kind must be "dates" or "slots"');
+	}
+	if (!isNonEmptyString(rawBody.serviceId)) {
+		return sendValidationError(res, 'serviceId', 'serviceId is required');
+	}
+	const serviceName = optionalString(rawBody.serviceName);
+	if (serviceName === null) {
+		return sendValidationError(res, 'serviceName', 'serviceName must be a string');
+	}
+
+	const idempotencyKeyOverride = optionalString(rawBody.idempotencyKey);
+	if (idempotencyKeyOverride === null) {
+		return sendValidationError(res, 'idempotencyKey', 'idempotencyKey must be a string');
+	}
+
+	const month = rawBody.month;
+	const date = rawBody.date;
+	if (kind === 'dates' && !isNonEmptyString(month)) {
+		return sendValidationError(res, 'month', 'month is required for date refresh jobs');
+	}
+	if (kind === 'slots' && !isNonEmptyString(date)) {
+		return sendValidationError(res, 'date', 'date is required for slot refresh jobs');
+	}
+
+	const idempotencyKey = idempotencyKeyOverride ?? [
+		'availability-refresh',
+		ACUITY_BASE_URL,
+		kind,
+		rawBody.serviceId,
+		kind === 'dates' ? month : date,
+	].join(':');
+
+	const job: BridgeJobCommand = kind === 'dates'
+		? {
+				kind: 'availability_dates_refresh',
+				command: {
+					serviceId: rawBody.serviceId,
+					serviceName,
+					month: month as string,
+					adapterProfile: adapterProfile(),
+				},
+			}
+		: {
+				kind: 'availability_slots_refresh',
+				command: {
+					serviceId: rawBody.serviceId,
+					serviceName,
+					date: date as string,
+					adapterProfile: adapterProfile(),
+				},
+			};
+
+	const record = await bridgeAsyncStore.enqueueJob(job, { idempotencyKey });
+
+	logRequestEvent('INFO', 'Availability refresh job enqueued', context, {
+		event: 'availability_refresh_enqueued',
+		operationId: record.operationId,
+		status: record.status,
+		kind: record.kind,
+		serviceId: rawBody.serviceId,
+	});
+
+	return sendAccepted(res, toEnqueueResponse(record));
+};
+
+const handleGetAsyncJob = async (operationId: string, res: ServerResponse) => {
+	const record = await bridgeAsyncStore.getJob(operationId);
+	if (!record) {
+		return sendJson(res, 404, {
+			success: false,
+			error: { tag: 'InfrastructureError', code: 'NOT_FOUND', message: `Job ${operationId} not found` },
+		});
+	}
+	return sendSuccess(res, record);
+};
+
+const handleGetAvailabilitySnapshot = async (
+	url: URL,
+	res: ServerResponse,
+) => {
+	const kind = url.searchParams.get('kind');
+	const serviceId = url.searchParams.get('serviceId');
+	const scope = url.searchParams.get('scope');
+	if (kind !== 'dates' && kind !== 'slots') {
+		return sendValidationError(res, 'kind', 'kind must be "dates" or "slots"');
+	}
+	if (!serviceId) {
+		return sendValidationError(res, 'serviceId', 'serviceId is required');
+	}
+	if (!scope) {
+		return sendValidationError(res, 'scope', 'scope is required');
+	}
+	const snapshot = await bridgeAsyncStore.getAvailabilitySnapshot({
+		kind,
+		serviceId,
+		scope,
+		baseUrl: ACUITY_BASE_URL,
+	});
+	if (!snapshot) {
+		return sendJson(res, 404, {
+			success: false,
+			error: {
+				tag: 'InfrastructureError',
+				code: 'NOT_FOUND',
+				message: `No ${kind} snapshot found for ${serviceId}/${scope}`,
+			},
+		});
+	}
+	return sendSuccess(res, snapshot);
 };
 
 // =============================================================================
@@ -1042,11 +1290,28 @@ const server = createServer(async (req, res) => {
 		if (path === '/availability/check' && method === 'POST') {
 			return await handleCheckSlot(req, res, context);
 		}
+		if (path === '/availability/refresh' && method === 'POST') {
+			return await handleEnqueueAvailabilityRefresh(req, res, context);
+		}
+		if (path === '/availability/snapshot' && method === 'GET') {
+			return await handleGetAvailabilitySnapshot(url, res);
+		}
+		if (path.startsWith('/jobs/') && method === 'GET') {
+			const operationId = decodeURIComponent(path.slice('/jobs/'.length));
+			return await handleGetAsyncJob(operationId, res);
+		}
 		if (path === '/booking/create' && method === 'POST') {
 			return await handleCreateBooking(req, res, context);
 		}
 		if (path === '/booking/create-with-payment' && method === 'POST') {
-			return await handleCreateBookingWithPayment(req, res, context);
+			return handleDeprecatedSyncPaymentBooking(res);
+		}
+		if (path === '/booking/jobs' && method === 'POST') {
+			return await handleEnqueueBookingJob(req, res, context);
+		}
+		if (path.startsWith('/booking/jobs/') && method === 'GET') {
+			const operationId = decodeURIComponent(path.slice('/booking/jobs/'.length));
+			return await handleGetAsyncJob(operationId, res);
 		}
 
 		logRequestEvent('WARN', 'Unknown route requested', context, {
@@ -1090,8 +1355,15 @@ const disposeRedisClient = () => {
 	void redisClient.quit().catch(() => undefined);
 };
 
+const disposeBridgeAsyncStore = () => {
+	if (!closeBridgeAsyncStore) return;
+	void closeBridgeAsyncStore().catch(() => undefined);
+	closeBridgeAsyncStore = null;
+};
+
 server.on('close', disposeBrowserRuntime);
 server.on('close', disposeRedisClient);
+server.on('close', disposeBridgeAsyncStore);
 
 // Only start listening when this file is executed directly (not imported)
 if (process.argv[1]?.match(/handler\.(ts|js|mjs)$/)) {

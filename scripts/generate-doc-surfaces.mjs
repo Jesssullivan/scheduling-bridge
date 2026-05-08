@@ -186,7 +186,7 @@ This page is generated from \`package.json\`, \`MODULE.bazel\`, \`BUILD.bazel\`,
 
 - provider-agnostic contract: Node HTTP server plus \`/health\` tuple
 - accepted next-production provider: K8s/container runtime from infrastructure
-- fallback/proofing provider: Modal, until remaining live traffic moves
+- legacy proofing provider: Modal, automatic deploys disabled during TIN-981
 - forward consumer env names: \`SCHEDULING_BRIDGE_URL\` and
   \`SCHEDULING_BRIDGE_AUTH_TOKEN\`
 
@@ -230,7 +230,7 @@ const llms = [
   `- runtime start command is \`${pkg.scripts.start}\``,
   '- provider-agnostic runtime contract is the Node HTTP server plus `/health` tuple',
   '- K8s/container execution is the accepted next-production provider from infrastructure',
-  '- Modal remains fallback/proofing context until remaining live traffic moves',
+  '- Modal is legacy proofing context with automatic deploys disabled during TIN-981',
   '- consumer apps should use `SCHEDULING_BRIDGE_URL` and `SCHEDULING_BRIDGE_AUTH_TOKEN`',
   '',
   'Toolchains:',

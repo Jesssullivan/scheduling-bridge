@@ -7,8 +7,8 @@ The release path is artifact-first.
 3. Build the package with `bazel build //:pkg`.
 4. Use `pnpm build` when local `pkg/` and `dist/` materialization is needed.
 5. Publish from `./bazel-bin/pkg`.
-6. Deploy Modal, Docker, and K8s/container runtimes from the same materialized
-   package surface.
+6. Deploy Docker and K8s/container runtimes from the same materialized package
+   surface.
 
 ## Commands
 
@@ -44,7 +44,6 @@ Bridge-owned runtime and artifact authority remains Node 24:
 - Bazel Node toolchain
 - Nix development shell
 - Docker runtime image
-- Modal runtime image
 - K8s/container runtime image
 - npm/GitHub Packages publish runner
 
@@ -54,11 +53,11 @@ runtime image, and package CI must prove both supported consumer majors.
 ## Runtime Provider Policy
 
 K8s/container execution is the accepted next-production bridge route. Modal
-remains legacy proofing/fallback context, and may still serve stable live
-consumer traffic until that traffic is deliberately moved. Every provider must
-consume the same materialized package and launch the same
-`dist/server/handler.js` entrypoint. Provider-specific deployment mechanics
-must not fork the bridge protocol or package artifact.
+is legacy proofing context with automatic deploys disabled and manual dispatch
+guarded by explicit acknowledgement. Every provider must consume the same
+materialized package and launch the same `dist/server/handler.js` entrypoint.
+Provider-specific deployment mechanics must not fork the bridge protocol or
+package artifact.
 
 ## Bazel Cache Contract
 
@@ -84,8 +83,8 @@ Before cutting a bridge release, verify these surfaces together:
 - GitHub Packages package: `@jesssullivan/scheduling-bridge`
 - tag and GitHub release for the package version
 - Bazel package artifact from `./bazel-bin/pkg`
-- Docker, K8s/container, and Modal fallback runtime images built from the
-  materialized `pkg/` surface
+- Docker and K8s/container runtime images built from the materialized `pkg/`
+  surface
 - `/health` release tuple for the deployed bridge
 
 The shared `js-bazel-package` workflow owns npm provenance when running on

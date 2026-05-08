@@ -41,8 +41,12 @@ HTTP Request
 | POST | `/availability/dates` | Available dates for a service |
 | POST | `/availability/slots` | Time slots for a specific date |
 | POST | `/availability/check` | Check if a slot is available |
+| POST | `/availability/refresh` | Enqueue async availability refresh |
+| GET | `/availability/snapshot` | Read latest durable availability snapshot |
 | POST | `/booking/create` | Create a booking (standard) |
-| POST | `/booking/create-with-payment` | Create booking with payment bypass (coupon) |
+| POST | `/booking/create-with-payment` | Deprecated sync paid booking endpoint; returns `410 ASYNC_REQUIRED` |
+| POST | `/booking/jobs` | Enqueue async paid booking job |
+| GET | `/jobs/:operationId` | Read async job status |
 
 ### Health Contract
 
@@ -77,7 +81,12 @@ dashboard state when `/health` is available.
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `PORT` | No | `3001` | Server port |
-| `ACUITY_BASE_URL` | No | `https://MassageIthaca.as.me` | Acuity scheduling page URL |
+| `ACUITY_BASE_URL` | No | `https://example.as.me` | Acuity scheduling page URL |
+| `BRIDGE_DATABASE_URL` | For async K8s runtime | -- | Postgres queue/snapshot store for async jobs |
+| `BRIDGE_DATABASE_SSL` | No | `false` | Enable SSL for `BRIDGE_DATABASE_URL` |
+| `BRIDGE_DATABASE_MIGRATE` | No | `true` | Run async queue/snapshot schema creation at startup |
+| `BRIDGE_WORKER_POLL_MS` | No | `1000` | Worker queue poll interval |
+| `BRIDGE_WORKER_BATCH_SIZE` | No | `5` | Maximum jobs drained per worker poll |
 | `AUTH_TOKEN` | Recommended | -- | Bearer token for all endpoints (except /health) |
 | `ACUITY_BYPASS_COUPON` | For payment bypass | -- | 100% gift certificate code |
 | `PLAYWRIGHT_HEADLESS` | No | `true` | Run browser headless |
@@ -115,8 +124,9 @@ contract.
 
 - Accepted next-production route: K8s/container runtime managed from
   infrastructure.
-- Current fallback/proofing provider: Modal, retained until remaining stable
-  consumer traffic is deliberately moved.
+- Legacy proofing provider: Modal. Automatic Modal deploys are disabled; the
+  manual workflow is retained only for deliberate decommissioning or
+  forensic fallback while TIN-981 closes the surface.
 - Compatibility target: Docker image with the same `dist/server/handler.js`
   entrypoint.
 - Consumer apps should configure the remote bridge with
@@ -128,9 +138,9 @@ contract.
 The npm package supports active downstream consumer runtimes on Node 22 and
 Node 24. CI validates the host test suite on both majors.
 
-The bridge-owned Bazel toolchain, Nix dev shell, Docker image, Modal image, and
-publish workflow intentionally stay on Node 24. Downstream apps should not infer
-that they must also run Node 24 unless they deploy the bridge runtime itself.
+The bridge-owned Bazel toolchain, Nix dev shell, Docker/K8s image, and publish
+workflow intentionally stay on Node 24. Downstream apps should not infer that
+they must also run Node 24 unless they deploy the bridge runtime itself.
 
 ### Standalone Node.js
 
@@ -152,29 +162,29 @@ docker run -p 3001:3001 \
   scheduling-bridge
 ```
 
-### Modal Labs
+### Legacy Modal Labs
 
 ```bash
-# Set secrets in Modal dashboard first:
-#   AUTH_TOKEN, ACUITY_BASE_URL, ACUITY_BYPASS_COUPON
+# Automatic Modal deploys are disabled. The manual workflow requires an
+# explicit legacy-modal acknowledgement and should only be used for
+# decommissioning or forensic fallback while TIN-981 is open.
 # The Modal workflow materializes the Bazel-derived pkg/ before deploy.
 modal deploy modal-app.py
 ```
 
 #### Supported fallback deployment path
 
-The Modal deployment path remains available for fallback/proofing traffic:
+The Modal deployment path is legacy-only:
 
-1. merge to `main`
-2. let `.github/workflows/deploy-modal.yml` deploy `modal-app.py`
+1. manually dispatch `.github/workflows/deploy-modal.yml`
+2. type `legacy-modal` in `acknowledge_legacy_modal`
 3. inject `MIDDLEWARE_RELEASE_SHA`, `MIDDLEWARE_RELEASE_REF`,
    `MIDDLEWARE_RELEASE_VERSION`, and `MIDDLEWARE_RELEASE_BUILT_AT`
 4. verify the resulting bridge tuple via `GET /health`
 
 Operationally, this means:
 
-- Modal deployment can be part of release truth when it is the selected
-  provider, not a side channel
+- Modal deployment is not automatic release truth
 - the live bridge should be identified by the `/health` release + protocol tuple
 - downstream apps should validate the tuple they expect before making rollout claims
 
@@ -202,10 +212,9 @@ The current publish + deploy shape is:
 2. Bazel validates/builds the publishable artifact
 3. CI dry-runs the extracted Bazel package surface before release
 4. GitHub Actions publishes that extracted artifact
-5. GitHub Actions can deploy the Modal fallback runtime from `main`
-6. infrastructure can deploy the K8s/container runtime from the same package
+5. infrastructure can deploy the K8s/container runtime from the same package
    artifact and image entrypoint
-7. downstream apps consume the published package and verify the live runtime
+6. downstream apps consume the published package and verify the live runtime
    tuple via `/health`
 
 This repo is the sole owner of Acuity automation concerns. App repos and shared

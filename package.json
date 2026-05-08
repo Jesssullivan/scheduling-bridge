@@ -1,6 +1,6 @@
 {
   "name": "@tummycrypt/scheduling-bridge",
-  "version": "0.4.10",
+  "version": "0.5.0",
   "description": "Backend-agnostic scheduling adapter hub with Playwright automation",
   "type": "module",
   "packageManager": "pnpm@9.15.9",
@@ -53,11 +53,13 @@
     "@tummycrypt/scheduling-kit": "^0.7.7",
     "effect": "^3.19.14",
     "ioredis": "^5",
+    "pg": "8.20.0",
     "playwright-core": "1.58.1",
     "prom-client": "^15"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/pg": "8.11.6",
     "ioredis-mock": "^8.13.1",
     "publint": "^0.3.18",
     "tsx": "^4.0.0",
