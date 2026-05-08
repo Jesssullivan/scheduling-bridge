@@ -25,7 +25,7 @@ The key insight is that browser automation middleware is not the destination -- 
 
 This paper makes five contributions:
 
-1. A formal 17-method `SchedulingAdapter` interface that abstracts scheduling operations (services, providers, availability, reservations, bookings, clients) across heterogeneous backends, with all methods returning monadic `Effect<T, SchedulingError>` for composable error handling.
+1. A formal 17-method `SchedulingAdapter` interface that abstracts scheduling operations (services, providers, availability, advisory soft holds, bookings, clients) across heterogeneous backends, with all methods returning monadic `Effect<T, SchedulingError>` for composable error handling.
 
 2. An adapter hub architecture (`scheduling-bridge`) that separates the interface definition from vendor-specific implementations, enabling multiple SaaS backends to be wrapped as discrete packages -- a reusable FOSS offramp pattern for small businesses escaping proprietary scheduling services.
 
@@ -55,7 +55,7 @@ Fowler [4] describes the strangler fig pattern as a metaphor for incremental sys
 
 ### D. Anti-Corruption Layer
 
-Evans [10] defines the Anti-Corruption Layer as a pattern for isolating a bounded context from the domain model of an external system. The `SchedulingAdapter` interface serves this role: it prevents Acuity's domain concepts (appointment type IDs, React wizard steps, Square payment integration) from leaking into the homegrown domain model (UUID-based services, slot reservations, Stripe/Venmo payments). The dual-ID resolution pattern in the homegrown adapter -- accepting both UUID and legacy `acuityId` -- is an explicit corruption-containment mechanism.
+Evans [10] defines the Anti-Corruption Layer as a pattern for isolating a bounded context from the domain model of an external system. The `SchedulingAdapter` interface serves this role: it prevents Acuity's domain concepts (appointment type IDs, React wizard steps, Square payment integration) from leaking into the homegrown domain model (UUID-based services, advisory soft holds, Stripe/Venmo payments). The dual-ID resolution pattern in the homegrown adapter -- accepting both UUID and legacy `acuityId` -- is an explicit corruption-containment mechanism.
 
 ### E. Robotic Process Automation
 
@@ -134,9 +134,9 @@ interface SchedulingAdapter {
   getAvailableDates(p: DateParams): SchedulingResult<AvailableDate[]>;
   getAvailableSlots(p: SlotParams): SchedulingResult<TimeSlot[]>;
   checkSlotAvailability(p: CheckParams): SchedulingResult<boolean>;
-  // Reservations (2)
-  createReservation(p: ReserveParams): SchedulingResult<SlotReservation>;
-  releaseReservation(id: string): SchedulingResult<void>;
+  // Advisory soft holds (2)
+  softHoldSlot(p: SoftHoldParams): SchedulingResult<SlotSoftHold>;
+  releaseSoftHold(id: string): SchedulingResult<void>;
   // Bookings (5)
   createBooking(req: BookingRequest): SchedulingResult<Booking>;
   createBookingWithPaymentRef(req, ref, proc): SchedulingResult<Booking>;
@@ -249,11 +249,11 @@ The `HomegrownAdapter` implements all 17 `SchedulingAdapter` methods via direct 
 - **Lazy database connection**: The adapter receives a `getDb` factory function, called per-operation. This avoids import-time connections critical for Vercel cold starts.
 - **Lazy schema imports**: Drizzle schema tables are dynamically imported inside each method, preventing the ORM runtime from being bundled into client-side code.
 - **Dual-ID resolution**: `resolveService` accepts both UUID (homegrown) and integer `acuityId` (legacy) via UUID format detection, enabling backward compatibility during migration.
-- **Real slot reservations**: PG-persisted with `expires_at`, unlike the wizard adapter which cannot support reservations through the public UI.
+- **Advisory soft holds**: PG-persisted with `expires_at`, unlike the wizard adapter which cannot support advisory soft holds through the public UI. Correctness still comes from the final booking write plus backend rejection, not from treating a hold as a reservation.
 
 ### F. Availability Engine
 
-The availability engine is a pure-function module with zero database dependency. All data is passed as arguments. The core algorithm generates candidate slots at configurable intervals within business hours, filters out those overlapping with occupied blocks (bookings + time blocks + active reservations), applies buffer time and minimum advance notice constraints. DST safety is achieved via `Intl.DateTimeFormat` with named timezones -- no manual offset tables. The module has 39 dedicated unit tests.
+The availability engine is a pure-function module with zero database dependency. All data is passed as arguments. The core algorithm generates candidate slots at configurable intervals within business hours, filters out those overlapping with occupied blocks (bookings + time blocks + active soft holds), applies buffer time and minimum advance notice constraints. DST safety is achieved via `Intl.DateTimeFormat` with named timezones -- no manual offset tables. The module has 39 dedicated unit tests.
 
 ---
 
@@ -302,12 +302,12 @@ The browser middleware latency is acceptable only as a migration bridge. The two
 | Services | 2 | 2/2 | 2/2 |
 | Providers | 3 | 3/3 (hardcoded) | 3/3 |
 | Availability | 3 | 3/3 | 3/3 |
-| Reservations | 2 | 0/2 (graceful fail) | 2/2 |
+| Advisory soft holds | 2 | 0/2 (graceful fail) | 2/2 |
 | Bookings | 5 | 2/5 | 5/5 |
 | Clients | 2 | 2/2 (pass-through) | 2/2 |
 | **Total** | **17** | **12/17** | **17/17** |
 
-The wizard adapter's incomplete coverage (no `getBooking`, `cancelBooking`, `rescheduleBooking`, slot reservations) reflects the limitations of the public booking UI -- these operations require admin panel access. The homegrown adapter's full coverage demonstrates feature parity.
+The wizard adapter's incomplete coverage (no `getBooking`, `cancelBooking`, `rescheduleBooking`, advisory soft holds) reflects the limitations of the public booking UI -- these operations require admin panel access. The homegrown adapter's full coverage demonstrates feature parity.
 
 ---
 

@@ -28,7 +28,7 @@ import type {
 	Provider,
 	TimeSlot,
 	AvailableDate,
-	SlotReservation,
+	SlotSoftHold,
 	ClientInfo,
 	SchedulingError,
 	SchedulingResult,
@@ -257,13 +257,18 @@ export const createRemoteWizardAdapter = (config: RemoteAdapterConfig): Scheduli
 	},
 
 	// ---------------------------------------------------------------------------
-	// Reservation - not supported (pipeline has graceful fallback)
+	// Advisory soft hold - not supported (pipeline has graceful fallback)
 	// ---------------------------------------------------------------------------
 
-	createReservation: () =>
-		Effect.fail(Errors.reservation('BLOCK_FAILED', 'Reservations not supported by remote wizard adapter')),
+	softHoldSlot: () =>
+		Effect.fail(
+			Errors.reservation(
+				'BLOCK_FAILED',
+				'Advisory soft holds are not supported by remote wizard adapter',
+			),
+		),
 
-	releaseReservation: () => Effect.succeed(undefined),
+	releaseSoftHold: () => Effect.succeed(undefined),
 
 	// ---------------------------------------------------------------------------
 	// Write operations - proxied to remote wizard
