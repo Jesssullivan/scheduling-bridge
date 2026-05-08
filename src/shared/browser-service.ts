@@ -44,7 +44,7 @@ const positiveIntEnv = (name: string, fallback: number): number => {
 };
 
 export const defaultBrowserConfig: BrowserConfig = {
-	baseUrl: 'https://MassageIthaca.as.me',
+	baseUrl: 'https://example.as.me',
 	headless: true,
 	timeout: 30000,
 	userAgent:

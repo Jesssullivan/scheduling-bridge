@@ -1,4 +1,4 @@
-export const BRIDGE_PROTOCOL_VERSION = '1.0.0' as const;
+export const BRIDGE_PROTOCOL_VERSION = '1.1.0' as const;
 
 export const BRIDGE_PROTOCOL_ENDPOINTS = {
 	health: '/health',
@@ -7,8 +7,12 @@ export const BRIDGE_PROTOCOL_ENDPOINTS = {
 	availabilityDates: '/availability/dates',
 	availabilitySlots: '/availability/slots',
 	availabilityCheck: '/availability/check',
+	availabilityRefresh: '/availability/refresh',
+	availabilitySnapshot: '/availability/snapshot',
 	bookingCreate: '/booking/create',
 	bookingCreateWithPayment: '/booking/create-with-payment',
+	bookingJobs: '/booking/jobs',
+	jobStatus: '/jobs/:operationId',
 } as const;
 
 export const BRIDGE_PROTOCOL_CAPABILITIES = [
@@ -17,8 +21,12 @@ export const BRIDGE_PROTOCOL_CAPABILITIES = [
 	'availability:dates',
 	'availability:slots',
 	'availability:check',
+	'availability:refresh-async',
+	'availability:snapshot',
 	'booking:create',
-	'booking:create-with-payment',
+	'booking:create-with-payment:deprecated',
+	'booking:create-with-payment-async',
+	'booking:job-status',
 	'service-catalog:static-fallback',
 	'service-catalog:business-extract',
 	'service-catalog:scraper-fallback',

@@ -98,6 +98,7 @@ ts_project(
     name = "server",
     srcs = [
         "src/server/handler.ts",
+        "src/server/worker.ts",
         "src/server.ts",
     ],
     declaration = True,
@@ -110,6 +111,8 @@ ts_project(
         ":shared",
         ":node_modules",
         ":node_modules/effect",
+        ":node_modules/pg",
+        ":node_modules/@types/pg",
         ":node_modules/@tummycrypt/scheduling-kit",
     ],
     visibility = ["//visibility:public"],
@@ -138,6 +141,8 @@ ts_project(
         ":node_modules",
         ":node_modules/effect",
         ":node_modules/playwright-core",
+        ":node_modules/pg",
+        ":node_modules/@types/pg",
         ":node_modules/@tummycrypt/scheduling-kit",
     ],
     visibility = ["//visibility:public"],
@@ -157,7 +162,7 @@ npm_package(
     ],
     package = "@tummycrypt/scheduling-bridge",
     tags = ["manual"],
-    version = "0.4.10",
+    version = "0.5.0",
     visibility = ["//visibility:public"],
 )
 
@@ -206,6 +211,8 @@ ts_project(
         ":node_modules",
         ":node_modules/effect",
         ":node_modules/playwright-core",
+        ":node_modules/pg",
+        ":node_modules/@types/pg",
         ":node_modules/@tummycrypt/scheduling-kit",
     ],
     visibility = ["//visibility:public"],

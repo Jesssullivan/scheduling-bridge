@@ -22,8 +22,9 @@ protocol endpoints and `/health` tuple.
 
 - K8s/container execution is the accepted next-production bridge route and is
   the current MassageIthaca K8s shadow runtime.
-- Modal remains legacy proofing/fallback context, and may still serve stable
-  live consumer traffic until that traffic is deliberately moved.
+- Modal is legacy proofing context. Automatic Modal deploys are disabled; the
+  manual workflow requires explicit acknowledgement while TIN-981 closes the
+  surface.
 - Provider state, tailnet exposure, and public-edge routing are managed by the
   infrastructure repo.
 - Docker is the local/container compatibility target and must mirror the same
