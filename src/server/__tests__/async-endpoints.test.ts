@@ -25,7 +25,8 @@ const bookingRequest = {
 };
 
 const listen = async (store = createInMemoryBridgeAsyncStore()) => {
-	const { server, __setBridgeAsyncStoreForTest, __setEffectRunnerForTest } = await import('../handler.js');
+	const { server, __setBridgeAsyncStoreForTest, __setEffectRunnerForTest } =
+		await import('../handler.js');
 	__setBridgeAsyncStoreForTest(store);
 	await new Promise<void>((resolve) => {
 		server.listen(0, '127.0.0.1', resolve);
@@ -92,7 +93,9 @@ describe('bridge async protocol endpoints', () => {
 		});
 
 		const operationId = body.data.operationId as string;
-		const statusResponse = await fetch(`${running.baseUrl}/jobs/${operationId}`);
+		const statusResponse = await fetch(
+			`${running.baseUrl}/jobs/${operationId}`,
+		);
 		const statusBody = await statusResponse.json();
 
 		expect(statusResponse.status).toBe(200);
@@ -318,13 +321,16 @@ describe('bridge async protocol endpoints', () => {
 		const running = await listen();
 		activeServer = running.server;
 
-		const response = await fetch(`${running.baseUrl}/internal/availability/heartbeat`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({
-				demands: [{ serviceId: service.id, months: ['2026-06'] }],
-			}),
-		});
+		const response = await fetch(
+			`${running.baseUrl}/internal/availability/heartbeat`,
+			{
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					demands: [{ serviceId: service.id, months: ['2026-06'] }],
+				}),
+			},
+		);
 		const body = await response.json();
 
 		expect(response.status).toBe(404);
@@ -334,6 +340,227 @@ describe('bridge async protocol endpoints', () => {
 				code: 'NOT_FOUND',
 			},
 		});
+	});
+
+	it('hides internal availability readiness unless bridge auth is configured', async () => {
+		const running = await listen();
+		activeServer = running.server;
+
+		for (const path of [
+			'/internal/availability/readiness',
+			'/internal/availability/wait-ready',
+		]) {
+			const response = await fetch(`${running.baseUrl}${path}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					demands: [{ serviceId: service.id, months: ['2026-06'] }],
+				}),
+			});
+			const body = await response.json();
+
+			expect(response.status).toBe(404);
+			expect(body).toMatchObject({
+				success: false,
+				error: {
+					code: 'NOT_FOUND',
+				},
+			});
+		}
+	});
+
+	it('reports availability readiness without mutating the queue', async () => {
+		process.env.AUTH_TOKEN = 'readiness-token';
+		const store = createInMemoryBridgeAsyncStore();
+		await store.upsertAvailabilitySnapshot({
+			kind: 'dates',
+			serviceId: service.id,
+			scope: '2026-06',
+			adapterProfile: {
+				backend: 'acuity',
+				baseUrl: 'https://example.as.me',
+			},
+			value: [{ date: '2026-06-15' }],
+			observedAt: '2999-01-01T00:00:00.000Z',
+			staleAt: '2999-01-01T00:05:00.000Z',
+			expiresAt: '2999-01-01T00:30:00.000Z',
+		});
+		await store.upsertAvailabilitySnapshot({
+			kind: 'slots',
+			serviceId: service.id,
+			scope: '2026-06-15',
+			adapterProfile: {
+				backend: 'acuity',
+				baseUrl: 'https://example.as.me',
+			},
+			value: [{ time: '4:00 PM', datetime: '2026-06-15T16:00:00-04:00' }],
+			observedAt: '2999-01-01T00:00:00.000Z',
+			staleAt: '2999-01-01T00:05:00.000Z',
+			expiresAt: '2999-01-01T00:30:00.000Z',
+		});
+		const running = await listen(store);
+		activeServer = running.server;
+
+		const response = await fetch(
+			`${running.baseUrl}/internal/availability/readiness`,
+			{
+				method: 'POST',
+				headers: {
+					Authorization: 'Bearer readiness-token',
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({
+					demands: [
+						{
+							serviceId: service.id,
+							serviceName: service.name,
+							weight: 10,
+							months: ['2026-06'],
+							dates: ['2026-06-15'],
+						},
+					],
+				}),
+			},
+		);
+		const body = await response.json();
+
+		expect(response.status).toBe(200);
+		expect(body).toMatchObject({
+			success: true,
+			data: {
+				layer: 'bridge_availability_readiness',
+				ready: true,
+				considered: 2,
+				policy: {
+					snapshotFreshnessFloorMs: 90_000,
+					maxOldestQueuedAgeMs: 120_000,
+				},
+				scopes: [
+					expect.objectContaining({
+						kind: 'dates',
+						serviceId: service.id,
+						scope: '2026-06',
+						freshness: 'fresh',
+						ready: true,
+						valueCount: 1,
+					}),
+					expect.objectContaining({
+						kind: 'slots',
+						serviceId: service.id,
+						scope: '2026-06-15',
+						freshness: 'fresh',
+						ready: true,
+						valueCount: 1,
+					}),
+				],
+				queue: {
+					total: 0,
+					ready: 0,
+					retryableFailed: 0,
+				},
+				blockers: [],
+			},
+		});
+		await expect(store.listReadyJobs(10)).resolves.toEqual([]);
+	});
+
+	it('marks missing readiness scopes as not ready and leaves heartbeat to wait-ready', async () => {
+		process.env.AUTH_TOKEN = 'readiness-token';
+		const store = createInMemoryBridgeAsyncStore();
+		const running = await listen(store);
+		activeServer = running.server;
+		const payload = {
+			demands: [
+				{
+					serviceId: service.id,
+					serviceName: service.name,
+					months: ['2026-06'],
+					dates: ['2026-06-15'],
+				},
+			],
+		};
+
+		const readinessResponse = await fetch(
+			`${running.baseUrl}/internal/availability/readiness`,
+			{
+				method: 'POST',
+				headers: {
+					Authorization: 'Bearer readiness-token',
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify(payload),
+			},
+		);
+		const readiness = await readinessResponse.json();
+
+		expect(readinessResponse.status).toBe(409);
+		expect(readiness.data).toMatchObject({
+			ready: false,
+			scopes: [
+				expect.objectContaining({
+					kind: 'dates',
+					freshness: 'missing',
+					ready: false,
+				}),
+				expect.objectContaining({
+					kind: 'slots',
+					freshness: 'missing',
+					ready: false,
+				}),
+			],
+			blockers: expect.arrayContaining([
+				`dates:${service.id}:2026-06:missing`,
+				`slots:${service.id}:2026-06-15:missing`,
+			]),
+		});
+		await expect(store.listReadyJobs(10)).resolves.toEqual([]);
+
+		const waitResponse = await fetch(
+			`${running.baseUrl}/internal/availability/wait-ready`,
+			{
+				method: 'POST',
+				headers: {
+					Authorization: 'Bearer readiness-token',
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({
+					...payload,
+					timeoutMs: 1,
+					pollMs: 1,
+					idempotencyKeyPrefix: 'test-wait-ready',
+				}),
+			},
+		);
+		const waitBody = await waitResponse.json();
+
+		expect(waitResponse.status).toBe(409);
+		expect(waitBody).toMatchObject({
+			success: true,
+			data: {
+				layer: 'bridge_availability_wait_ready',
+				ready: false,
+				timedOut: true,
+				heartbeat: {
+					layer: 'bridge_availability_heartbeat',
+					enqueued: [
+						expect.objectContaining({
+							kind: 'dates',
+							scope: '2026-06',
+							freshness: 'missing',
+						}),
+						expect.objectContaining({
+							kind: 'slots',
+							scope: '2026-06-15',
+							freshness: 'missing',
+						}),
+					],
+				},
+				readiness: {
+					ready: false,
+				},
+			},
+		});
+		await expect(store.listReadyJobs(10)).resolves.toHaveLength(2);
 	});
 
 	it('auth-gates the internal snapshot canary and records durable snapshot layer metrics', async () => {
@@ -365,19 +592,28 @@ describe('bridge async protocol endpoints', () => {
 			return (
 				snap?.values.find((v) => {
 					if (v.metricName !== countName) return false;
-					return Object.entries(labels).every(([key, value]) => v.labels[key] === value);
+					return Object.entries(labels).every(
+						([key, value]) => v.labels[key] === value,
+					);
 				})?.value ?? 0
 			);
 		};
 		const snapshotServedCount = async (): Promise<number> => {
 			const snap = await metrics.availabilitySnapshotServedTotal.get();
-			return snap.values.find((v) => v.labels.kind === 'slots' && v.labels.freshness === 'stale')?.value ?? 0;
+			return (
+				snap.values.find(
+					(v) => v.labels.kind === 'slots' && v.labels.freshness === 'stale',
+				)?.value ?? 0
+			);
 		};
-		const durationBefore = await metricCount('acuity_availability_snapshot_read_duration_seconds', {
-			kind: 'slots',
-			freshness: 'stale',
-			outcome: 'hit',
-		});
+		const durationBefore = await metricCount(
+			'acuity_availability_snapshot_read_duration_seconds',
+			{
+				kind: 'slots',
+				freshness: 'stale',
+				outcome: 'hit',
+			},
+		);
 		const servedBefore = await snapshotServedCount();
 		const url = `${running.baseUrl}/internal/availability/snapshot-canary?kind=slots&serviceId=${service.id}&scope=2026-06-15`;
 
@@ -541,11 +777,15 @@ describe('bridge async protocol endpoints', () => {
 			expect.arrayContaining([
 				expect.objectContaining({
 					kind: 'availability_dates_refresh',
-					idempotencyKey: expect.stringContaining('test-heartbeat:https://example.as.me:dates:53178494:2026-07:'),
+					idempotencyKey: expect.stringContaining(
+						'test-heartbeat:https://example.as.me:dates:53178494:2026-07:',
+					),
 				}),
 				expect.objectContaining({
 					kind: 'availability_slots_refresh',
-					idempotencyKey: expect.stringContaining('test-heartbeat:https://example.as.me:slots:53178494:2026-06-15:'),
+					idempotencyKey: expect.stringContaining(
+						'test-heartbeat:https://example.as.me:slots:53178494:2026-06-15:',
+					),
 				}),
 			]),
 		);
@@ -561,8 +801,14 @@ describe('bridge async protocol endpoints', () => {
 		const second = await secondResponse.json();
 
 		expect(secondResponse.status).toBe(202);
-		expect(second.data.enqueued.map((job: { operationId: string }) => job.operationId)).toEqual(
-			first.data.enqueued.map((job: { operationId: string }) => job.operationId),
+		expect(
+			second.data.enqueued.map(
+				(job: { operationId: string }) => job.operationId,
+			),
+		).toEqual(
+			first.data.enqueued.map(
+				(job: { operationId: string }) => job.operationId,
+			),
 		);
 		await expect(store.listReadyJobs(10)).resolves.toHaveLength(2);
 	});
@@ -726,20 +972,36 @@ describe('bridge async protocol endpoints', () => {
 		]);
 		expect(body.data.skipped).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ serviceId: 'svc-b', scope: '2026-07', reason: 'limit' }),
-				expect.objectContaining({ serviceId: 'svc-c', scope: '2026-07', reason: 'limit' }),
-				expect.objectContaining({ serviceId: 'svc-a', scope: '2026-08', reason: 'limit' }),
+				expect.objectContaining({
+					serviceId: 'svc-b',
+					scope: '2026-07',
+					reason: 'limit',
+				}),
+				expect.objectContaining({
+					serviceId: 'svc-c',
+					scope: '2026-07',
+					reason: 'limit',
+				}),
+				expect.objectContaining({
+					serviceId: 'svc-a',
+					scope: '2026-08',
+					reason: 'limit',
+				}),
 			]),
 		);
 		await expect(store.listReadyJobs(10)).resolves.toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					kind: 'availability_dates_refresh',
-					idempotencyKey: expect.stringContaining('test-heartbeat-fairness:https://example.as.me:dates:svc-b:2026-06:'),
+					idempotencyKey: expect.stringContaining(
+						'test-heartbeat-fairness:https://example.as.me:dates:svc-b:2026-06:',
+					),
 				}),
 				expect.objectContaining({
 					kind: 'availability_dates_refresh',
-					idempotencyKey: expect.stringContaining('test-heartbeat-fairness:https://example.as.me:dates:svc-c:2026-06:'),
+					idempotencyKey: expect.stringContaining(
+						'test-heartbeat-fairness:https://example.as.me:dates:svc-c:2026-06:',
+					),
 				}),
 			]),
 		);

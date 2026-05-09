@@ -1,4 +1,4 @@
-export const BRIDGE_PROTOCOL_VERSION = '1.1.0' as const;
+export const BRIDGE_PROTOCOL_VERSION = '1.2.0' as const;
 
 export const BRIDGE_PROTOCOL_ENDPOINTS = {
 	health: '/health',
@@ -10,6 +10,8 @@ export const BRIDGE_PROTOCOL_ENDPOINTS = {
 	availabilityRefresh: '/availability/refresh',
 	availabilitySnapshot: '/availability/snapshot',
 	availabilityHeartbeat: '/internal/availability/heartbeat',
+	availabilityReadiness: '/internal/availability/readiness',
+	availabilityWaitReady: '/internal/availability/wait-ready',
 	bookingCreate: '/booking/create',
 	bookingCreateWithPayment: '/booking/create-with-payment',
 	bookingJobs: '/booking/jobs',
@@ -25,6 +27,8 @@ export const BRIDGE_PROTOCOL_CAPABILITIES = [
 	'availability:refresh-async',
 	'availability:snapshot',
 	'availability:heartbeat-internal',
+	'availability:readiness-internal',
+	'availability:wait-ready-internal',
 	'booking:create',
 	'booking:create-with-payment:deprecated',
 	'booking:create-with-payment-async',

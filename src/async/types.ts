@@ -210,3 +210,71 @@ export interface AvailabilityHeartbeatResponse {
 	readonly maxJobs: number;
 	readonly idempotencyWindowMs: number;
 }
+
+export interface BridgeQueueStatsKindStatus {
+	readonly kind: BridgeJobKind;
+	readonly status: BridgeJobStatus;
+	readonly count: number;
+	readonly oldestAgeMs?: number;
+}
+
+export interface BridgeQueueStats {
+	readonly total: number;
+	readonly ready: number;
+	readonly retryableFailed: number;
+	readonly oldestQueuedAgeMs?: number;
+	readonly byKindStatus: readonly BridgeQueueStatsKindStatus[];
+}
+
+export type AvailabilityReadinessFreshness =
+	| 'fresh'
+	| 'stale'
+	| 'expired'
+	| 'missing';
+
+export interface AvailabilityReadinessScope {
+	readonly kind: AvailabilitySnapshotKind;
+	readonly serviceId: string;
+	readonly serviceName?: string;
+	readonly scope: string;
+	readonly weight: number;
+	readonly freshness: AvailabilityReadinessFreshness;
+	readonly ready: boolean;
+	readonly blockers: readonly string[];
+	readonly ageMs?: number;
+	readonly valueCount?: number;
+	readonly snapshot?: {
+		readonly snapshotId: string;
+		readonly version: number;
+		readonly observedAt: string;
+		readonly staleAt: string;
+		readonly expiresAt: string;
+		readonly sourceJobId?: string;
+	};
+}
+
+export interface AvailabilityReadinessPolicy {
+	readonly snapshotFreshnessFloorMs: number;
+	readonly maxOldestQueuedAgeMs: number;
+}
+
+export interface AvailabilityReadinessResponse {
+	readonly layer: 'bridge_availability_readiness';
+	readonly ready: boolean;
+	readonly checkedAt: string;
+	readonly policy: AvailabilityReadinessPolicy;
+	readonly considered: number;
+	readonly scopes: readonly AvailabilityReadinessScope[];
+	readonly queue: BridgeQueueStats;
+	readonly blockers: readonly string[];
+}
+
+export interface AvailabilityWaitReadyResponse {
+	readonly layer: 'bridge_availability_wait_ready';
+	readonly ready: boolean;
+	readonly timedOut: boolean;
+	readonly elapsedMs: number;
+	readonly attempts: number;
+	readonly heartbeat: AvailabilityHeartbeatResponse;
+	readonly readiness: AvailabilityReadinessResponse;
+}

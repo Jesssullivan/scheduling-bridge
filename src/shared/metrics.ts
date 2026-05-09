@@ -1,5 +1,11 @@
 import { Effect } from 'effect';
-import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
+import {
+	Counter,
+	Gauge,
+	Histogram,
+	Registry,
+	collectDefaultMetrics,
+} from 'prom-client';
 
 /**
  * Prometheus metrics registry for the acuity-middleware bridge.
@@ -121,6 +127,41 @@ const availabilityHeartbeatJobsTotal = new Counter({
 	registers: [registry],
 });
 
+const availabilityReadinessChecksTotal = new Counter({
+	name: 'acuity_availability_readiness_checks_total',
+	help: 'Availability readiness checks by result',
+	labelNames: ['result'],
+	registers: [registry],
+});
+
+const availabilityReadinessScopeTotal = new Counter({
+	name: 'acuity_availability_readiness_scope_total',
+	help: 'Availability readiness scope classifications by snapshot kind and freshness',
+	labelNames: ['kind', 'freshness'],
+	registers: [registry],
+});
+
+const bridgeQueueDepth = new Gauge({
+	name: 'acuity_bridge_queue_depth',
+	help: 'Bridge async queue depth by job kind and status',
+	labelNames: ['kind', 'status'],
+	registers: [registry],
+});
+
+const bridgeQueueOldestAgeSeconds = new Gauge({
+	name: 'acuity_bridge_queue_oldest_age_seconds',
+	help: 'Oldest ready bridge async queue item age by job kind',
+	labelNames: ['kind'],
+	registers: [registry],
+});
+
+const availabilitySnapshotAgeSeconds = new Gauge({
+	name: 'acuity_availability_snapshot_age_seconds',
+	help: 'Age of availability snapshots considered by readiness checks',
+	labelNames: ['kind', 'service_id', 'scope'],
+	registers: [registry],
+});
+
 // ─── Derived cache hit-ratio ─────────────────────────────────────────────────
 //
 // `cacheHitRatio` is a derived gauge — prom-client cannot compute it for us,
@@ -172,27 +213,46 @@ export const _resetCacheHitRatioForTests = (): void => {
 	cacheHitRatio.set(1);
 };
 
-export const recordBridgeReadCacheEvent = (cacheKind: string, event: string): void => {
+export const recordBridgeReadCacheEvent = (
+	cacheKind: string,
+	event: string,
+): void => {
 	bridgeReadCacheEventsTotal.inc({ cache_kind: cacheKind, event });
 };
 
-export const setBrowserPageLimiterState = (active: number, queued: number): void => {
+export const setBrowserPageLimiterState = (
+	active: number,
+	queued: number,
+): void => {
 	browserPageLimiterActive.set(Math.max(0, active));
 	browserPageLimiterQueued.set(Math.max(0, queued));
 };
 
-export const recordBrowserPageAcquire = (outcome: 'success' | 'timeout', waitMs: number): void => {
+export const recordBrowserPageAcquire = (
+	outcome: 'success' | 'timeout',
+	waitMs: number,
+): void => {
 	browserPageAcquireDuration.observe({ outcome }, Math.max(0, waitMs) / 1000);
 	if (outcome === 'timeout') {
 		browserPageAcquireTimeoutsTotal.inc();
 	}
 };
 
-export const recordBridgeReadCacheWait = (cacheKind: string, outcome: 'hit' | 'timeout', waitMs: number): void => {
-	bridgeReadCacheWaitDuration.observe({ cache_kind: cacheKind, outcome }, Math.max(0, waitMs) / 1000);
+export const recordBridgeReadCacheWait = (
+	cacheKind: string,
+	outcome: 'hit' | 'timeout',
+	waitMs: number,
+): void => {
+	bridgeReadCacheWaitDuration.observe(
+		{ cache_kind: cacheKind, outcome },
+		Math.max(0, waitMs) / 1000,
+	);
 };
 
-export const observeBridgeRead = async <A>(cacheKind: string, fn: () => Promise<A>): Promise<A> => {
+export const observeBridgeRead = async <A>(
+	cacheKind: string,
+	fn: () => Promise<A>,
+): Promise<A> => {
 	const end = bridgeReadDuration.startTimer({ cache_kind: cacheKind });
 	try {
 		return await fn();
@@ -201,7 +261,10 @@ export const observeBridgeRead = async <A>(cacheKind: string, fn: () => Promise<
 	}
 };
 
-export const recordAvailabilitySnapshotServed = (kind: string, freshness: 'fresh' | 'stale'): void => {
+export const recordAvailabilitySnapshotServed = (
+	kind: string,
+	freshness: 'fresh' | 'stale',
+): void => {
 	availabilitySnapshotServedTotal.inc({ kind, freshness });
 };
 
@@ -231,6 +294,46 @@ export const recordAvailabilityHeartbeatJob = (
 	availabilityHeartbeatJobsTotal.inc({ kind, action });
 };
 
+export const recordAvailabilityReadinessCheck = (ready: boolean): void => {
+	availabilityReadinessChecksTotal.inc({
+		result: ready ? 'ready' : 'not_ready',
+	});
+};
+
+export const recordAvailabilityReadinessScope = (
+	kind: string,
+	freshness: 'fresh' | 'stale' | 'expired' | 'missing',
+): void => {
+	availabilityReadinessScopeTotal.inc({ kind, freshness });
+};
+
+export const setBridgeQueueDepth = (
+	kind: string,
+	status: string,
+	count: number,
+): void => {
+	bridgeQueueDepth.set({ kind, status }, Math.max(0, count));
+};
+
+export const setBridgeQueueOldestAge = (
+	kind: string,
+	ageMs: number | undefined,
+): void => {
+	bridgeQueueOldestAgeSeconds.set({ kind }, Math.max(0, ageMs ?? 0) / 1000);
+};
+
+export const setAvailabilitySnapshotAge = (
+	kind: string,
+	serviceId: string,
+	scope: string,
+	ageMs: number | undefined,
+): void => {
+	availabilitySnapshotAgeSeconds.set(
+		{ kind, service_id: serviceId, scope },
+		Math.max(0, ageMs ?? 0) / 1000,
+	);
+};
+
 // ─── Page-operation timer helper ─────────────────────────────────────────────
 //
 // Keep label cardinality low: `operation` should be a small enum of
@@ -238,7 +341,10 @@ export const recordAvailabilityHeartbeatJob = (
 // `scrape_catalog`, `wizard_navigate`). Never label per-service_id or per-url.
 
 /** Observe a Playwright/page operation's wall time. Handles Promise success + failure. */
-export const observePageOp = async <A>(operation: string, fn: () => Promise<A>): Promise<A> => {
+export const observePageOp = async <A>(
+	operation: string,
+	fn: () => Promise<A>,
+): Promise<A> => {
 	const end = pageOperationsDuration.startTimer({ operation });
 	try {
 		return await fn();
@@ -269,7 +375,9 @@ export const observePageOpEffect = <A, E, R>(
 // combinator instead of calling `.inc()` / `.dec()` directly so the
 // release path runs even on interrupt.
 
-export const trackBrowserSession = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+export const trackBrowserSession = <A, E, R>(
+	effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
 	Effect.acquireUseRelease(
 		Effect.sync(() => browserActiveSessions.inc()),
 		() => effect,
@@ -293,6 +401,11 @@ export const metrics = {
 	availabilitySnapshotServedTotal,
 	availabilitySnapshotReadDuration,
 	availabilityHeartbeatJobsTotal,
+	availabilityReadinessChecksTotal,
+	availabilityReadinessScopeTotal,
+	bridgeQueueDepth,
+	bridgeQueueOldestAgeSeconds,
+	availabilitySnapshotAgeSeconds,
 	recordCacheHit,
 	recordCacheMiss,
 	setBrowserPageLimiterState,
@@ -303,6 +416,11 @@ export const metrics = {
 	recordAvailabilitySnapshotServed,
 	recordAvailabilitySnapshotRead,
 	recordAvailabilityHeartbeatJob,
+	recordAvailabilityReadinessCheck,
+	recordAvailabilityReadinessScope,
+	setBridgeQueueDepth,
+	setBridgeQueueOldestAge,
+	setAvailabilitySnapshotAge,
 	observePageOp,
 	observePageOpEffect,
 	trackBrowserSession,

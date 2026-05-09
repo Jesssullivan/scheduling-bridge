@@ -39,12 +39,80 @@ describe('BridgeAsyncStore in-memory contract', () => {
 			leasedUntil: new Date('2026-05-08T12:00:00.000Z'),
 		});
 
-		const notReady = await store.listReadyJobs(10, new Date('2026-05-08T11:59:00.000Z'));
-		const ready = await store.listReadyJobs(10, new Date('2026-05-08T12:00:01.000Z'));
+		const notReady = await store.listReadyJobs(
+			10,
+			new Date('2026-05-08T11:59:00.000Z'),
+		);
+		const ready = await store.listReadyJobs(
+			10,
+			new Date('2026-05-08T12:00:01.000Z'),
+		);
 
 		expect(notReady).toHaveLength(0);
 		expect(ready).toHaveLength(1);
 		expect(ready[0]?.operationId).toBe(job.operationId);
+	});
+
+	it('reports queue stats for readiness gates', async () => {
+		const store = createInMemoryBridgeAsyncStore();
+		const queued = await store.enqueueJob(datesJob);
+		const running = await store.enqueueJob({
+			kind: 'availability_slots_refresh',
+			command: {
+				serviceId: '53178494',
+				date: '2026-06-15',
+				adapterProfile: profile,
+			},
+		});
+		await store.markJobRunning(running.operationId, {
+			workerId: 'worker-a',
+			leasedUntil: new Date('2026-05-08T12:00:00.000Z'),
+		});
+		const failed = await store.enqueueJob({
+			kind: 'availability_slots_refresh',
+			command: {
+				serviceId: '53178494',
+				date: '2026-06-16',
+				adapterProfile: profile,
+			},
+		});
+		await store.failJob(failed.operationId, {
+			status: 'failed_pre_submit',
+			code: 'NETWORK',
+			message: 'temporary browser failure',
+			retryable: true,
+		});
+
+		const stats = await store.getQueueStats(
+			new Date('2026-05-08T12:00:01.000Z'),
+		);
+
+		expect(stats).toMatchObject({
+			total: 3,
+			ready: 2,
+			retryableFailed: 1,
+		});
+		expect(stats.oldestQueuedAgeMs).toBeGreaterThanOrEqual(0);
+		expect(stats.byKindStatus).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: 'availability_dates_refresh',
+					status: 'queued',
+					count: 1,
+				}),
+				expect.objectContaining({
+					kind: 'availability_slots_refresh',
+					status: 'running',
+					count: 1,
+				}),
+				expect.objectContaining({
+					kind: 'availability_slots_refresh',
+					status: 'failed_pre_submit',
+					count: 1,
+				}),
+			]),
+		);
+		expect(queued.status).toBe('queued');
 	});
 
 	it('versions availability snapshots per service and scope', async () => {
@@ -73,12 +141,14 @@ describe('BridgeAsyncStore in-memory contract', () => {
 
 		expect(second.snapshotId).toBe(first.snapshotId);
 		expect(second.version).toBe(2);
-		await expect(store.getAvailabilitySnapshot({
-			kind: 'dates',
-			serviceId: '53178494',
-			scope: '2026-06',
-			baseUrl: profile.baseUrl,
-		})).resolves.toMatchObject({
+		await expect(
+			store.getAvailabilitySnapshot({
+				kind: 'dates',
+				serviceId: '53178494',
+				scope: '2026-06',
+				baseUrl: profile.baseUrl,
+			}),
+		).resolves.toMatchObject({
 			version: 2,
 			value: [{ date: '2026-06-16' }],
 		});

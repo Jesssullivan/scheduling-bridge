@@ -35,7 +35,11 @@
  *   node dist/server/handler.js
  */
 
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import {
+	createServer,
+	type IncomingMessage,
+	type ServerResponse,
+} from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { Effect, Exit, Cause, ManagedRuntime, Scope } from 'effect';
 import { Redis as IORedisImpl } from 'ioredis';
@@ -55,15 +59,26 @@ import {
 	type ServiceCatalogRedisL2,
 } from '../shared/acuity-service-catalog.js';
 import { getCached as redisL2GetCached, RedisL2 } from '../shared/redis-l2.js';
-import { runBridgeReadCached, type BridgeReadCacheClient } from '../shared/bridge-read-cache.js';
+import {
+	runBridgeReadCached,
+	type BridgeReadCacheClient,
+} from '../shared/bridge-read-cache.js';
 import {
 	metrics,
+	recordAvailabilityReadinessCheck,
+	recordAvailabilityReadinessScope,
 	recordAvailabilityHeartbeatJob,
 	recordAvailabilitySnapshotRead,
 	recordAvailabilitySnapshotServed,
 	renderMetrics,
+	setAvailabilitySnapshotAge,
+	setBridgeQueueDepth,
+	setBridgeQueueOldestAge,
 } from '../shared/metrics.js';
-import { toSchedulingError, type MiddlewareError } from '../adapters/acuity/errors.js';
+import {
+	toSchedulingError,
+	type MiddlewareError,
+} from '../adapters/acuity/errors.js';
 import {
 	navigateToBooking,
 	fillFormFields,
@@ -75,13 +90,27 @@ import {
 	readAvailableDates,
 	readTimeSlots,
 } from '../adapters/acuity/steps/index.js';
-import { readDatesViaUrl, readSlotsViaUrl } from '../adapters/acuity/steps/read-via-url.js';
+import {
+	readDatesViaUrl,
+	readSlotsViaUrl,
+} from '../adapters/acuity/steps/read-via-url.js';
 import { buildHealthPayload } from './health.js';
 import { handleReady as _handleReady } from './ready.js';
-import { buildAvailabilityDatesCacheKey, getDatePrewarmMonths, selectDatePrewarmMonths } from './date-prewarm.js';
-import { buildAvailabilitySlotsCacheKey, getSlotPrewarmLimit, selectSlotPrewarmDates } from './slot-prewarm.js';
+import {
+	buildAvailabilityDatesCacheKey,
+	getDatePrewarmMonths,
+	selectDatePrewarmMonths,
+} from './date-prewarm.js';
+import {
+	buildAvailabilitySlotsCacheKey,
+	getSlotPrewarmLimit,
+	selectSlotPrewarmDates,
+} from './slot-prewarm.js';
 import { ndjsonLog } from '../shared/logger.js';
-import { createInMemoryBridgeAsyncStore, type BridgeAsyncStore } from '../async/store.js';
+import {
+	createInMemoryBridgeAsyncStore,
+	type BridgeAsyncStore,
+} from '../async/store.js';
 import { createPostgresBridgeAsyncStore } from '../async/postgres-store.js';
 import { createRedisBridgeAsyncStore } from '../async/redis-store.js';
 import type {
@@ -89,6 +118,10 @@ import type {
 	AvailabilitySnapshotKind,
 	AvailabilityHeartbeatJob,
 	AvailabilityHeartbeatResponse,
+	AvailabilityReadinessFreshness,
+	AvailabilityReadinessResponse,
+	AvailabilityReadinessScope,
+	AvailabilityWaitReadyResponse,
 	AvailabilityHeartbeatSkipped,
 	BridgeAdapterProfile,
 	BridgeJobCommand,
@@ -96,8 +129,18 @@ import type {
 	BridgeJobStatus,
 	EnqueueBridgeJobResponse,
 } from '../async/types.js';
-import { createAcuityBridgeJobExecutor, runBridgeWorkerLoop } from './worker.js';
-import type { Booking, BookingRequest, AvailableDate, Service, SchedulingError, TimeSlot } from '../core/types.js';
+import {
+	createAcuityBridgeJobExecutor,
+	runBridgeWorkerLoop,
+} from './worker.js';
+import type {
+	Booking,
+	BookingRequest,
+	AvailableDate,
+	Service,
+	SchedulingError,
+	TimeSlot,
+} from '../core/types.js';
 import { Errors } from '../core/types.js';
 
 const acuitySteps = {
@@ -114,7 +157,9 @@ const acuitySteps = {
 	readSlotsViaUrl,
 };
 
-export const __setAcuityStepOverridesForTest = (overrides: Partial<typeof acuitySteps>) => {
+export const __setAcuityStepOverridesForTest = (
+	overrides: Partial<typeof acuitySteps>,
+) => {
 	Object.assign(acuitySteps, overrides);
 };
 
@@ -135,7 +180,9 @@ const READ_CACHE_TTL_SECONDS = (() => {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : 20 * 60;
 })();
 const EMPTY_READ_CACHE_TTL_SECONDS = (() => {
-	const parsed = Number(process.env.ACUITY_EMPTY_READ_CACHE_TTL_SECONDS ?? 2 * 60);
+	const parsed = Number(
+		process.env.ACUITY_EMPTY_READ_CACHE_TTL_SECONDS ?? 2 * 60,
+	);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : 2 * 60;
 })();
 const READ_CACHE_LOCK_TTL_MS = (() => {
@@ -143,7 +190,9 @@ const READ_CACHE_LOCK_TTL_MS = (() => {
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : 90_000;
 })();
 const READ_CACHE_WAIT_TIMEOUT_MS = (() => {
-	const parsed = Number(process.env.ACUITY_READ_CACHE_WAIT_TIMEOUT_MS ?? 55_000);
+	const parsed = Number(
+		process.env.ACUITY_READ_CACHE_WAIT_TIMEOUT_MS ?? 55_000,
+	);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : 55_000;
 })();
 const DATE_PREWARM_MONTHS = getDatePrewarmMonths();
@@ -154,8 +203,32 @@ const HEARTBEAT_DEFAULT_MAX_JOBS = (() => {
 })();
 const HEARTBEAT_MAX_JOBS_CAP = 100;
 const HEARTBEAT_DEFAULT_IDEMPOTENCY_WINDOW_MS = (() => {
-	const parsed = Number(process.env.BRIDGE_HEARTBEAT_IDEMPOTENCY_WINDOW_MS ?? 5 * 60_000);
-	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 5 * 60_000;
+	const parsed = Number(
+		process.env.BRIDGE_HEARTBEAT_IDEMPOTENCY_WINDOW_MS ?? 5 * 60_000,
+	);
+	return Number.isFinite(parsed) && parsed > 0
+		? Math.floor(parsed)
+		: 5 * 60_000;
+})();
+const READINESS_DEFAULT_FRESHNESS_FLOOR_MS = (() => {
+	const parsed = Number(
+		process.env.BRIDGE_READINESS_FRESHNESS_FLOOR_MS ?? 90_000,
+	);
+	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 90_000;
+})();
+const READINESS_DEFAULT_MAX_OLDEST_QUEUED_AGE_MS = (() => {
+	const parsed = Number(
+		process.env.BRIDGE_READINESS_MAX_OLDEST_QUEUED_AGE_MS ?? 120_000,
+	);
+	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 120_000;
+})();
+const READINESS_WAIT_DEFAULT_TIMEOUT_MS = (() => {
+	const parsed = Number(process.env.BRIDGE_READINESS_WAIT_TIMEOUT_MS ?? 60_000);
+	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 60_000;
+})();
+const READINESS_WAIT_DEFAULT_POLL_MS = (() => {
+	const parsed = Number(process.env.BRIDGE_READINESS_WAIT_POLL_MS ?? 1000);
+	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1000;
 })();
 
 const browserConfig: BrowserConfig = {
@@ -173,7 +246,9 @@ const scraperConfig: ScraperConfig = {
 	timeout: browserConfig.timeout,
 	userAgent: browserConfig.userAgent,
 	executablePath: browserConfig.executablePath,
-	launchArgs: browserConfig.launchArgs ? [...browserConfig.launchArgs] : undefined,
+	launchArgs: browserConfig.launchArgs
+		? [...browserConfig.launchArgs]
+		: undefined,
 };
 
 // =============================================================================
@@ -194,12 +269,17 @@ interface ErrorResponse {
 	};
 }
 
-const sendJson = (res: ServerResponse, status: number, body: SuccessResponse<unknown> | ErrorResponse) => {
+const sendJson = (
+	res: ServerResponse,
+	status: number,
+	body: SuccessResponse<unknown> | ErrorResponse,
+) => {
 	res.writeHead(status, { 'Content-Type': 'application/json' });
 	res.end(JSON.stringify(body));
 };
 
-const sendSuccess = <T>(res: ServerResponse, data: T) => sendJson(res, 200, { success: true, data });
+const sendSuccess = <T>(res: ServerResponse, data: T) =>
+	sendJson(res, 200, { success: true, data });
 
 const sendError = (res: ServerResponse, status: number, err: SchedulingError) =>
 	sendJson(res, status, {
@@ -207,11 +287,18 @@ const sendError = (res: ServerResponse, status: number, err: SchedulingError) =>
 		error: {
 			tag: err._tag,
 			code: 'code' in err ? (err as { code: string }).code : err._tag,
-			message: 'message' in err ? (err as { message: string }).message : 'Unknown error',
+			message:
+				'message' in err
+					? (err as { message: string }).message
+					: 'Unknown error',
 		},
 	});
 
-const sendValidationError = (res: ServerResponse, code: string, message: string) =>
+const sendValidationError = (
+	res: ServerResponse,
+	code: string,
+	message: string,
+) =>
 	sendJson(res, 400, {
 		success: false,
 		error: {
@@ -245,17 +332,27 @@ const runtimeLogFields = () => ({
 	transport: 'http-json',
 	modalEnvironment: process.env.MODAL_ENVIRONMENT,
 	releaseSha: process.env.MIDDLEWARE_RELEASE_SHA,
-	releaseVersion: process.env.MIDDLEWARE_RELEASE_VERSION ?? process.env.npm_package_version,
+	releaseVersion:
+		process.env.MIDDLEWARE_RELEASE_VERSION ?? process.env.npm_package_version,
 });
 
-const logEvent = (level: LogLevel, msg: string, data?: Record<string, unknown>) => {
+const logEvent = (
+	level: LogLevel,
+	msg: string,
+	data?: Record<string, unknown>,
+) => {
 	ndjsonLog(level, msg, {
 		...runtimeLogFields(),
 		...data,
 	});
 };
 
-const logRequestEvent = (level: LogLevel, msg: string, context: RequestContext, data?: Record<string, unknown>) => {
+const logRequestEvent = (
+	level: LogLevel,
+	msg: string,
+	context: RequestContext,
+	data?: Record<string, unknown>,
+) => {
 	logEvent(level, msg, {
 		event: 'request',
 		requestId: context.requestId,
@@ -293,7 +390,10 @@ const createServiceCatalogLogger = () => ({
 		}),
 });
 
-const createSlotReadTelemetryContext = (context: RequestContext, endpoint: string) => ({
+const createSlotReadTelemetryContext = (
+	context: RequestContext,
+	endpoint: string,
+) => ({
 	requestId: context.requestId,
 	endpoint,
 	...runtimeLogFields(),
@@ -307,7 +407,9 @@ const browserRuntime = ManagedRuntime.make(BrowserProcessLive(browserConfig));
 
 type Result<A> = { ok: true; value: A } | { ok: false; error: SchedulingError };
 
-const exitToResult = <A>(exit: Exit.Exit<A, MiddlewareError | undefined>): Result<A> => {
+const exitToResult = <A>(
+	exit: Exit.Exit<A, MiddlewareError | undefined>,
+): Result<A> => {
 	if (Exit.isSuccess(exit)) {
 		return { ok: true, value: exit.value };
 	}
@@ -326,22 +428,38 @@ const exitToResult = <A>(exit: Exit.Exit<A, MiddlewareError | undefined>): Resul
 };
 
 type RunEffect = <A>(
-	effect: Effect.Effect<A, MiddlewareError | undefined, BrowserService | Scope.Scope>,
+	effect: Effect.Effect<
+		A,
+		MiddlewareError | undefined,
+		BrowserService | Scope.Scope
+	>,
 ) => Promise<Result<A>>;
 
 const runEffectWithBrowser: RunEffect = async <A>(
-	effect: Effect.Effect<A, MiddlewareError | undefined, BrowserService | Scope.Scope>,
+	effect: Effect.Effect<
+		A,
+		MiddlewareError | undefined,
+		BrowserService | Scope.Scope
+	>,
 ): Promise<Result<A>> => {
-	const exit = await browserRuntime.runPromiseExit(Effect.scoped(effect.pipe(Effect.provide(BrowserSessionLive))));
+	const exit = await browserRuntime.runPromiseExit(
+		Effect.scoped(effect.pipe(Effect.provide(BrowserSessionLive))),
+	);
 	return exitToResult(exit);
 };
 
 let runEffect: RunEffect = runEffectWithBrowser;
 
 export const __runEffectWithoutBrowserForTest: RunEffect = async <A>(
-	effect: Effect.Effect<A, MiddlewareError | undefined, BrowserService | Scope.Scope>,
+	effect: Effect.Effect<
+		A,
+		MiddlewareError | undefined,
+		BrowserService | Scope.Scope
+	>,
 ): Promise<Result<A>> => {
-	const exit = await Effect.runPromiseExit(effect as Effect.Effect<A, MiddlewareError | undefined, never>);
+	const exit = await Effect.runPromiseExit(
+		effect as Effect.Effect<A, MiddlewareError | undefined, never>,
+	);
 	return exitToResult(exit);
 };
 
@@ -403,7 +521,11 @@ if (redisClient) {
 
 const serviceCatalogRedisL2: ServiceCatalogRedisL2 | undefined = redisClient
 	? {
-			getCached: <A>(key: string, ttlSeconds: number, mk: Effect.Effect<A>): Effect.Effect<A> => {
+			getCached: <A>(
+				key: string,
+				ttlSeconds: number,
+				mk: Effect.Effect<A>,
+			): Effect.Effect<A> => {
 				const mkPromise = (): Promise<A> => Effect.runPromise(mk);
 				// Provide the RedisL2 service for the real `getCached`, then erase
 				// the `RedisError | CacheTimeoutError` channel so the result fits
@@ -482,10 +604,14 @@ const startInlineWorker = () => {
 	if (!BRIDGE_INLINE_WORKER_ENABLED || inlineWorkerAbortController) return;
 	inlineWorkerAbortController = new AbortController();
 	const workerId = `${process.env.HOSTNAME ?? `pid-${process.pid}`}:inline`;
-	void runBridgeWorkerLoop(bridgeAsyncStore, createAcuityBridgeJobExecutor({ redisClient }), {
-		workerId,
-		signal: inlineWorkerAbortController.signal,
-	}).catch((error) => {
+	void runBridgeWorkerLoop(
+		bridgeAsyncStore,
+		createAcuityBridgeJobExecutor({ redisClient }),
+		{
+			workerId,
+			signal: inlineWorkerAbortController.signal,
+		},
+	).catch((error) => {
 		if (inlineWorkerAbortController?.signal.aborted) return;
 		logEvent('ERROR', 'Inline bridge worker failed', {
 			event: 'bridge_inline_worker_failed',
@@ -506,7 +632,9 @@ const stopInlineWorker = () => {
 	inlineWorkerAbortController = null;
 };
 
-export const __setBridgeAsyncStoreForTest = (store: BridgeAsyncStore | null) => {
+export const __setBridgeAsyncStoreForTest = (
+	store: BridgeAsyncStore | null,
+) => {
 	stopInlineWorker();
 	if (closeBridgeAsyncStore) {
 		void closeBridgeAsyncStore().catch(() => undefined);
@@ -521,7 +649,8 @@ const isSchedulingError = (error: unknown): error is SchedulingError =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+const isNonEmptyString = (value: unknown): value is string =>
+	typeof value === 'string' && value.trim().length > 0;
 
 const optionalString = (value: unknown): string | undefined | null => {
 	if (value === undefined) return undefined;
@@ -551,8 +680,15 @@ const interleaveEqualWeightHeartbeatGroups = (
 ): readonly AvailabilityHeartbeatCandidate[] => {
 	const interleaved: AvailabilityHeartbeatCandidate[] = [];
 	const orderedGroups = [...groups].sort((a, b) => a.order - b.order);
-	const maxLength = Math.max(0, ...orderedGroups.map((group) => group.candidates.length));
-	for (let candidateIndex = 0; candidateIndex < maxLength; candidateIndex += 1) {
+	const maxLength = Math.max(
+		0,
+		...orderedGroups.map((group) => group.candidates.length),
+	);
+	for (
+		let candidateIndex = 0;
+		candidateIndex < maxLength;
+		candidateIndex += 1
+	) {
 		for (const group of orderedGroups) {
 			const candidate = group.candidates[candidateIndex];
 			if (candidate) {
@@ -566,16 +702,23 @@ const interleaveEqualWeightHeartbeatGroups = (
 const orderHeartbeatCandidateGroups = (
 	groups: readonly AvailabilityHeartbeatDemandGroup[],
 ): readonly AvailabilityHeartbeatCandidate[] => {
-	const orderedGroups = [...groups].sort((a, b) => b.weight - a.weight || a.order - b.order);
+	const orderedGroups = [...groups].sort(
+		(a, b) => b.weight - a.weight || a.order - b.order,
+	);
 	const orderedCandidates: AvailabilityHeartbeatCandidate[] = [];
 	for (let index = 0; index < orderedGroups.length; ) {
 		const weight = orderedGroups[index]?.weight ?? 0;
 		const sameWeightGroups: AvailabilityHeartbeatDemandGroup[] = [];
-		while (index < orderedGroups.length && orderedGroups[index].weight === weight) {
+		while (
+			index < orderedGroups.length &&
+			orderedGroups[index].weight === weight
+		) {
 			sameWeightGroups.push(orderedGroups[index]);
 			index += 1;
 		}
-		orderedCandidates.push(...interleaveEqualWeightHeartbeatGroups(sameWeightGroups));
+		orderedCandidates.push(
+			...interleaveEqualWeightHeartbeatGroups(sameWeightGroups),
+		);
 	}
 	return orderedCandidates;
 };
@@ -602,7 +745,9 @@ const collectStringList = (
 	value: unknown,
 	pattern: RegExp,
 	field: string,
-): { ok: true; value: readonly string[] } | { ok: false; field: string; message: string } => {
+):
+	| { ok: true; value: readonly string[] }
+	| { ok: false; field: string; message: string } => {
 	if (value === undefined) return { ok: true, value: [] };
 	if (!Array.isArray(value)) {
 		return { ok: false, field, message: `${field} must be an array` };
@@ -627,11 +772,17 @@ const collectStringList = (
 
 const collectHeartbeatCandidates = (
 	rawBody: Record<string, unknown>,
-): { ok: true; value: readonly AvailabilityHeartbeatCandidate[] } | { ok: false; field: string; message: string } => {
+):
+	| { ok: true; value: readonly AvailabilityHeartbeatCandidate[] }
+	| { ok: false; field: string; message: string } => {
 	if (!Array.isArray(rawBody.demands)) {
 		return { ok: false, field: 'demands', message: 'demands must be an array' };
 	}
-	const commonMonths = collectStringList(rawBody.months, YEAR_MONTH_RE, 'months');
+	const commonMonths = collectStringList(
+		rawBody.months,
+		YEAR_MONTH_RE,
+		'months',
+	);
 	if (!commonMonths.ok) return commonMonths;
 	const commonDates = collectStringList(rawBody.dates, ISO_DATE_RE, 'dates');
 	if (!commonDates.ok) return commonDates;
@@ -660,9 +811,17 @@ const collectHeartbeatCandidates = (
 				message: 'serviceName must be a string',
 			};
 		}
-		const months = collectStringList(demand.months ?? commonMonths.value, YEAR_MONTH_RE, `demands[${demandIndex}].months`);
+		const months = collectStringList(
+			demand.months ?? commonMonths.value,
+			YEAR_MONTH_RE,
+			`demands[${demandIndex}].months`,
+		);
 		if (!months.ok) return months;
-		const dates = collectStringList(demand.dates ?? commonDates.value, ISO_DATE_RE, `demands[${demandIndex}].dates`);
+		const dates = collectStringList(
+			demand.dates ?? commonDates.value,
+			ISO_DATE_RE,
+			`demands[${demandIndex}].dates`,
+		);
 		if (!dates.ok) return dates;
 		if (months.value.length === 0 && dates.value.length === 0) {
 			return {
@@ -707,8 +866,10 @@ const collectHeartbeatCandidates = (
 	};
 };
 
-const heartbeatIdempotencyBucket = (windowMs: number, now = Date.now()): number =>
-	Math.floor(now / Math.max(1, windowMs));
+const heartbeatIdempotencyBucket = (
+	windowMs: number,
+	now = Date.now(),
+): number => Math.floor(now / Math.max(1, windowMs));
 
 const runCachedBridgeRead = async <A>(
 	context: RequestContext,
@@ -727,22 +888,33 @@ const runCachedBridgeRead = async <A>(
 		waitTimeoutMs: READ_CACHE_WAIT_TIMEOUT_MS,
 		waitTimeoutResult: (waitMs) => ({
 			ok: false,
-			error: Errors.infrastructure('TIMEOUT', `Timed out after ${waitMs}ms waiting for ${cacheKind} cache fill`),
+			error: Errors.infrastructure(
+				'TIMEOUT',
+				`Timed out after ${waitMs}ms waiting for ${cacheKind} cache fill`,
+			),
 		}),
 		read,
 		shouldCache,
 		log: ({ event, cacheKind, waitMs, error }) => {
-			logRequestEvent(error ? 'ERROR' : 'INFO', 'Bridge read cache event', context, {
-				event,
-				cacheKind,
-				...(waitMs === undefined ? {} : { waitMs }),
-				...(error === undefined ? {} : { error: describeLogValue(error) }),
-			});
+			logRequestEvent(
+				error ? 'ERROR' : 'INFO',
+				'Bridge read cache event',
+				context,
+				{
+					event,
+					cacheKind,
+					...(waitMs === undefined ? {} : { waitMs }),
+					...(error === undefined ? {} : { error: describeLogValue(error) }),
+				},
+			);
 		},
 	});
 };
 
-const resolveServiceName = async (serviceId: string, serviceName?: string): Promise<string> => {
+const resolveServiceName = async (
+	serviceId: string,
+	serviceName?: string,
+): Promise<string> => {
 	try {
 		return await serviceCatalog.resolveServiceName(serviceId, serviceName);
 	} catch (error) {
@@ -756,7 +928,8 @@ const resolveServiceName = async (serviceId: string, serviceName?: string): Prom
 	}
 };
 
-const isAcuityAppointmentTypeId = (serviceId: string): boolean => /^\d+$/.test(serviceId);
+const isAcuityAppointmentTypeId = (serviceId: string): boolean =>
+	/^\d+$/.test(serviceId);
 
 const adapterProfile = (): BridgeAdapterProfile => ({
 	backend: 'acuity',
@@ -765,7 +938,8 @@ const adapterProfile = (): BridgeAdapterProfile => ({
 	adminApiConfigured: process.env.ACUITY_ADMIN_API_CONFIGURED === 'true',
 });
 
-const jobStatusUrl = (operationId: string): string => `/jobs/${encodeURIComponent(operationId)}`;
+const jobStatusUrl = (operationId: string): string =>
+	`/jobs/${encodeURIComponent(operationId)}`;
 
 const toEnqueueResponse = (job: BridgeJobRecord): EnqueueBridgeJobResponse => ({
 	operationId: job.operationId,
@@ -780,14 +954,20 @@ const heartbeatRunnableStatuses = new Set<BridgeJobStatus>([
 ]);
 
 const isRetryableHeartbeatFailure = (record: BridgeJobRecord): boolean =>
-	(record.status === 'failed_pre_submit' || record.status === 'reconcile_required') &&
+	(record.status === 'failed_pre_submit' ||
+		record.status === 'reconcile_required') &&
 	record.failure?.retryable === true;
 
-const sendAccepted = <T>(res: ServerResponse, data: T) => sendJson(res, 202, { success: true, data });
+const sendAccepted = <T>(res: ServerResponse, data: T) =>
+	sendJson(res, 202, { success: true, data });
 
 const snapshotTimestamps = (observedAt = new Date()) => {
-	const staleAfterMs = Number(process.env.BRIDGE_SNAPSHOT_STALE_MS ?? 5 * 60_000);
-	const expiresAfterMs = Number(process.env.BRIDGE_SNAPSHOT_EXPIRES_MS ?? 30 * 60_000);
+	const staleAfterMs = Number(
+		process.env.BRIDGE_SNAPSHOT_STALE_MS ?? 5 * 60_000,
+	);
+	const expiresAfterMs = Number(
+		process.env.BRIDGE_SNAPSHOT_EXPIRES_MS ?? 30 * 60_000,
+	);
 	return {
 		observedAt: observedAt.toISOString(),
 		staleAt: new Date(observedAt.getTime() + staleAfterMs).toISOString(),
@@ -831,9 +1011,13 @@ const enqueueAvailabilityPrewarmJob = (
 		readonly scope: string;
 	},
 ) => {
-	const idempotencyKey = ['availability-prewarm', ACUITY_BASE_URL, options.kind, options.serviceId, options.scope].join(
-		':',
-	);
+	const idempotencyKey = [
+		'availability-prewarm',
+		ACUITY_BASE_URL,
+		options.kind,
+		options.serviceId,
+		options.scope,
+	].join(':');
 
 	const job: BridgeJobCommand =
 		options.kind === 'dates'
@@ -912,6 +1096,148 @@ const classifyAvailabilitySnapshotFreshness = (
 	return Number.isFinite(staleAtMs) && staleAtMs > nowMs ? 'fresh' : 'stale';
 };
 
+const classifyAvailabilityReadinessFreshness = (
+	snapshot: AvailabilitySnapshot | null,
+	now: Date,
+	freshnessFloorMs: number,
+): AvailabilityReadinessFreshness => {
+	if (!snapshot) return 'missing';
+	const nowMs = now.getTime();
+	const expiresAtMs = Date.parse(snapshot.expiresAt);
+	if (!Number.isFinite(expiresAtMs) || expiresAtMs <= nowMs) {
+		return 'expired';
+	}
+	const observedAtMs = Date.parse(snapshot.observedAt);
+	if (!Number.isFinite(observedAtMs)) return 'stale';
+	return nowMs - observedAtMs <= freshnessFloorMs ? 'fresh' : 'stale';
+};
+
+const snapshotAgeMs = (
+	snapshot: AvailabilitySnapshot | null,
+	now: Date,
+): number | undefined => {
+	if (!snapshot) return undefined;
+	const observedAtMs = Date.parse(snapshot.observedAt);
+	if (!Number.isFinite(observedAtMs)) return undefined;
+	return Math.max(0, now.getTime() - observedAtMs);
+};
+
+const wait = (ms: number): Promise<void> =>
+	new Promise((resolve) => setTimeout(resolve, ms));
+
+const notFoundInternalEndpoint = (res: ServerResponse) =>
+	sendJson(res, 404, {
+		success: false,
+		error: {
+			tag: 'InfrastructureError',
+			code: 'NOT_FOUND',
+			message: 'Not found',
+		},
+	});
+
+const parseReadinessPolicy = (body: Record<string, unknown>) => ({
+	snapshotFreshnessFloorMs: parsePositiveMs(
+		body.snapshotFreshnessFloorMs,
+		READINESS_DEFAULT_FRESHNESS_FLOOR_MS,
+	),
+	maxOldestQueuedAgeMs: parsePositiveMs(
+		body.maxOldestQueuedAgeMs,
+		READINESS_DEFAULT_MAX_OLDEST_QUEUED_AGE_MS,
+	),
+});
+
+const evaluateAvailabilityReadiness = async (
+	candidates: readonly AvailabilityHeartbeatCandidate[],
+	policy: {
+		readonly snapshotFreshnessFloorMs: number;
+		readonly maxOldestQueuedAgeMs: number;
+	},
+	now = new Date(),
+): Promise<AvailabilityReadinessResponse> => {
+	const scopes: AvailabilityReadinessScope[] = [];
+	const blockers: string[] = [];
+
+	for (const candidate of candidates) {
+		const snapshot = await bridgeAsyncStore.getAvailabilitySnapshot({
+			kind: candidate.kind,
+			serviceId: candidate.serviceId,
+			scope: candidate.scope,
+			baseUrl: ACUITY_BASE_URL,
+		});
+		const freshness = classifyAvailabilityReadinessFreshness(
+			snapshot,
+			now,
+			policy.snapshotFreshnessFloorMs,
+		);
+		const ageMs = snapshotAgeMs(snapshot, now);
+		const scopeBlockers =
+			freshness === 'fresh' ? [] : [`snapshot_${freshness}`];
+		recordAvailabilityReadinessScope(candidate.kind, freshness);
+		setAvailabilitySnapshotAge(
+			candidate.kind,
+			candidate.serviceId,
+			candidate.scope,
+			ageMs,
+		);
+		if (scopeBlockers.length > 0) {
+			blockers.push(
+				`${candidate.kind}:${candidate.serviceId}:${candidate.scope}:${freshness}`,
+			);
+		}
+		scopes.push({
+			kind: candidate.kind,
+			serviceId: candidate.serviceId,
+			serviceName: candidate.serviceName,
+			scope: candidate.scope,
+			weight: candidate.weight,
+			freshness,
+			ready: freshness === 'fresh',
+			blockers: scopeBlockers,
+			ageMs,
+			valueCount: snapshot?.value.length,
+			snapshot: snapshot
+				? {
+						snapshotId: snapshot.snapshotId,
+						version: snapshot.version,
+						observedAt: snapshot.observedAt,
+						staleAt: snapshot.staleAt,
+						expiresAt: snapshot.expiresAt,
+						sourceJobId: snapshot.sourceJobId,
+					}
+				: undefined,
+		});
+	}
+
+	const queue = await bridgeAsyncStore.getQueueStats(now);
+	for (const bucket of queue.byKindStatus) {
+		setBridgeQueueDepth(bucket.kind, bucket.status, bucket.count);
+		setBridgeQueueOldestAge(bucket.kind, bucket.oldestAgeMs);
+	}
+	if (
+		queue.oldestQueuedAgeMs !== undefined &&
+		queue.oldestQueuedAgeMs > policy.maxOldestQueuedAgeMs
+	) {
+		blockers.push(`queue_oldest_age:${queue.oldestQueuedAgeMs}`);
+	}
+	if (queue.retryableFailed > 0) {
+		blockers.push(`retryable_failed_jobs:${queue.retryableFailed}`);
+	}
+
+	const ready = blockers.length === 0 && scopes.every((scope) => scope.ready);
+	recordAvailabilityReadinessCheck(ready);
+
+	return {
+		layer: 'bridge_availability_readiness',
+		ready,
+		checkedAt: now.toISOString(),
+		policy,
+		considered: scopes.length,
+		scopes,
+		queue,
+		blockers,
+	};
+};
+
 const readAvailabilitySnapshotLayer = async <A extends readonly unknown[]>(
 	context: RequestContext,
 	options: {
@@ -932,7 +1258,12 @@ const readAvailabilitySnapshotLayer = async <A extends readonly unknown[]>(
 		});
 		if (!snapshot) {
 			const durationMs = Date.now() - startedAt;
-			recordAvailabilitySnapshotRead(options.kind, 'missing', 'miss', durationMs);
+			recordAvailabilitySnapshotRead(
+				options.kind,
+				'missing',
+				'miss',
+				durationMs,
+			);
 			return { ok: false, reason: 'missing', durationMs };
 		}
 
@@ -951,7 +1282,12 @@ const readAvailabilitySnapshotLayer = async <A extends readonly unknown[]>(
 
 		const durationMs = Date.now() - startedAt;
 		if (freshness === 'expired') {
-			recordAvailabilitySnapshotRead(options.kind, 'expired', 'miss', durationMs);
+			recordAvailabilitySnapshotRead(
+				options.kind,
+				'expired',
+				'miss',
+				durationMs,
+			);
 			return { ok: false, reason: 'expired', snapshot, durationMs };
 		}
 
@@ -1001,11 +1337,18 @@ const scheduleDatePrewarm = (
 	serviceName: string | undefined,
 	currentMonth: string | undefined,
 ): void => {
-	if (!redisClient || DATE_PREWARM_MONTHS <= 0 || !isAcuityAppointmentTypeId(serviceId)) {
+	if (
+		!redisClient ||
+		DATE_PREWARM_MONTHS <= 0 ||
+		!isAcuityAppointmentTypeId(serviceId)
+	) {
 		return;
 	}
 
-	for (const month of selectDatePrewarmMonths(currentMonth, DATE_PREWARM_MONTHS)) {
+	for (const month of selectDatePrewarmMonths(
+		currentMonth,
+		DATE_PREWARM_MONTHS,
+	)) {
 		enqueueAvailabilityPrewarmJob(context, {
 			kind: 'dates',
 			serviceId,
@@ -1021,7 +1364,11 @@ const scheduleSlotPrewarm = (
 	serviceName: string | undefined,
 	dates: readonly { date?: unknown }[],
 ): void => {
-	if (!redisClient || SLOT_PREWARM_LIMIT <= 0 || !isAcuityAppointmentTypeId(serviceId)) {
+	if (
+		!redisClient ||
+		SLOT_PREWARM_LIMIT <= 0 ||
+		!isAcuityAppointmentTypeId(serviceId)
+	) {
 		return;
 	}
 
@@ -1067,9 +1414,13 @@ const handleReady = (res: ServerResponse) =>
 	_handleReady(res, {
 		redisPing: redisClient ? () => redisClient!.ping() : null,
 		browserConnected: () =>
-			browserRuntime.runPromise(BrowserProcess.pipe(Effect.map(({ browser }) => browser.isConnected()))),
+			browserRuntime.runPromise(
+				BrowserProcess.pipe(Effect.map(({ browser }) => browser.isConnected())),
+			),
 		catalogL1Count: () => serviceCatalog.getCachedCount(),
-		catalogL2Exists: redisClient ? () => redisClient!.exists(CATALOG_REDIS_KEY) : null,
+		catalogL2Exists: redisClient
+			? () => redisClient!.exists(CATALOG_REDIS_KEY)
+			: null,
 		catalogWarm: async () => (await serviceCatalog.getServices()).length,
 	});
 
@@ -1084,14 +1435,21 @@ const handleHealth = (_req: IncomingMessage, res: ServerResponse) => {
 			serviceCacheTtlMs: SERVICE_CACHE_TTL_MS,
 			releaseSha: process.env.MIDDLEWARE_RELEASE_SHA,
 			releaseRef: process.env.MIDDLEWARE_RELEASE_REF,
-			releaseVersion: process.env.MIDDLEWARE_RELEASE_VERSION ?? process.env.npm_package_version,
-			releaseBuiltAt: process.env.MIDDLEWARE_RELEASE_BUILT_AT ?? process.env.MIDDLEWARE_BUILD_TIMESTAMP,
+			releaseVersion:
+				process.env.MIDDLEWARE_RELEASE_VERSION ??
+				process.env.npm_package_version,
+			releaseBuiltAt:
+				process.env.MIDDLEWARE_RELEASE_BUILT_AT ??
+				process.env.MIDDLEWARE_BUILD_TIMESTAMP,
 			modalEnvironment: process.env.MODAL_ENVIRONMENT,
 		}),
 	);
 };
 
-const handleGetServices = async (_req: IncomingMessage, res: ServerResponse) => {
+const handleGetServices = async (
+	_req: IncomingMessage,
+	res: ServerResponse,
+) => {
 	try {
 		const services = await serviceCatalog.getServices();
 		sendSuccess(res, services);
@@ -1104,7 +1462,8 @@ const handleGetServices = async (_req: IncomingMessage, res: ServerResponse) => 
 			error: {
 				tag: 'InfrastructureError',
 				code: 'UNKNOWN',
-				message: error instanceof Error ? error.message : 'Service lookup failed',
+				message:
+					error instanceof Error ? error.message : 'Service lookup failed',
 			},
 		});
 	}
@@ -1133,20 +1492,29 @@ const handleGetService = async (serviceId: string, res: ServerResponse) => {
 			error: {
 				tag: 'InfrastructureError',
 				code: 'UNKNOWN',
-				message: error instanceof Error ? error.message : 'Service lookup failed',
+				message:
+					error instanceof Error ? error.message : 'Service lookup failed',
 			},
 		});
 	}
 };
 
-const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
+const handleAvailableDates = async (
+	req: IncomingMessage,
+	res: ServerResponse,
+	context: RequestContext,
+) => {
 	const rawBody = await parseBody(req);
 	if (!isRecord(rawBody) || !isNonEmptyString(rawBody.serviceId)) {
 		return sendValidationError(res, 'serviceId', 'serviceId is required');
 	}
 	const serviceName = optionalString(rawBody.serviceName);
 	if (serviceName === null) {
-		return sendValidationError(res, 'serviceName', 'serviceName must be a string');
+		return sendValidationError(
+			res,
+			'serviceName',
+			'serviceName must be a string',
+		);
 	}
 	const startDate = optionalString(rawBody.startDate);
 	if (startDate === null) {
@@ -1160,7 +1528,11 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 		serviceName: body.serviceName,
 		startDate: body.startDate,
 	});
-	const cacheKey = buildAvailabilityDatesCacheKey(ACUITY_BASE_URL, body.serviceId, targetMonth ?? 'current');
+	const cacheKey = buildAvailabilityDatesCacheKey(
+		ACUITY_BASE_URL,
+		body.serviceId,
+		targetMonth ?? 'current',
+	);
 	let observedFreshAvailability = false;
 	let cacheReadResult = true;
 	const result = await runCachedBridgeRead(
@@ -1168,7 +1540,9 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 		'availability_dates',
 		cacheKey,
 		async () => {
-			const snapshot = await readUsableAvailabilitySnapshot<readonly AvailableDate[]>(context, {
+			const snapshot = await readUsableAvailabilitySnapshot<
+				readonly AvailableDate[]
+			>(context, {
 				kind: 'dates',
 				serviceId: body.serviceId,
 				serviceName: body.serviceName,
@@ -1184,21 +1558,29 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 			return isAcuityAppointmentTypeId(body.serviceId)
 				? runEffect(acuitySteps.readDatesViaUrl(body.serviceId, targetMonth))
 				: (async () => {
-					const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
-					logRequestEvent('INFO', 'Availability dates resolved service name', context, {
-						event: 'availability_dates_resolved_service',
-						serviceId: body.serviceId,
-						serviceName,
-						startDate: body.startDate,
-					});
-					return runEffect(
-						acuitySteps.readAvailableDates({
-							serviceName,
-							targetMonth,
-							monthsToScan: 2,
-						}),
-					);
-				})();
+						const serviceName = await resolveServiceName(
+							body.serviceId,
+							body.serviceName,
+						);
+						logRequestEvent(
+							'INFO',
+							'Availability dates resolved service name',
+							context,
+							{
+								event: 'availability_dates_resolved_service',
+								serviceId: body.serviceId,
+								serviceName,
+								startDate: body.startDate,
+							},
+						);
+						return runEffect(
+							acuitySteps.readAvailableDates({
+								serviceName,
+								targetMonth,
+								monthsToScan: 2,
+							}),
+						);
+					})();
 		},
 		() => cacheReadResult,
 	);
@@ -1211,14 +1593,20 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 			startDate: body.startDate,
 			errorTag: err._tag,
 			errorCode: 'code' in err ? (err as { code: string }).code : 'UNKNOWN',
-			errorMessage: 'message' in err ? (err as { message: string }).message : 'Availability lookup failed',
+			errorMessage:
+				'message' in err
+					? (err as { message: string }).message
+					: 'Availability lookup failed',
 		});
 		return sendJson(res, 500, {
 			success: false,
 			error: {
 				tag: err._tag ?? 'InfrastructureError',
 				code: 'code' in err ? (err as { code: string }).code : 'UNKNOWN',
-				message: 'message' in err ? (err as { message: string }).message : 'Availability lookup failed',
+				message:
+					'message' in err
+						? (err as { message: string }).message
+						: 'Availability lookup failed',
 			},
 		});
 	}
@@ -1236,7 +1624,11 @@ const handleAvailableDates = async (req: IncomingMessage, res: ServerResponse, c
 	sendSuccess(res, result.value);
 };
 
-const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
+const handleAvailableSlots = async (
+	req: IncomingMessage,
+	res: ServerResponse,
+	context: RequestContext,
+) => {
 	const rawBody = await parseBody(req);
 	if (!isRecord(rawBody) || !isNonEmptyString(rawBody.serviceId)) {
 		return sendValidationError(res, 'serviceId', 'serviceId is required');
@@ -1246,7 +1638,11 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, c
 	}
 	const serviceName = optionalString(rawBody.serviceName);
 	if (serviceName === null) {
-		return sendValidationError(res, 'serviceName', 'serviceName must be a string');
+		return sendValidationError(
+			res,
+			'serviceName',
+			'serviceName must be a string',
+		);
 	}
 	const body = {
 		serviceId: rawBody.serviceId,
@@ -1259,7 +1655,11 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, c
 		serviceName: body.serviceName,
 		date: body.date,
 	});
-	const cacheKey = buildAvailabilitySlotsCacheKey(ACUITY_BASE_URL, body.serviceId, body.date);
+	const cacheKey = buildAvailabilitySlotsCacheKey(
+		ACUITY_BASE_URL,
+		body.serviceId,
+		body.date,
+	);
 	let observedFreshAvailability = false;
 	let cacheReadResult = true;
 	const result = await runCachedBridgeRead(
@@ -1267,7 +1667,9 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, c
 		'availability_slots',
 		cacheKey,
 		async () => {
-			const snapshot = await readUsableAvailabilitySnapshot<readonly TimeSlot[]>(context, {
+			const snapshot = await readUsableAvailabilitySnapshot<
+				readonly TimeSlot[]
+			>(context, {
 				kind: 'slots',
 				serviceId: body.serviceId,
 				serviceName: body.serviceName,
@@ -1282,27 +1684,35 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, c
 			cacheReadResult = true;
 			return isAcuityAppointmentTypeId(body.serviceId)
 				? runEffect(
-					acuitySteps.readSlotsViaUrl(
-						body.serviceId,
-						body.date,
-						createSlotReadTelemetryContext(context, 'availability_slots'),
-					),
-				)
-			: (async () => {
-					const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
-					logRequestEvent('INFO', 'Availability slots resolved service name', context, {
-						event: 'availability_slots_resolved_service',
-						serviceId: body.serviceId,
-						serviceName,
-						date: body.date,
-					});
-					return runEffect(
-						acuitySteps.readTimeSlots({
-							serviceName,
-							date: body.date,
-						}),
-					);
-				})();
+						acuitySteps.readSlotsViaUrl(
+							body.serviceId,
+							body.date,
+							createSlotReadTelemetryContext(context, 'availability_slots'),
+						),
+					)
+				: (async () => {
+						const serviceName = await resolveServiceName(
+							body.serviceId,
+							body.serviceName,
+						);
+						logRequestEvent(
+							'INFO',
+							'Availability slots resolved service name',
+							context,
+							{
+								event: 'availability_slots_resolved_service',
+								serviceId: body.serviceId,
+								serviceName,
+								date: body.date,
+							},
+						);
+						return runEffect(
+							acuitySteps.readTimeSlots({
+								serviceName,
+								date: body.date,
+							}),
+						);
+					})();
 		},
 		() => cacheReadResult,
 	);
@@ -1315,14 +1725,20 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, c
 			date: body.date,
 			errorTag: err._tag,
 			errorCode: 'code' in err ? (err as { code: string }).code : 'UNKNOWN',
-			errorMessage: 'message' in err ? (err as { message: string }).message : 'Slot lookup failed',
+			errorMessage:
+				'message' in err
+					? (err as { message: string }).message
+					: 'Slot lookup failed',
 		});
 		return sendJson(res, 500, {
 			success: false,
 			error: {
 				tag: err._tag ?? 'InfrastructureError',
 				code: 'code' in err ? (err as { code: string }).code : 'UNKNOWN',
-				message: 'message' in err ? (err as { message: string }).message : 'Slot lookup failed',
+				message:
+					'message' in err
+						? (err as { message: string }).message
+						: 'Slot lookup failed',
 			},
 		});
 	}
@@ -1338,7 +1754,11 @@ const handleAvailableSlots = async (req: IncomingMessage, res: ServerResponse, c
 	sendSuccess(res, result.value);
 };
 
-const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
+const handleCheckSlot = async (
+	req: IncomingMessage,
+	res: ServerResponse,
+	context: RequestContext,
+) => {
 	const body = (await parseBody(req)) as {
 		serviceId: string;
 		serviceName?: string;
@@ -1360,7 +1780,10 @@ const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse, contex
 				),
 			)
 		: await (async () => {
-				const serviceName = await resolveServiceName(body.serviceId, body.serviceName);
+				const serviceName = await resolveServiceName(
+					body.serviceId,
+					body.serviceName,
+				);
 				return runEffect(
 					acuitySteps.readTimeSlots({
 						serviceName,
@@ -1377,24 +1800,35 @@ const handleCheckSlot = async (req: IncomingMessage, res: ServerResponse, contex
 			datetime: body.datetime,
 			errorTag: err._tag,
 			errorCode: 'code' in err ? (err as { code: string }).code : 'UNKNOWN',
-			errorMessage: 'message' in err ? (err as { message: string }).message : 'Slot check failed',
+			errorMessage:
+				'message' in err
+					? (err as { message: string }).message
+					: 'Slot check failed',
 		});
 		return sendJson(res, 500, {
 			success: false,
 			error: {
 				tag: err._tag ?? 'InfrastructureError',
 				code: 'code' in err ? (err as { code: string }).code : 'UNKNOWN',
-				message: 'message' in err ? (err as { message: string }).message : 'Slot check failed',
+				message:
+					'message' in err
+						? (err as { message: string }).message
+						: 'Slot check failed',
 			},
 		});
 	}
 	const available = result.value.some(
-		(s: { datetime: string; available: boolean }) => s.datetime === body.datetime && s.available,
+		(s: { datetime: string; available: boolean }) =>
+			s.datetime === body.datetime && s.available,
 	);
 	sendSuccess(res, available);
 };
 
-const handleCreateBooking = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
+const handleCreateBooking = async (
+	req: IncomingMessage,
+	res: ServerResponse,
+	context: RequestContext,
+) => {
 	const body = (await parseBody(req)) as {
 		request: BookingRequest;
 		couponCode?: string;
@@ -1433,7 +1867,10 @@ const handleCreateBooking = async (req: IncomingMessage, res: ServerResponse, co
 			datetime: request.datetime,
 			errorTag: result.error._tag,
 			errorCode: 'code' in result.error ? result.error.code : 'UNKNOWN',
-			errorMessage: 'message' in result.error ? result.error.message : 'Booking create failed',
+			errorMessage:
+				'message' in result.error
+					? result.error.message
+					: 'Booking create failed',
 		});
 		return sendError(res, 500, result.error);
 	}
@@ -1450,7 +1887,11 @@ const handleDeprecatedSyncPaymentBooking = (res: ServerResponse) =>
 		},
 	});
 
-const handleEnqueueBookingJob = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
+const handleEnqueueBookingJob = async (
+	req: IncomingMessage,
+	res: ServerResponse,
+	context: RequestContext,
+) => {
 	const rawBody = await parseBody(req);
 	if (!isRecord(rawBody)) {
 		return sendValidationError(res, 'body', 'Request body must be an object');
@@ -1462,7 +1903,11 @@ const handleEnqueueBookingJob = async (req: IncomingMessage, res: ServerResponse
 		return sendValidationError(res, 'paymentRef', 'paymentRef is required');
 	}
 	if (!isNonEmptyString(rawBody.paymentProcessor)) {
-		return sendValidationError(res, 'paymentProcessor', 'paymentProcessor is required');
+		return sendValidationError(
+			res,
+			'paymentProcessor',
+			'paymentProcessor is required',
+		);
 	}
 	const coupon = optionalString(rawBody.couponCode) ?? COUPON_CODE;
 	const profile = adapterProfile();
@@ -1507,7 +1952,11 @@ const handleEnqueueBookingJob = async (req: IncomingMessage, res: ServerResponse
 	return sendAccepted(res, toEnqueueResponse(record));
 };
 
-const handleEnqueueAvailabilityRefresh = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
+const handleEnqueueAvailabilityRefresh = async (
+	req: IncomingMessage,
+	res: ServerResponse,
+	context: RequestContext,
+) => {
 	const rawBody = await parseBody(req);
 	if (!isRecord(rawBody)) {
 		return sendValidationError(res, 'body', 'Request body must be an object');
@@ -1521,26 +1970,48 @@ const handleEnqueueAvailabilityRefresh = async (req: IncomingMessage, res: Serve
 	}
 	const serviceName = optionalString(rawBody.serviceName);
 	if (serviceName === null) {
-		return sendValidationError(res, 'serviceName', 'serviceName must be a string');
+		return sendValidationError(
+			res,
+			'serviceName',
+			'serviceName must be a string',
+		);
 	}
 
 	const idempotencyKeyOverride = optionalString(rawBody.idempotencyKey);
 	if (idempotencyKeyOverride === null) {
-		return sendValidationError(res, 'idempotencyKey', 'idempotencyKey must be a string');
+		return sendValidationError(
+			res,
+			'idempotencyKey',
+			'idempotencyKey must be a string',
+		);
 	}
 
 	const month = rawBody.month;
 	const date = rawBody.date;
 	if (kind === 'dates' && !isNonEmptyString(month)) {
-		return sendValidationError(res, 'month', 'month is required for date refresh jobs');
+		return sendValidationError(
+			res,
+			'month',
+			'month is required for date refresh jobs',
+		);
 	}
 	if (kind === 'slots' && !isNonEmptyString(date)) {
-		return sendValidationError(res, 'date', 'date is required for slot refresh jobs');
+		return sendValidationError(
+			res,
+			'date',
+			'date is required for slot refresh jobs',
+		);
 	}
 
 	const idempotencyKey =
 		idempotencyKeyOverride ??
-		['availability-refresh', ACUITY_BASE_URL, kind, rawBody.serviceId, kind === 'dates' ? month : date].join(':');
+		[
+			'availability-refresh',
+			ACUITY_BASE_URL,
+			kind,
+			rawBody.serviceId,
+			kind === 'dates' ? month : date,
+		].join(':');
 
 	const job: BridgeJobCommand =
 		kind === 'dates'
@@ -1576,51 +2047,33 @@ const handleEnqueueAvailabilityRefresh = async (req: IncomingMessage, res: Serve
 	return sendAccepted(res, toEnqueueResponse(record));
 };
 
-const handleAvailabilityHeartbeat = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
-	if (!AUTH_TOKEN) {
-		return sendJson(res, 404, {
-			success: false,
-			error: {
-				tag: 'InfrastructureError',
-				code: 'NOT_FOUND',
-				message: 'Not found',
-			},
-		});
-	}
-
-	const rawBody = await parseBody(req);
-	if (!isRecord(rawBody)) {
-		return sendValidationError(res, 'body', 'Request body must be an object');
-	}
-
-	const candidates = collectHeartbeatCandidates(rawBody);
-	if (!candidates.ok) {
-		return sendValidationError(res, candidates.field, candidates.message);
-	}
-
-	const idempotencyKeyPrefix = optionalString(rawBody.idempotencyKeyPrefix);
-	if (idempotencyKeyPrefix === null) {
-		return sendValidationError(res, 'idempotencyKeyPrefix', 'idempotencyKeyPrefix must be a string');
-	}
-
-	const maxJobs = parsePositiveInteger(rawBody.maxJobs, HEARTBEAT_DEFAULT_MAX_JOBS, HEARTBEAT_MAX_JOBS_CAP);
-	const idempotencyWindowMs = parsePositiveMs(
-		rawBody.idempotencyWindowMs,
-		HEARTBEAT_DEFAULT_IDEMPOTENCY_WINDOW_MS,
+const runAvailabilityHeartbeat = async (
+	candidates: readonly AvailabilityHeartbeatCandidate[],
+	options: {
+		readonly maxJobs: number;
+		readonly idempotencyWindowMs: number;
+		readonly idempotencyKeyPrefix?: string;
+		readonly context: RequestContext;
+	},
+): Promise<AvailabilityHeartbeatResponse> => {
+	const idempotencyBucket = heartbeatIdempotencyBucket(
+		options.idempotencyWindowMs,
 	);
-	const idempotencyBucket = heartbeatIdempotencyBucket(idempotencyWindowMs);
-	const idempotencyPrefix = idempotencyKeyPrefix ?? 'availability-heartbeat';
+	const idempotencyPrefix =
+		options.idempotencyKeyPrefix ?? 'availability-heartbeat';
 	const enqueued: AvailabilityHeartbeatJob[] = [];
 	const skipped: AvailabilityHeartbeatSkipped[] = [];
 
-	for (const candidate of candidates.value) {
+	for (const candidate of candidates) {
 		const snapshot = await bridgeAsyncStore.getAvailabilitySnapshot({
 			kind: candidate.kind,
 			serviceId: candidate.serviceId,
 			scope: candidate.scope,
 			baseUrl: ACUITY_BASE_URL,
 		});
-		const freshness = snapshot ? classifyAvailabilitySnapshotFreshness(snapshot) : 'missing';
+		const freshness = snapshot
+			? classifyAvailabilitySnapshotFreshness(snapshot)
+			: 'missing';
 
 		if (freshness === 'fresh') {
 			recordAvailabilityHeartbeatJob(candidate.kind, 'skipped_fresh');
@@ -1635,7 +2088,7 @@ const handleAvailabilityHeartbeat = async (req: IncomingMessage, res: ServerResp
 			continue;
 		}
 
-		if (enqueued.length >= maxJobs) {
+		if (enqueued.length >= options.maxJobs) {
 			recordAvailabilityHeartbeatJob(candidate.kind, 'skipped_limit');
 			skipped.push({
 				kind: candidate.kind,
@@ -1724,24 +2177,194 @@ const handleAvailabilityHeartbeat = async (req: IncomingMessage, res: ServerResp
 		});
 	}
 
-	logRequestEvent('INFO', 'Availability heartbeat completed', context, {
+	logRequestEvent('INFO', 'Availability heartbeat completed', options.context, {
 		event: 'availability_heartbeat_completed',
-		considered: candidates.value.length,
+		considered: candidates.length,
 		enqueued: enqueued.length,
 		skipped: skipped.length,
-		maxJobs,
-		idempotencyWindowMs,
+		maxJobs: options.maxJobs,
+		idempotencyWindowMs: options.idempotencyWindowMs,
 	});
 
-	const response: AvailabilityHeartbeatResponse = {
+	return {
 		layer: 'bridge_availability_heartbeat',
-		considered: candidates.value.length,
+		considered: candidates.length,
 		enqueued,
 		skipped,
+		maxJobs: options.maxJobs,
+		idempotencyWindowMs: options.idempotencyWindowMs,
+	};
+};
+
+const handleAvailabilityHeartbeat = async (
+	req: IncomingMessage,
+	res: ServerResponse,
+	context: RequestContext,
+) => {
+	if (!AUTH_TOKEN) {
+		return notFoundInternalEndpoint(res);
+	}
+
+	const rawBody = await parseBody(req);
+	if (!isRecord(rawBody)) {
+		return sendValidationError(res, 'body', 'Request body must be an object');
+	}
+
+	const candidates = collectHeartbeatCandidates(rawBody);
+	if (!candidates.ok) {
+		return sendValidationError(res, candidates.field, candidates.message);
+	}
+
+	const idempotencyKeyPrefix = optionalString(rawBody.idempotencyKeyPrefix);
+	if (idempotencyKeyPrefix === null) {
+		return sendValidationError(
+			res,
+			'idempotencyKeyPrefix',
+			'idempotencyKeyPrefix must be a string',
+		);
+	}
+
+	const maxJobs = parsePositiveInteger(
+		rawBody.maxJobs,
+		HEARTBEAT_DEFAULT_MAX_JOBS,
+		HEARTBEAT_MAX_JOBS_CAP,
+	);
+	const idempotencyWindowMs = parsePositiveMs(
+		rawBody.idempotencyWindowMs,
+		HEARTBEAT_DEFAULT_IDEMPOTENCY_WINDOW_MS,
+	);
+
+	const response = await runAvailabilityHeartbeat(candidates.value, {
 		maxJobs,
 		idempotencyWindowMs,
-	};
+		idempotencyKeyPrefix,
+		context,
+	});
 	return sendAccepted(res, response);
+};
+
+const parseAvailabilityReadinessRequest = async (
+	req: IncomingMessage,
+): Promise<
+	| {
+			readonly ok: true;
+			readonly body: Record<string, unknown>;
+			readonly candidates: readonly AvailabilityHeartbeatCandidate[];
+	  }
+	| { readonly ok: false; readonly field: string; readonly message: string }
+> => {
+	const rawBody = await parseBody(req);
+	if (!isRecord(rawBody)) {
+		return {
+			ok: false,
+			field: 'body',
+			message: 'Request body must be an object',
+		};
+	}
+	const candidates = collectHeartbeatCandidates(rawBody);
+	if (!candidates.ok) return candidates;
+	return {
+		ok: true,
+		body: rawBody,
+		candidates: candidates.value,
+	};
+};
+
+const handleAvailabilityReadiness = async (
+	req: IncomingMessage,
+	res: ServerResponse,
+) => {
+	if (!AUTH_TOKEN) {
+		return notFoundInternalEndpoint(res);
+	}
+	const parsed = await parseAvailabilityReadinessRequest(req);
+	if (!parsed.ok) {
+		return sendValidationError(res, parsed.field, parsed.message);
+	}
+	const readiness = await evaluateAvailabilityReadiness(
+		parsed.candidates,
+		parseReadinessPolicy(parsed.body),
+	);
+	return sendJson(res, readiness.ready ? 200 : 409, {
+		success: true,
+		data: readiness,
+	});
+};
+
+const handleAvailabilityWaitReady = async (
+	req: IncomingMessage,
+	res: ServerResponse,
+	context: RequestContext,
+) => {
+	if (!AUTH_TOKEN) {
+		return notFoundInternalEndpoint(res);
+	}
+	const parsed = await parseAvailabilityReadinessRequest(req);
+	if (!parsed.ok) {
+		return sendValidationError(res, parsed.field, parsed.message);
+	}
+	const idempotencyKeyPrefix = optionalString(parsed.body.idempotencyKeyPrefix);
+	if (idempotencyKeyPrefix === null) {
+		return sendValidationError(
+			res,
+			'idempotencyKeyPrefix',
+			'idempotencyKeyPrefix must be a string',
+		);
+	}
+	const maxJobs = parsePositiveInteger(
+		parsed.body.maxJobs,
+		HEARTBEAT_DEFAULT_MAX_JOBS,
+		HEARTBEAT_MAX_JOBS_CAP,
+	);
+	const idempotencyWindowMs = parsePositiveMs(
+		parsed.body.idempotencyWindowMs,
+		HEARTBEAT_DEFAULT_IDEMPOTENCY_WINDOW_MS,
+	);
+	const timeoutMs = parsePositiveMs(
+		parsed.body.timeoutMs,
+		READINESS_WAIT_DEFAULT_TIMEOUT_MS,
+	);
+	const pollMs = parsePositiveMs(
+		parsed.body.pollMs,
+		READINESS_WAIT_DEFAULT_POLL_MS,
+	);
+	const policy = parseReadinessPolicy(parsed.body);
+	const startedAt = Date.now();
+	let attempts = 0;
+
+	const heartbeat = await runAvailabilityHeartbeat(parsed.candidates, {
+		maxJobs,
+		idempotencyWindowMs,
+		idempotencyKeyPrefix,
+		context,
+	});
+	let readiness = await evaluateAvailabilityReadiness(
+		parsed.candidates,
+		policy,
+	);
+	attempts += 1;
+	while (!readiness.ready && Date.now() - startedAt < timeoutMs) {
+		await wait(
+			Math.min(pollMs, Math.max(0, timeoutMs - (Date.now() - startedAt))),
+		);
+		readiness = await evaluateAvailabilityReadiness(parsed.candidates, policy);
+		attempts += 1;
+	}
+
+	const elapsedMs = Date.now() - startedAt;
+	const response: AvailabilityWaitReadyResponse = {
+		layer: 'bridge_availability_wait_ready',
+		ready: readiness.ready,
+		timedOut: !readiness.ready,
+		elapsedMs,
+		attempts,
+		heartbeat,
+		readiness,
+	};
+	return sendJson(res, readiness.ready ? 200 : 409, {
+		success: true,
+		data: response,
+	});
 };
 
 const handleGetAsyncJob = async (operationId: string, res: ServerResponse) => {
@@ -1791,7 +2414,11 @@ const handleGetAvailabilitySnapshot = async (url: URL, res: ServerResponse) => {
 	return sendSuccess(res, snapshot);
 };
 
-const handleAvailabilitySnapshotCanary = async (url: URL, res: ServerResponse, context: RequestContext) => {
+const handleAvailabilitySnapshotCanary = async (
+	url: URL,
+	res: ServerResponse,
+	context: RequestContext,
+) => {
 	if (!AUTH_TOKEN) {
 		return sendJson(res, 404, {
 			success: false,
@@ -1817,16 +2444,24 @@ const handleAvailabilitySnapshotCanary = async (url: URL, res: ServerResponse, c
 		return sendValidationError(res, 'scope', 'scope is required');
 	}
 
-	const snapshot = await readAvailabilitySnapshotLayer<readonly unknown[]>(context, {
-		kind,
-		serviceId,
-		serviceName,
-		scope,
-		enqueueRefreshOnStale: false,
-	});
+	const snapshot = await readAvailabilitySnapshotLayer<readonly unknown[]>(
+		context,
+		{
+			kind,
+			serviceId,
+			serviceName,
+			scope,
+			enqueueRefreshOnStale: false,
+		},
+	);
 
 	if (!snapshot.ok) {
-		const status = snapshot.reason === 'expired' ? 409 : snapshot.reason === 'missing' ? 404 : 500;
+		const status =
+			snapshot.reason === 'expired'
+				? 409
+				: snapshot.reason === 'missing'
+					? 404
+					: 500;
 		const code =
 			snapshot.reason === 'expired'
 				? 'SNAPSHOT_EXPIRED'
@@ -1890,7 +2525,8 @@ const server = createServer(async (req, res) => {
 	const method = req.method?.toUpperCase() ?? 'GET';
 	const context: RequestContext = {
 		requestId:
-			typeof req.headers['x-request-id'] === 'string' && req.headers['x-request-id'].length > 0
+			typeof req.headers['x-request-id'] === 'string' &&
+			req.headers['x-request-id'].length > 0
 				? req.headers['x-request-id']
 				: randomUUID(),
 		method,
@@ -1977,6 +2613,12 @@ const server = createServer(async (req, res) => {
 		if (path === '/internal/availability/heartbeat' && method === 'POST') {
 			return await handleAvailabilityHeartbeat(req, res, context);
 		}
+		if (path === '/internal/availability/readiness' && method === 'POST') {
+			return await handleAvailabilityReadiness(req, res);
+		}
+		if (path === '/internal/availability/wait-ready' && method === 'POST') {
+			return await handleAvailabilityWaitReady(req, res, context);
+		}
 		if (path.startsWith('/jobs/') && method === 'GET') {
 			const operationId = decodeURIComponent(path.slice('/jobs/'.length));
 			return await handleGetAsyncJob(operationId, res);
@@ -1991,7 +2633,9 @@ const server = createServer(async (req, res) => {
 			return await handleEnqueueBookingJob(req, res, context);
 		}
 		if (path.startsWith('/booking/jobs/') && method === 'GET') {
-			const operationId = decodeURIComponent(path.slice('/booking/jobs/'.length));
+			const operationId = decodeURIComponent(
+				path.slice('/booking/jobs/'.length),
+			);
 			return await handleGetAsyncJob(operationId, res);
 		}
 

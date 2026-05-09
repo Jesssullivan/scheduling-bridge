@@ -33,22 +33,24 @@ HTTP Request
 
 ## Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check (no auth required) |
-| GET | `/services` | List appointment types via `SERVICES_JSON` -> BUSINESS -> scraper fallback |
-| GET | `/services/:id` | Get a specific service |
-| POST | `/availability/dates` | Available dates for a service |
-| POST | `/availability/slots` | Time slots for a specific date |
-| POST | `/availability/check` | Check if a slot is available |
-| POST | `/availability/refresh` | Enqueue async availability refresh |
-| GET | `/availability/snapshot` | Read latest durable availability snapshot |
-| GET | `/internal/availability/snapshot-canary` | Auth-gated durable snapshot layer proof |
-| POST | `/internal/availability/heartbeat` | Auth-gated bounded availability refresh heartbeat |
-| POST | `/booking/create` | Create a booking (standard) |
-| POST | `/booking/create-with-payment` | Deprecated sync paid booking endpoint; returns `410 ASYNC_REQUIRED` |
-| POST | `/booking/jobs` | Enqueue async paid booking job |
-| GET | `/jobs/:operationId` | Read async job status |
+| Method | Path                                     | Description                                                                |
+| ------ | ---------------------------------------- | -------------------------------------------------------------------------- |
+| GET    | `/health`                                | Health check (no auth required)                                            |
+| GET    | `/services`                              | List appointment types via `SERVICES_JSON` -> BUSINESS -> scraper fallback |
+| GET    | `/services/:id`                          | Get a specific service                                                     |
+| POST   | `/availability/dates`                    | Available dates for a service                                              |
+| POST   | `/availability/slots`                    | Time slots for a specific date                                             |
+| POST   | `/availability/check`                    | Check if a slot is available                                               |
+| POST   | `/availability/refresh`                  | Enqueue async availability refresh                                         |
+| GET    | `/availability/snapshot`                 | Read latest durable availability snapshot                                  |
+| GET    | `/internal/availability/snapshot-canary` | Auth-gated durable snapshot layer proof                                    |
+| POST   | `/internal/availability/heartbeat`       | Auth-gated bounded availability refresh heartbeat                          |
+| POST   | `/internal/availability/readiness`       | Auth-gated read-only snapshot/queue readiness check                        |
+| POST   | `/internal/availability/wait-ready`      | Auth-gated bounded heartbeat + readiness wait for deploy gates             |
+| POST   | `/booking/create`                        | Create a booking (standard)                                                |
+| POST   | `/booking/create-with-payment`           | Deprecated sync paid booking endpoint; returns `410 ASYNC_REQUIRED`        |
+| POST   | `/booking/jobs`                          | Enqueue async paid booking job                                             |
+| GET    | `/jobs/:operationId`                     | Read async job status                                                      |
 
 Availability date/slot request handlers are snapshot-first after Redis read-cache
 misses: a fresh durable snapshot returns immediately, a stale-but-not-expired
@@ -73,17 +75,17 @@ weighted demand:
 
 ```json
 {
-  "maxJobs": 12,
-  "idempotencyWindowMs": 300000,
-  "demands": [
-    {
-      "serviceId": "53178494",
-      "serviceName": "TMD single session",
-      "weight": 10,
-      "months": ["2026-06", "2026-07"],
-      "dates": ["2026-06-15"]
-    }
-  ]
+	"maxJobs": 12,
+	"idempotencyWindowMs": 300000,
+	"demands": [
+		{
+			"serviceId": "53178494",
+			"serviceName": "TMD single session",
+			"weight": 10,
+			"months": ["2026-06", "2026-07"],
+			"dates": ["2026-06-15"]
+		}
+	]
 }
 ```
 
@@ -98,6 +100,21 @@ read. If an idempotency key resolves to a retryable failed job, heartbeat
 requeues that existing operation before reporting it as work; non-retryable
 terminal jobs are reported under `skipped` instead of masquerading as newly
 enqueued refreshes.
+
+`POST /internal/availability/readiness` is the operator read path for
+cutover/deploy proof. It accepts the same demand shape as heartbeat, does not
+enqueue jobs, and returns `200` when every requested date/slot scope has a
+snapshot newer than the configured freshness floor and the async queue is
+healthy. It returns `409` with explicit blockers when any scope is missing,
+stale, expired, retryable-failed, or when the oldest runnable queue item is too
+old. Defaults are `snapshotFreshnessFloorMs=90000` and
+`maxOldestQueuedAgeMs=120000`.
+
+`POST /internal/availability/wait-ready` is the bounded deploy/operator action.
+It runs the existing heartbeat enqueue/requeue logic once, then polls the
+read-only readiness evaluator until ready or timeout. It never runs Acuity
+browser automation in the HTTP request; workers still own Acuity reads. Defaults
+are `timeoutMs=60000` and `pollMs=1000`.
 
 ### Health Contract
 
@@ -129,41 +146,45 @@ dashboard state when `/health` is available.
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `PORT` | No | `3001` | Server port |
-| `ACUITY_BASE_URL` | No | `https://example.as.me` | Acuity scheduling page URL |
-| `BRIDGE_DATABASE_URL` | For strict async runtime | -- | Postgres queue/snapshot store for async jobs; takes precedence over Redis |
-| `BRIDGE_DATABASE_SSL` | No | `false` | Enable SSL for `BRIDGE_DATABASE_URL` |
-| `BRIDGE_DATABASE_MIGRATE` | No | `true` | Run async queue/snapshot schema creation at startup |
-| `REDIS_URL` | For K8s read cache / Redis async runtime | -- | Redis read cache plus async queue/snapshot store when `BRIDGE_DATABASE_URL` is unset |
-| `REDIS_PASSWORD` | No | -- | Password for `REDIS_URL` |
-| `BRIDGE_REDIS_ASYNC_PREFIX` | No | `bridge-async:v1` | Redis key prefix for async jobs and snapshots |
-| `BRIDGE_INLINE_WORKER_ENABLED` | No | `true` when Postgres or Redis is configured | Drain async jobs inside the HTTP container; set `false` only when a separate worker deployment is active |
-| `BRIDGE_WORKER_POLL_MS` | No | `1000` | Worker queue poll interval |
-| `BRIDGE_WORKER_BATCH_SIZE` | No | `5` | Maximum jobs drained per worker poll |
-| `BRIDGE_SNAPSHOT_STALE_MS` | No | `300000` | Age after which a durable availability snapshot is served stale and refresh is queued |
-| `BRIDGE_SNAPSHOT_EXPIRES_MS` | No | `1800000` | Age after which a durable availability snapshot is ignored and a live Acuity read is required |
-| `BRIDGE_HEARTBEAT_MAX_JOBS` | No | `12` | Default max refresh jobs enqueued by one internal heartbeat request; request values are capped at `100` |
-| `BRIDGE_HEARTBEAT_IDEMPOTENCY_WINDOW_MS` | No | `300000` | Default time bucket for heartbeat idempotency keys |
-| `AUTH_TOKEN` | Recommended | -- | Bearer token for all endpoints (except /health) |
-| `ACUITY_BYPASS_COUPON` | For payment bypass | -- | 100% gift certificate code |
-| `PLAYWRIGHT_HEADLESS` | No | `true` | Run browser headless |
-| `PLAYWRIGHT_TIMEOUT` | No | `30000` | Page operation timeout (ms) |
-| `CHROMIUM_EXECUTABLE_PATH` | No | -- | Custom Chromium path (for Lambda/serverless) |
-| `CHROMIUM_LAUNCH_ARGS` | No | -- | Comma-separated Chromium args |
-| `SERVICES_JSON` | No | -- | Optional static service catalog to bypass live Acuity reads |
-| `ACUITY_SERVICE_CACHE_TTL_MS` | No | `300000` | TTL for cached live service catalogs before BUSINESS/scraper refresh |
-| `ACUITY_URL_READ_NETWORK_IDLE_MS` | No | `1500` | Bounded post-navigation network-idle settle for direct URL availability reads; set `0` to skip |
-| `ACUITY_DATE_PREWARM_MONTHS` | No | `1` | Number of future months queued for async date refresh after a successful date read; max `3`, set `0` to disable |
-| `ACUITY_SLOT_PREWARM_LIMIT` | No | `1` | Number of first available dates to warm in the slots cache after a successful Acuity dates read; max `3`, set `0` to disable |
-| `SCHEDULING_BRIDGE_SLOT_PROFILE_THRESHOLD_MS` | No | `1500` | Threshold in ms for logging long-tail slot-read profile events |
-| `SCHEDULING_BRIDGE_PROFILE_SLOT_READS` | No | `false` | Force logging of slot-read profile events even when under threshold |
-| `MIDDLEWARE_RELEASE_SHA` | No | -- | Release commit SHA exposed via `/health` |
-| `MIDDLEWARE_RELEASE_REF` | No | -- | Release ref/tag exposed via `/health` |
-| `MIDDLEWARE_RELEASE_VERSION` | No | -- | Release version exposed via `/health` |
-| `MIDDLEWARE_RELEASE_BUILT_AT` | No | -- | Build timestamp exposed via `/health` |
-| `MIDDLEWARE_BUILD_TIMESTAMP` | No | -- | Legacy fallback build timestamp for `/health` |
+| Variable                                      | Required                                 | Default                                     | Description                                                                                                                  |
+| --------------------------------------------- | ---------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                                        | No                                       | `3001`                                      | Server port                                                                                                                  |
+| `ACUITY_BASE_URL`                             | No                                       | `https://example.as.me`                     | Acuity scheduling page URL                                                                                                   |
+| `BRIDGE_DATABASE_URL`                         | For strict async runtime                 | --                                          | Postgres queue/snapshot store for async jobs; takes precedence over Redis                                                    |
+| `BRIDGE_DATABASE_SSL`                         | No                                       | `false`                                     | Enable SSL for `BRIDGE_DATABASE_URL`                                                                                         |
+| `BRIDGE_DATABASE_MIGRATE`                     | No                                       | `true`                                      | Run async queue/snapshot schema creation at startup                                                                          |
+| `REDIS_URL`                                   | For K8s read cache / Redis async runtime | --                                          | Redis read cache plus async queue/snapshot store when `BRIDGE_DATABASE_URL` is unset                                         |
+| `REDIS_PASSWORD`                              | No                                       | --                                          | Password for `REDIS_URL`                                                                                                     |
+| `BRIDGE_REDIS_ASYNC_PREFIX`                   | No                                       | `bridge-async:v1`                           | Redis key prefix for async jobs and snapshots                                                                                |
+| `BRIDGE_INLINE_WORKER_ENABLED`                | No                                       | `true` when Postgres or Redis is configured | Drain async jobs inside the HTTP container; set `false` only when a separate worker deployment is active                     |
+| `BRIDGE_WORKER_POLL_MS`                       | No                                       | `1000`                                      | Worker queue poll interval                                                                                                   |
+| `BRIDGE_WORKER_BATCH_SIZE`                    | No                                       | `5`                                         | Maximum jobs drained per worker poll                                                                                         |
+| `BRIDGE_SNAPSHOT_STALE_MS`                    | No                                       | `300000`                                    | Age after which a durable availability snapshot is served stale and refresh is queued                                        |
+| `BRIDGE_SNAPSHOT_EXPIRES_MS`                  | No                                       | `1800000`                                   | Age after which a durable availability snapshot is ignored and a live Acuity read is required                                |
+| `BRIDGE_HEARTBEAT_MAX_JOBS`                   | No                                       | `12`                                        | Default max refresh jobs enqueued by one internal heartbeat request; request values are capped at `100`                      |
+| `BRIDGE_HEARTBEAT_IDEMPOTENCY_WINDOW_MS`      | No                                       | `300000`                                    | Default time bucket for heartbeat idempotency keys                                                                           |
+| `BRIDGE_READINESS_FRESHNESS_FLOOR_MS`         | No                                       | `90000`                                     | Default required snapshot freshness for internal readiness gates                                                             |
+| `BRIDGE_READINESS_MAX_OLDEST_QUEUED_AGE_MS`   | No                                       | `120000`                                    | Default maximum oldest runnable queue age before readiness fails                                                             |
+| `BRIDGE_READINESS_WAIT_TIMEOUT_MS`            | No                                       | `60000`                                     | Default timeout for `/internal/availability/wait-ready`                                                                      |
+| `BRIDGE_READINESS_WAIT_POLL_MS`               | No                                       | `1000`                                      | Default poll interval for `/internal/availability/wait-ready`                                                                |
+| `AUTH_TOKEN`                                  | Recommended                              | --                                          | Bearer token for all endpoints (except /health)                                                                              |
+| `ACUITY_BYPASS_COUPON`                        | For payment bypass                       | --                                          | 100% gift certificate code                                                                                                   |
+| `PLAYWRIGHT_HEADLESS`                         | No                                       | `true`                                      | Run browser headless                                                                                                         |
+| `PLAYWRIGHT_TIMEOUT`                          | No                                       | `30000`                                     | Page operation timeout (ms)                                                                                                  |
+| `CHROMIUM_EXECUTABLE_PATH`                    | No                                       | --                                          | Custom Chromium path (for Lambda/serverless)                                                                                 |
+| `CHROMIUM_LAUNCH_ARGS`                        | No                                       | --                                          | Comma-separated Chromium args                                                                                                |
+| `SERVICES_JSON`                               | No                                       | --                                          | Optional static service catalog to bypass live Acuity reads                                                                  |
+| `ACUITY_SERVICE_CACHE_TTL_MS`                 | No                                       | `300000`                                    | TTL for cached live service catalogs before BUSINESS/scraper refresh                                                         |
+| `ACUITY_URL_READ_NETWORK_IDLE_MS`             | No                                       | `1500`                                      | Bounded post-navigation network-idle settle for direct URL availability reads; set `0` to skip                               |
+| `ACUITY_DATE_PREWARM_MONTHS`                  | No                                       | `1`                                         | Number of future months queued for async date refresh after a successful date read; max `3`, set `0` to disable              |
+| `ACUITY_SLOT_PREWARM_LIMIT`                   | No                                       | `1`                                         | Number of first available dates to warm in the slots cache after a successful Acuity dates read; max `3`, set `0` to disable |
+| `SCHEDULING_BRIDGE_SLOT_PROFILE_THRESHOLD_MS` | No                                       | `1500`                                      | Threshold in ms for logging long-tail slot-read profile events                                                               |
+| `SCHEDULING_BRIDGE_PROFILE_SLOT_READS`        | No                                       | `false`                                     | Force logging of slot-read profile events even when under threshold                                                          |
+| `MIDDLEWARE_RELEASE_SHA`                      | No                                       | --                                          | Release commit SHA exposed via `/health`                                                                                     |
+| `MIDDLEWARE_RELEASE_REF`                      | No                                       | --                                          | Release ref/tag exposed via `/health`                                                                                        |
+| `MIDDLEWARE_RELEASE_VERSION`                  | No                                       | --                                          | Release version exposed via `/health`                                                                                        |
+| `MIDDLEWARE_RELEASE_BUILT_AT`                 | No                                       | --                                          | Build timestamp exposed via `/health`                                                                                        |
+| `MIDDLEWARE_BUILD_TIMESTAMP`                  | No                                       | --                                          | Legacy fallback build timestamp for `/health`                                                                                |
 
 ### Observability
 
@@ -173,6 +194,8 @@ The bridge emits NDJSON logs to stdout/stderr for runtime analysis.
 - request handlers emit request-scoped structured events, including `requestId`
 - long-tail slot reads emit `slot_read_profile` events with phase timings
 - `SCHEDULING_BRIDGE_PROFILE_SLOT_READS=1` forces profile emission for all slot reads
+- internal readiness emits queue depth, oldest queue age, snapshot age, readiness
+  result, and per-scope freshness metrics
 
 ## Deployment
 
