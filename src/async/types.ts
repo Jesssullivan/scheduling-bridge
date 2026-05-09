@@ -157,8 +157,52 @@ export interface EnqueueAvailabilityRefreshRequest {
 	readonly idempotencyKey?: string;
 }
 
+export interface AvailabilityHeartbeatDemand {
+	readonly serviceId: string;
+	readonly serviceName?: string;
+	readonly weight?: number;
+	readonly months?: readonly string[];
+	readonly dates?: readonly string[];
+}
+
+export interface AvailabilityHeartbeatRequest {
+	readonly demands: readonly AvailabilityHeartbeatDemand[];
+	readonly maxJobs?: number;
+	readonly idempotencyWindowMs?: number;
+	readonly idempotencyKeyPrefix?: string;
+}
+
 export interface EnqueueBridgeJobResponse {
 	readonly operationId: string;
 	readonly status: BridgeJobStatus;
 	readonly statusUrl: string;
+}
+
+export interface AvailabilityHeartbeatJob {
+	readonly operationId: string;
+	readonly status: BridgeJobStatus;
+	readonly statusUrl: string;
+	readonly kind: AvailabilitySnapshotKind;
+	readonly serviceId: string;
+	readonly scope: string;
+	readonly freshness: 'missing' | 'stale' | 'expired';
+	readonly weight: number;
+}
+
+export interface AvailabilityHeartbeatSkipped {
+	readonly kind: AvailabilitySnapshotKind;
+	readonly serviceId: string;
+	readonly scope: string;
+	readonly reason: 'fresh' | 'limit';
+	readonly freshness?: 'fresh';
+	readonly weight: number;
+}
+
+export interface AvailabilityHeartbeatResponse {
+	readonly layer: 'bridge_availability_heartbeat';
+	readonly considered: number;
+	readonly enqueued: readonly AvailabilityHeartbeatJob[];
+	readonly skipped: readonly AvailabilityHeartbeatSkipped[];
+	readonly maxJobs: number;
+	readonly idempotencyWindowMs: number;
 }

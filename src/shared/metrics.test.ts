@@ -7,6 +7,7 @@ import {
 	observePageOpEffect,
 	recordCacheHit,
 	recordCacheMiss,
+	recordAvailabilityHeartbeatJob,
 	recordAvailabilitySnapshotServed,
 	recordAvailabilitySnapshotRead,
 	renderMetrics,
@@ -30,6 +31,7 @@ describe('metrics', () => {
 		expect(names).toContain('acuity_bridge_read_duration_seconds');
 		expect(names).toContain('acuity_availability_snapshot_served_total');
 		expect(names).toContain('acuity_availability_snapshot_read_duration_seconds');
+		expect(names).toContain('acuity_availability_heartbeat_jobs_total');
 	});
 
 	it('renders Prometheus text format', async () => {
@@ -132,6 +134,18 @@ describe('bridge read cache metrics wiring', () => {
 			freshness: 'fresh',
 			outcome: 'hit',
 		});
+		expect(after).toBe(before + 1);
+	});
+
+	it('increments heartbeat decision counters', async () => {
+		const heartbeatCounter = async (kind: string, action: string): Promise<number> => {
+			const snap = await metrics.availabilityHeartbeatJobsTotal.get();
+			return snap.values.find((v) => v.labels.kind === kind && v.labels.action === action)?.value ?? 0;
+		};
+
+		const before = await heartbeatCounter('dates', 'enqueued');
+		recordAvailabilityHeartbeatJob('dates', 'enqueued');
+		const after = await heartbeatCounter('dates', 'enqueued');
 		expect(after).toBe(before + 1);
 	});
 });

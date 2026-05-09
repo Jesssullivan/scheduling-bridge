@@ -69,6 +69,11 @@ export {
 export type {
 	AppointmentCommand,
 	AvailabilityDatesRefreshCommand,
+	AvailabilityHeartbeatDemand,
+	AvailabilityHeartbeatJob,
+	AvailabilityHeartbeatRequest,
+	AvailabilityHeartbeatResponse,
+	AvailabilityHeartbeatSkipped,
 	AvailabilitySlotsRefreshCommand,
 	AvailabilitySnapshot,
 	AvailabilitySnapshotKind,

@@ -314,6 +314,28 @@ describe('bridge async protocol endpoints', () => {
 		});
 	});
 
+	it('hides the internal availability heartbeat unless bridge auth is configured', async () => {
+		const running = await listen();
+		activeServer = running.server;
+
+		const response = await fetch(`${running.baseUrl}/internal/availability/heartbeat`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				demands: [{ serviceId: service.id, months: ['2026-06'] }],
+			}),
+		});
+		const body = await response.json();
+
+		expect(response.status).toBe(404);
+		expect(body).toMatchObject({
+			success: false,
+			error: {
+				code: 'NOT_FOUND',
+			},
+		});
+	});
+
 	it('auth-gates the internal snapshot canary and records durable snapshot layer metrics', async () => {
 		process.env.AUTH_TOKEN = 'canary-token';
 		const store = createInMemoryBridgeAsyncStore();
@@ -400,6 +422,149 @@ describe('bridge async protocol endpoints', () => {
 			}),
 		).toBe(durationBefore + 1);
 		await expect(store.listReadyJobs(10)).resolves.toEqual([]);
+	});
+
+	it('enqueues weighted heartbeat refresh jobs without refreshing fresh snapshots', async () => {
+		process.env.AUTH_TOKEN = 'heartbeat-token';
+		const store = createInMemoryBridgeAsyncStore();
+		await store.upsertAvailabilitySnapshot({
+			kind: 'dates',
+			serviceId: service.id,
+			scope: '2026-06',
+			adapterProfile: {
+				backend: 'acuity',
+				baseUrl: 'https://example.as.me',
+			},
+			value: [{ date: '2026-06-15' }],
+			observedAt: '2999-01-01T00:00:00.000Z',
+			staleAt: '2999-01-01T00:05:00.000Z',
+			expiresAt: '2999-01-01T00:30:00.000Z',
+		});
+		await store.upsertAvailabilitySnapshot({
+			kind: 'slots',
+			serviceId: service.id,
+			scope: '2026-06-15',
+			adapterProfile: {
+				backend: 'acuity',
+				baseUrl: 'https://example.as.me',
+			},
+			value: [{ time: '4:00 PM', datetime: '2026-06-15T16:00:00-04:00' }],
+			observedAt: '2000-01-01T00:00:00.000Z',
+			staleAt: '2000-01-01T00:01:00.000Z',
+			expiresAt: '2000-01-01T00:30:00.000Z',
+		});
+		const running = await listen(store);
+		activeServer = running.server;
+		const url = `${running.baseUrl}/internal/availability/heartbeat`;
+		const payload = {
+			maxJobs: 2,
+			idempotencyWindowMs: 60_000,
+			idempotencyKeyPrefix: 'test-heartbeat',
+			demands: [
+				{
+					serviceId: service.id,
+					serviceName: service.name,
+					weight: 10,
+					months: ['2026-06', '2026-07'],
+					dates: ['2026-06-15'],
+				},
+				{
+					serviceId: service.id,
+					weight: 1,
+					months: ['2026-08'],
+				},
+			],
+		};
+
+		const unauthorized = await fetch(url, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload),
+		});
+		expect(unauthorized.status).toBe(401);
+
+		const firstResponse = await fetch(url, {
+			method: 'POST',
+			headers: {
+				Authorization: 'Bearer heartbeat-token',
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify(payload),
+		});
+		const first = await firstResponse.json();
+
+		expect(firstResponse.status).toBe(202);
+		expect(first).toMatchObject({
+			success: true,
+			data: {
+				layer: 'bridge_availability_heartbeat',
+				considered: 4,
+				maxJobs: 2,
+				idempotencyWindowMs: 60_000,
+				enqueued: [
+					{
+						kind: 'dates',
+						serviceId: service.id,
+						scope: '2026-07',
+						freshness: 'missing',
+						weight: 10,
+					},
+					{
+						kind: 'slots',
+						serviceId: service.id,
+						scope: '2026-06-15',
+						freshness: 'expired',
+						weight: 10,
+					},
+				],
+				skipped: expect.arrayContaining([
+					expect.objectContaining({
+						kind: 'dates',
+						serviceId: service.id,
+						scope: '2026-06',
+						reason: 'fresh',
+						freshness: 'fresh',
+					}),
+					expect.objectContaining({
+						kind: 'dates',
+						serviceId: service.id,
+						scope: '2026-08',
+						reason: 'limit',
+					}),
+				]),
+			},
+		});
+
+		const readyJobs = await store.listReadyJobs(10);
+		expect(readyJobs).toHaveLength(2);
+		expect(readyJobs).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: 'availability_dates_refresh',
+					idempotencyKey: expect.stringContaining('test-heartbeat:https://example.as.me:dates:53178494:2026-07:'),
+				}),
+				expect.objectContaining({
+					kind: 'availability_slots_refresh',
+					idempotencyKey: expect.stringContaining('test-heartbeat:https://example.as.me:slots:53178494:2026-06-15:'),
+				}),
+			]),
+		);
+
+		const secondResponse = await fetch(url, {
+			method: 'POST',
+			headers: {
+				Authorization: 'Bearer heartbeat-token',
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify(payload),
+		});
+		const second = await secondResponse.json();
+
+		expect(secondResponse.status).toBe(202);
+		expect(second.data.enqueued.map((job: { operationId: string }) => job.operationId)).toEqual(
+			first.data.enqueued.map((job: { operationId: string }) => job.operationId),
+		);
+		await expect(store.listReadyJobs(10)).resolves.toHaveLength(2);
 	});
 
 	it('ignores expired request-path snapshots and refreshes from Acuity', async () => {

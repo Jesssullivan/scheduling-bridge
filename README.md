@@ -44,6 +44,7 @@ HTTP Request
 | POST | `/availability/refresh` | Enqueue async availability refresh |
 | GET | `/availability/snapshot` | Read latest durable availability snapshot |
 | GET | `/internal/availability/snapshot-canary` | Auth-gated durable snapshot layer proof |
+| POST | `/internal/availability/heartbeat` | Auth-gated bounded availability refresh heartbeat |
 | POST | `/booking/create` | Create a booking (standard) |
 | POST | `/booking/create-with-payment` | Deprecated sync paid booking endpoint; returns `410 ASYNC_REQUIRED` |
 | POST | `/booking/jobs` | Enqueue async paid booking job |
@@ -64,6 +65,33 @@ duration. Successful canary hits increment
 `acuity_availability_snapshot_served_total` and
 `acuity_availability_snapshot_read_duration_seconds`, so operators can prove the
 bridge snapshot layer separately from app Redis hits and bridge Redis hits.
+
+`POST /internal/availability/heartbeat` is the operator/cron entrypoint for
+queue-driven availability refresh. It is hidden unless `AUTH_TOKEN` is
+configured and requires bearer auth when enabled. The request body contains
+weighted demand:
+
+```json
+{
+  "maxJobs": 12,
+  "idempotencyWindowMs": 300000,
+  "demands": [
+    {
+      "serviceId": "53178494",
+      "serviceName": "TMD single session",
+      "weight": 10,
+      "months": ["2026-06", "2026-07"],
+      "dates": ["2026-06-15"]
+    }
+  ]
+}
+```
+
+The heartbeat sorts demand by descending weight, skips fresh durable snapshots,
+enqueues stale/expired/missing date and slot refresh jobs up to `maxJobs`, and
+uses a time-windowed idempotency key so frequent cron runs do not create
+duplicate job storms. It does not run browser automation on the HTTP request
+path; the async worker owns the Acuity read.
 
 ### Health Contract
 
@@ -110,6 +138,8 @@ dashboard state when `/health` is available.
 | `BRIDGE_WORKER_BATCH_SIZE` | No | `5` | Maximum jobs drained per worker poll |
 | `BRIDGE_SNAPSHOT_STALE_MS` | No | `300000` | Age after which a durable availability snapshot is served stale and refresh is queued |
 | `BRIDGE_SNAPSHOT_EXPIRES_MS` | No | `1800000` | Age after which a durable availability snapshot is ignored and a live Acuity read is required |
+| `BRIDGE_HEARTBEAT_MAX_JOBS` | No | `12` | Default max refresh jobs enqueued by one internal heartbeat request; request values are capped at `100` |
+| `BRIDGE_HEARTBEAT_IDEMPOTENCY_WINDOW_MS` | No | `300000` | Default time bucket for heartbeat idempotency keys |
 | `AUTH_TOKEN` | Recommended | -- | Bearer token for all endpoints (except /health) |
 | `ACUITY_BYPASS_COUPON` | For payment bypass | -- | 100% gift certificate code |
 | `PLAYWRIGHT_HEADLESS` | No | `true` | Run browser headless |

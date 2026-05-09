@@ -15,6 +15,7 @@
  *   POST /availability/refresh      - Enqueue async availability refresh
  *   GET  /availability/snapshot     - Read latest availability snapshot
  *   GET  /internal/availability/snapshot-canary - Auth-gated durable snapshot proof
+ *   POST /internal/availability/heartbeat - Auth-gated bounded refresh heartbeat
  *   POST /booking/create            - Create booking (standard)
  *   POST /booking/create-with-payment - Deprecated sync paid booking endpoint
  *   POST /booking/jobs              - Enqueue async paid booking job
@@ -57,6 +58,7 @@ import { getCached as redisL2GetCached, RedisL2 } from '../shared/redis-l2.js';
 import { runBridgeReadCached, type BridgeReadCacheClient } from '../shared/bridge-read-cache.js';
 import {
 	metrics,
+	recordAvailabilityHeartbeatJob,
 	recordAvailabilitySnapshotRead,
 	recordAvailabilitySnapshotServed,
 	renderMetrics,
@@ -85,6 +87,9 @@ import { createRedisBridgeAsyncStore } from '../async/redis-store.js';
 import type {
 	AvailabilitySnapshot,
 	AvailabilitySnapshotKind,
+	AvailabilityHeartbeatJob,
+	AvailabilityHeartbeatResponse,
+	AvailabilityHeartbeatSkipped,
 	BridgeAdapterProfile,
 	BridgeJobCommand,
 	BridgeJobRecord,
@@ -142,6 +147,15 @@ const READ_CACHE_WAIT_TIMEOUT_MS = (() => {
 })();
 const DATE_PREWARM_MONTHS = getDatePrewarmMonths();
 const SLOT_PREWARM_LIMIT = getSlotPrewarmLimit();
+const HEARTBEAT_DEFAULT_MAX_JOBS = (() => {
+	const parsed = Number(process.env.BRIDGE_HEARTBEAT_MAX_JOBS ?? 12);
+	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 12;
+})();
+const HEARTBEAT_MAX_JOBS_CAP = 100;
+const HEARTBEAT_DEFAULT_IDEMPOTENCY_WINDOW_MS = (() => {
+	const parsed = Number(process.env.BRIDGE_HEARTBEAT_IDEMPOTENCY_WINDOW_MS ?? 5 * 60_000);
+	return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 5 * 60_000;
+})();
 
 const browserConfig: BrowserConfig = {
 	...defaultBrowserConfig,
@@ -512,6 +526,142 @@ const optionalString = (value: unknown): string | undefined | null => {
 	if (value === undefined) return undefined;
 	return typeof value === 'string' ? value : null;
 };
+
+const YEAR_MONTH_RE = /^\d{4}-\d{2}$/;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+interface AvailabilityHeartbeatCandidate {
+	readonly kind: AvailabilitySnapshotKind;
+	readonly serviceId: string;
+	readonly serviceName?: string;
+	readonly scope: string;
+	readonly weight: number;
+	readonly order: number;
+}
+
+const parsePositiveInteger = (
+	value: unknown,
+	fallback: number,
+	max: number,
+): number => {
+	if (value === undefined) return Math.min(fallback, max);
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) return Math.min(fallback, max);
+	return Math.min(Math.floor(parsed), max);
+};
+
+const parsePositiveMs = (value: unknown, fallback: number): number => {
+	if (value === undefined) return fallback;
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+	return Math.floor(parsed);
+};
+
+const collectStringList = (
+	value: unknown,
+	pattern: RegExp,
+	field: string,
+): { ok: true; value: readonly string[] } | { ok: false; field: string; message: string } => {
+	if (value === undefined) return { ok: true, value: [] };
+	if (!Array.isArray(value)) {
+		return { ok: false, field, message: `${field} must be an array` };
+	}
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const [index, item] of value.entries()) {
+		if (typeof item !== 'string' || !pattern.test(item)) {
+			return {
+				ok: false,
+				field: `${field}[${index}]`,
+				message: `${field}[${index}] has an invalid format`,
+			};
+		}
+		if (!seen.has(item)) {
+			seen.add(item);
+			out.push(item);
+		}
+	}
+	return { ok: true, value: out };
+};
+
+const collectHeartbeatCandidates = (
+	rawBody: Record<string, unknown>,
+): { ok: true; value: readonly AvailabilityHeartbeatCandidate[] } | { ok: false; field: string; message: string } => {
+	if (!Array.isArray(rawBody.demands)) {
+		return { ok: false, field: 'demands', message: 'demands must be an array' };
+	}
+	const commonMonths = collectStringList(rawBody.months, YEAR_MONTH_RE, 'months');
+	if (!commonMonths.ok) return commonMonths;
+	const commonDates = collectStringList(rawBody.dates, ISO_DATE_RE, 'dates');
+	if (!commonDates.ok) return commonDates;
+
+	const candidates: AvailabilityHeartbeatCandidate[] = [];
+	for (const [demandIndex, demand] of rawBody.demands.entries()) {
+		if (!isRecord(demand)) {
+			return {
+				ok: false,
+				field: `demands[${demandIndex}]`,
+				message: `demands[${demandIndex}] must be an object`,
+			};
+		}
+		if (!isNonEmptyString(demand.serviceId)) {
+			return {
+				ok: false,
+				field: `demands[${demandIndex}].serviceId`,
+				message: 'serviceId is required',
+			};
+		}
+		const serviceName = optionalString(demand.serviceName);
+		if (serviceName === null) {
+			return {
+				ok: false,
+				field: `demands[${demandIndex}].serviceName`,
+				message: 'serviceName must be a string',
+			};
+		}
+		const months = collectStringList(demand.months ?? commonMonths.value, YEAR_MONTH_RE, `demands[${demandIndex}].months`);
+		if (!months.ok) return months;
+		const dates = collectStringList(demand.dates ?? commonDates.value, ISO_DATE_RE, `demands[${demandIndex}].dates`);
+		if (!dates.ok) return dates;
+		if (months.value.length === 0 && dates.value.length === 0) {
+			return {
+				ok: false,
+				field: `demands[${demandIndex}]`,
+				message: 'each demand must include at least one month or date',
+			};
+		}
+		const parsedWeight = Number(demand.weight ?? 0);
+		const weight = Number.isFinite(parsedWeight) ? parsedWeight : 0;
+		for (const month of months.value) {
+			candidates.push({
+				kind: 'dates',
+				serviceId: demand.serviceId,
+				serviceName,
+				scope: month,
+				weight,
+				order: candidates.length,
+			});
+		}
+		for (const date of dates.value) {
+			candidates.push({
+				kind: 'slots',
+				serviceId: demand.serviceId,
+				serviceName,
+				scope: date,
+				weight,
+				order: candidates.length,
+			});
+		}
+	}
+
+	return {
+		ok: true,
+		value: candidates.sort((a, b) => b.weight - a.weight || a.order - b.order),
+	};
+};
+
+const heartbeatIdempotencyBucket = (windowMs: number, now = Date.now()): number =>
+	Math.floor(now / Math.max(1, windowMs));
 
 const runCachedBridgeRead = async <A>(
 	context: RequestContext,
@@ -1369,6 +1519,139 @@ const handleEnqueueAvailabilityRefresh = async (req: IncomingMessage, res: Serve
 	return sendAccepted(res, toEnqueueResponse(record));
 };
 
+const handleAvailabilityHeartbeat = async (req: IncomingMessage, res: ServerResponse, context: RequestContext) => {
+	if (!AUTH_TOKEN) {
+		return sendJson(res, 404, {
+			success: false,
+			error: {
+				tag: 'InfrastructureError',
+				code: 'NOT_FOUND',
+				message: 'Not found',
+			},
+		});
+	}
+
+	const rawBody = await parseBody(req);
+	if (!isRecord(rawBody)) {
+		return sendValidationError(res, 'body', 'Request body must be an object');
+	}
+
+	const candidates = collectHeartbeatCandidates(rawBody);
+	if (!candidates.ok) {
+		return sendValidationError(res, candidates.field, candidates.message);
+	}
+
+	const idempotencyKeyPrefix = optionalString(rawBody.idempotencyKeyPrefix);
+	if (idempotencyKeyPrefix === null) {
+		return sendValidationError(res, 'idempotencyKeyPrefix', 'idempotencyKeyPrefix must be a string');
+	}
+
+	const maxJobs = parsePositiveInteger(rawBody.maxJobs, HEARTBEAT_DEFAULT_MAX_JOBS, HEARTBEAT_MAX_JOBS_CAP);
+	const idempotencyWindowMs = parsePositiveMs(
+		rawBody.idempotencyWindowMs,
+		HEARTBEAT_DEFAULT_IDEMPOTENCY_WINDOW_MS,
+	);
+	const idempotencyBucket = heartbeatIdempotencyBucket(idempotencyWindowMs);
+	const idempotencyPrefix = idempotencyKeyPrefix ?? 'availability-heartbeat';
+	const enqueued: AvailabilityHeartbeatJob[] = [];
+	const skipped: AvailabilityHeartbeatSkipped[] = [];
+
+	for (const candidate of candidates.value) {
+		const snapshot = await bridgeAsyncStore.getAvailabilitySnapshot({
+			kind: candidate.kind,
+			serviceId: candidate.serviceId,
+			scope: candidate.scope,
+			baseUrl: ACUITY_BASE_URL,
+		});
+		const freshness = snapshot ? classifyAvailabilitySnapshotFreshness(snapshot) : 'missing';
+
+		if (freshness === 'fresh') {
+			recordAvailabilityHeartbeatJob(candidate.kind, 'skipped_fresh');
+			skipped.push({
+				kind: candidate.kind,
+				serviceId: candidate.serviceId,
+				scope: candidate.scope,
+				reason: 'fresh',
+				freshness,
+				weight: candidate.weight,
+			});
+			continue;
+		}
+
+		if (enqueued.length >= maxJobs) {
+			recordAvailabilityHeartbeatJob(candidate.kind, 'skipped_limit');
+			skipped.push({
+				kind: candidate.kind,
+				serviceId: candidate.serviceId,
+				scope: candidate.scope,
+				reason: 'limit',
+				weight: candidate.weight,
+			});
+			continue;
+		}
+
+		const job: BridgeJobCommand =
+			candidate.kind === 'dates'
+				? {
+						kind: 'availability_dates_refresh',
+						command: {
+							serviceId: candidate.serviceId,
+							serviceName: candidate.serviceName,
+							month: candidate.scope,
+							adapterProfile: adapterProfile(),
+						},
+					}
+				: {
+						kind: 'availability_slots_refresh',
+						command: {
+							serviceId: candidate.serviceId,
+							serviceName: candidate.serviceName,
+							date: candidate.scope,
+							adapterProfile: adapterProfile(),
+						},
+					};
+		const idempotencyKey = [
+			idempotencyPrefix,
+			ACUITY_BASE_URL,
+			candidate.kind,
+			candidate.serviceId,
+			candidate.scope,
+			idempotencyBucket,
+		].join(':');
+		const record = await bridgeAsyncStore.enqueueJob(job, { idempotencyKey });
+		recordAvailabilityHeartbeatJob(candidate.kind, 'enqueued');
+		enqueued.push({
+			operationId: record.operationId,
+			status: record.status,
+			statusUrl: jobStatusUrl(record.operationId),
+			kind: candidate.kind,
+			serviceId: candidate.serviceId,
+			scope: candidate.scope,
+			freshness,
+			weight: candidate.weight,
+		});
+	}
+
+	logRequestEvent('INFO', 'Availability heartbeat completed', context, {
+		event: 'availability_heartbeat_completed',
+		considered: candidates.value.length,
+		enqueued: enqueued.length,
+		skipped: skipped.length,
+		maxJobs,
+		idempotencyWindowMs,
+	});
+
+	const response: AvailabilityHeartbeatResponse = {
+		layer: 'bridge_availability_heartbeat',
+		considered: candidates.value.length,
+		enqueued,
+		skipped,
+		maxJobs,
+		idempotencyWindowMs,
+	};
+	return sendAccepted(res, response);
+};
+
 const handleGetAsyncJob = async (operationId: string, res: ServerResponse) => {
 	const record = await bridgeAsyncStore.getJob(operationId);
 	if (!record) {
@@ -1598,6 +1881,9 @@ const server = createServer(async (req, res) => {
 		}
 		if (path === '/internal/availability/snapshot-canary' && method === 'GET') {
 			return await handleAvailabilitySnapshotCanary(url, res, context);
+		}
+		if (path === '/internal/availability/heartbeat' && method === 'POST') {
+			return await handleAvailabilityHeartbeat(req, res, context);
 		}
 		if (path.startsWith('/jobs/') && method === 'GET') {
 			const operationId = decodeURIComponent(path.slice('/jobs/'.length));

@@ -114,6 +114,13 @@ const availabilitySnapshotReadDuration = new Histogram({
 	registers: [registry],
 });
 
+const availabilityHeartbeatJobsTotal = new Counter({
+	name: 'acuity_availability_heartbeat_jobs_total',
+	help: 'Availability heartbeat decisions by snapshot kind and action',
+	labelNames: ['kind', 'action'],
+	registers: [registry],
+});
+
 // ─── Derived cache hit-ratio ─────────────────────────────────────────────────
 //
 // `cacheHitRatio` is a derived gauge — prom-client cannot compute it for us,
@@ -210,6 +217,13 @@ export const recordAvailabilitySnapshotRead = (
 	);
 };
 
+export const recordAvailabilityHeartbeatJob = (
+	kind: string,
+	action: 'enqueued' | 'skipped_fresh' | 'skipped_limit',
+): void => {
+	availabilityHeartbeatJobsTotal.inc({ kind, action });
+};
+
 // ─── Page-operation timer helper ─────────────────────────────────────────────
 //
 // Keep label cardinality low: `operation` should be a small enum of
@@ -271,6 +285,7 @@ export const metrics = {
 	bridgeReadDuration,
 	availabilitySnapshotServedTotal,
 	availabilitySnapshotReadDuration,
+	availabilityHeartbeatJobsTotal,
 	recordCacheHit,
 	recordCacheMiss,
 	setBrowserPageLimiterState,
@@ -280,6 +295,7 @@ export const metrics = {
 	observeBridgeRead,
 	recordAvailabilitySnapshotServed,
 	recordAvailabilitySnapshotRead,
+	recordAvailabilityHeartbeatJob,
 	observePageOp,
 	observePageOpEffect,
 	trackBrowserSession,
