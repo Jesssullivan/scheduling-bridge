@@ -567,6 +567,72 @@ describe('bridge async protocol endpoints', () => {
 		await expect(store.listReadyJobs(10)).resolves.toHaveLength(2);
 	});
 
+	it('fairly interleaves equal-priority heartbeat demand across services', async () => {
+		process.env.AUTH_TOKEN = 'heartbeat-token';
+		const store = createInMemoryBridgeAsyncStore();
+		const running = await listen(store);
+		activeServer = running.server;
+		const url = `${running.baseUrl}/internal/availability/heartbeat`;
+
+		const response = await fetch(url, {
+			method: 'POST',
+			headers: {
+				Authorization: 'Bearer heartbeat-token',
+				'Content-Type': 'application/json',
+			},
+			body: JSON.stringify({
+				maxJobs: 4,
+				idempotencyWindowMs: 60_000,
+				idempotencyKeyPrefix: 'test-heartbeat-fairness',
+				demands: [
+					{
+						serviceId: 'svc-a',
+						weight: 10,
+						months: ['2026-06', '2026-07', '2026-08'],
+					},
+					{
+						serviceId: 'svc-b',
+						weight: 10,
+						months: ['2026-06', '2026-07', '2026-08'],
+					},
+					{
+						serviceId: 'svc-c',
+						weight: 10,
+						months: ['2026-06', '2026-07', '2026-08'],
+					},
+				],
+			}),
+		});
+		const body = await response.json();
+
+		expect(response.status).toBe(202);
+		expect(body.data.enqueued).toMatchObject([
+			{ kind: 'dates', serviceId: 'svc-a', scope: '2026-06' },
+			{ kind: 'dates', serviceId: 'svc-b', scope: '2026-06' },
+			{ kind: 'dates', serviceId: 'svc-c', scope: '2026-06' },
+			{ kind: 'dates', serviceId: 'svc-a', scope: '2026-07' },
+		]);
+		expect(body.data.skipped).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ serviceId: 'svc-b', scope: '2026-07', reason: 'limit' }),
+				expect.objectContaining({ serviceId: 'svc-c', scope: '2026-07', reason: 'limit' }),
+				expect.objectContaining({ serviceId: 'svc-a', scope: '2026-08', reason: 'limit' }),
+			]),
+		);
+		await expect(store.listReadyJobs(10)).resolves.toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					kind: 'availability_dates_refresh',
+					idempotencyKey: expect.stringContaining('test-heartbeat-fairness:https://example.as.me:dates:svc-b:2026-06:'),
+				}),
+				expect.objectContaining({
+					kind: 'availability_dates_refresh',
+					idempotencyKey: expect.stringContaining('test-heartbeat-fairness:https://example.as.me:dates:svc-c:2026-06:'),
+				}),
+			]),
+		);
+	});
+
 	it('ignores expired request-path snapshots and refreshes from Acuity', async () => {
 		const store = createInMemoryBridgeAsyncStore();
 		await store.upsertAvailabilitySnapshot({

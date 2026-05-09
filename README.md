@@ -87,11 +87,14 @@ weighted demand:
 }
 ```
 
-The heartbeat sorts demand by descending weight, skips fresh durable snapshots,
-enqueues stale/expired/missing date and slot refresh jobs up to `maxJobs`, and
-uses a time-windowed idempotency key so frequent cron runs do not create
-duplicate job storms. It does not run browser automation on the HTTP request
-path; the async worker owns the Acuity read.
+The heartbeat evaluates higher-weight demand first. Equal-weight demand is
+interleaved by service/request group before `maxJobs` is applied, so one service
+cannot consume the whole enqueue budget while same-priority services remain
+cold. The handler skips fresh durable snapshots, enqueues stale/expired/missing
+date and slot refresh jobs up to `maxJobs`, and uses a time-windowed idempotency
+key so frequent cron runs do not create duplicate job storms. It does not run
+browser automation on the HTTP request path; the async worker owns the Acuity
+read.
 
 ### Health Contract
 

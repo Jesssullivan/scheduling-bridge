@@ -539,6 +539,46 @@ interface AvailabilityHeartbeatCandidate {
 	readonly order: number;
 }
 
+interface AvailabilityHeartbeatDemandGroup {
+	readonly weight: number;
+	readonly order: number;
+	readonly candidates: readonly AvailabilityHeartbeatCandidate[];
+}
+
+const interleaveEqualWeightHeartbeatGroups = (
+	groups: readonly AvailabilityHeartbeatDemandGroup[],
+): readonly AvailabilityHeartbeatCandidate[] => {
+	const interleaved: AvailabilityHeartbeatCandidate[] = [];
+	const orderedGroups = [...groups].sort((a, b) => a.order - b.order);
+	const maxLength = Math.max(0, ...orderedGroups.map((group) => group.candidates.length));
+	for (let candidateIndex = 0; candidateIndex < maxLength; candidateIndex += 1) {
+		for (const group of orderedGroups) {
+			const candidate = group.candidates[candidateIndex];
+			if (candidate) {
+				interleaved.push(candidate);
+			}
+		}
+	}
+	return interleaved;
+};
+
+const orderHeartbeatCandidateGroups = (
+	groups: readonly AvailabilityHeartbeatDemandGroup[],
+): readonly AvailabilityHeartbeatCandidate[] => {
+	const orderedGroups = [...groups].sort((a, b) => b.weight - a.weight || a.order - b.order);
+	const orderedCandidates: AvailabilityHeartbeatCandidate[] = [];
+	for (let index = 0; index < orderedGroups.length; ) {
+		const weight = orderedGroups[index]?.weight ?? 0;
+		const sameWeightGroups: AvailabilityHeartbeatDemandGroup[] = [];
+		while (index < orderedGroups.length && orderedGroups[index].weight === weight) {
+			sameWeightGroups.push(orderedGroups[index]);
+			index += 1;
+		}
+		orderedCandidates.push(...interleaveEqualWeightHeartbeatGroups(sameWeightGroups));
+	}
+	return orderedCandidates;
+};
+
 const parsePositiveInteger = (
 	value: unknown,
 	fallback: number,
@@ -595,7 +635,7 @@ const collectHeartbeatCandidates = (
 	const commonDates = collectStringList(rawBody.dates, ISO_DATE_RE, 'dates');
 	if (!commonDates.ok) return commonDates;
 
-	const candidates: AvailabilityHeartbeatCandidate[] = [];
+	const groups: AvailabilityHeartbeatDemandGroup[] = [];
 	for (const [demandIndex, demand] of rawBody.demands.entries()) {
 		if (!isRecord(demand)) {
 			return {
@@ -632,31 +672,37 @@ const collectHeartbeatCandidates = (
 		}
 		const parsedWeight = Number(demand.weight ?? 0);
 		const weight = Number.isFinite(parsedWeight) ? parsedWeight : 0;
+		const demandCandidates: AvailabilityHeartbeatCandidate[] = [];
 		for (const month of months.value) {
-			candidates.push({
+			demandCandidates.push({
 				kind: 'dates',
 				serviceId: demand.serviceId,
 				serviceName,
 				scope: month,
 				weight,
-				order: candidates.length,
+				order: demandCandidates.length,
 			});
 		}
 		for (const date of dates.value) {
-			candidates.push({
+			demandCandidates.push({
 				kind: 'slots',
 				serviceId: demand.serviceId,
 				serviceName,
 				scope: date,
 				weight,
-				order: candidates.length,
+				order: demandCandidates.length,
 			});
 		}
+		groups.push({
+			weight,
+			order: demandIndex,
+			candidates: demandCandidates,
+		});
 	}
 
 	return {
 		ok: true,
-		value: candidates.sort((a, b) => b.weight - a.weight || a.order - b.order),
+		value: orderHeartbeatCandidateGroups(groups),
 	};
 };
 
