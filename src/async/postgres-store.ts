@@ -9,6 +9,8 @@ import type {
 	BridgeJobRecord,
 	BridgeJobResult,
 	BridgeJobStatus,
+	BridgeQueueStats,
+	BridgeQueueStatsKindStatus,
 	EnqueueBridgeJobOptions,
 } from './types.js';
 import type { BridgeAsyncStore } from './store.js';
@@ -84,6 +86,20 @@ interface AvailabilitySnapshotRow {
 	source_job_id: string | null;
 }
 
+interface QueueStatsRow {
+	kind: BridgeJobRecord['kind'];
+	status: BridgeJobStatus;
+	count: string | number;
+	oldest_age_ms: string | number | null;
+}
+
+interface QueueTotalsRow {
+	total: string | number;
+	ready: string | number;
+	retryable_failed: string | number;
+	oldest_queued_age_ms: string | number | null;
+}
+
 const iso = (value: Date | string): string =>
 	value instanceof Date ? value.toISOString() : value;
 
@@ -102,7 +118,9 @@ const jobFromRow = (row: BridgeJobRow): BridgeJobRecord => ({
 	failure: row.failure ?? undefined,
 });
 
-const snapshotFromRow = (row: AvailabilitySnapshotRow): AvailabilitySnapshot => ({
+const snapshotFromRow = (
+	row: AvailabilitySnapshotRow,
+): AvailabilitySnapshot => ({
 	snapshotId: row.snapshot_id,
 	kind: row.kind,
 	serviceId: row.service_id,
@@ -116,28 +134,47 @@ const snapshotFromRow = (row: AvailabilitySnapshotRow): AvailabilitySnapshot => 
 	sourceJobId: row.source_job_id ?? undefined,
 });
 
+const numberFromPg = (
+	value: string | number | null | undefined,
+): number | undefined => {
+	if (value === null || value === undefined) return undefined;
+	const parsed = typeof value === 'number' ? value : Number(value);
+	return Number.isFinite(parsed) ? parsed : undefined;
+};
+
+const queueKindStatusFromRow = (
+	row: QueueStatsRow,
+): BridgeQueueStatsKindStatus => ({
+	kind: row.kind,
+	status: row.status,
+	count: numberFromPg(row.count) ?? 0,
+	oldestAgeMs: numberFromPg(row.oldest_age_ms),
+});
+
 export interface PostgresBridgeAsyncStoreOptions {
 	readonly connectionString: string;
 	readonly ssl?: boolean | pg.PoolConfig['ssl'];
 	readonly migrate?: boolean;
 }
 
-export const ensureBridgeAsyncSchema = async (
-	pool: pg.Pool,
-): Promise<void> => {
+export const ensureBridgeAsyncSchema = async (pool: pg.Pool): Promise<void> => {
 	await pool.query(BRIDGE_ASYNC_SCHEMA_SQL);
 };
 
 export const createPostgresBridgeAsyncStore = (
 	options: PostgresBridgeAsyncStoreOptions,
-): BridgeAsyncStore & { close: () => Promise<void>; ready: () => Promise<void> } => {
+): BridgeAsyncStore & {
+	close: () => Promise<void>;
+	ready: () => Promise<void>;
+} => {
 	const pool = new Pool({
 		connectionString: options.connectionString,
 		ssl: options.ssl,
 	});
-	const ready = options.migrate === false
-		? Promise.resolve()
-		: ensureBridgeAsyncSchema(pool);
+	const ready =
+		options.migrate === false
+			? Promise.resolve()
+			: ensureBridgeAsyncSchema(pool);
 	const query = async <T extends QueryResultRow = QueryResultRow>(
 		text: string,
 		values?: unknown[],
@@ -257,10 +294,7 @@ export const createPostgresBridgeAsyncStore = (
 				where operation_id = $1
 				returning *
 				`,
-				[
-					operationId,
-					failure ? JSON.stringify(failure) : null,
-				],
+				[operationId, failure ? JSON.stringify(failure) : null],
 			);
 			return updated.rows[0] ? jobFromRow(updated.rows[0]) : null;
 		},
@@ -329,6 +363,52 @@ export const createPostgresBridgeAsyncStore = (
 				],
 			);
 			return found.rows[0] ? snapshotFromRow(found.rows[0]) : null;
+		},
+
+		async getQueueStats(now = new Date()): Promise<BridgeQueueStats> {
+			const [totals, buckets] = await Promise.all([
+				query<QueueTotalsRow>(
+					`
+					select
+						count(*)::int as total,
+						count(*) filter (
+							where status = 'queued'
+							   or (status in ('leased', 'running') and leased_until <= $1)
+						)::int as ready,
+						count(*) filter (
+							where status in ('failed_pre_submit', 'reconcile_required')
+							  and coalesce((failure->>'retryable')::boolean, false)
+						)::int as retryable_failed,
+						extract(epoch from ($1::timestamptz - min(created_at) filter (
+							where status = 'queued'
+							   or (status in ('leased', 'running') and leased_until <= $1)
+						))) * 1000 as oldest_queued_age_ms
+					from bridge_jobs
+					`,
+					[now],
+				),
+				query<QueueStatsRow>(
+					`
+					select
+						kind,
+						status,
+						count(*)::int as count,
+						extract(epoch from ($1::timestamptz - min(created_at))) * 1000 as oldest_age_ms
+					from bridge_jobs
+					group by kind, status
+					order by kind, status
+					`,
+					[now],
+				),
+			]);
+			const totalRow = totals.rows[0];
+			return {
+				total: numberFromPg(totalRow?.total) ?? 0,
+				ready: numberFromPg(totalRow?.ready) ?? 0,
+				retryableFailed: numberFromPg(totalRow?.retryable_failed) ?? 0,
+				oldestQueuedAgeMs: numberFromPg(totalRow?.oldest_queued_age_ms),
+				byKindStatus: buckets.rows.map(queueKindStatusFromRow),
+			};
 		},
 
 		async close() {

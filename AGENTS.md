@@ -52,8 +52,8 @@ As of `2026-05-08`, the active structural work here is:
 
 Operationally relevant truth:
 
-- current package metadata is `@tummycrypt/scheduling-bridge` `0.5.5`
-- `0.5.5` depends on `@tummycrypt/scheduling-kit ^0.8.0`
+- current package metadata is `@tummycrypt/scheduling-bridge` `0.5.7`
+- `0.5.7` depends on `@tummycrypt/scheduling-kit ^0.8.0`
 - the `0.5.x` line is the async bridge redesign lane: async booking jobs,
   availability snapshots, Redis/Postgres async stores, and request-path
   availability prewarm enqueueing
@@ -115,6 +115,11 @@ K8s async runtime truth:
   separate worker deployment exists.
 - request-path date/slot prewarm must enqueue async refresh jobs; browser
   scraping for prewarm is worker-owned, not request-owned.
+- cutover claims for queue/cache readiness should use the auth-gated
+  `/internal/availability/readiness` or `/internal/availability/wait-ready`
+  endpoints. The former is read-only; the latter may run heartbeat/requeue once
+  and then poll readiness, but neither endpoint may run Acuity browser
+  automation directly on the HTTP request path.
 
 ### Release Coordination
 

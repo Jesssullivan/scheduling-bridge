@@ -8,6 +8,8 @@ import type {
 	BridgeJobFailure,
 	BridgeJobRecord,
 	BridgeJobResult,
+	BridgeQueueStats,
+	BridgeQueueStatsKindStatus,
 	EnqueueBridgeJobOptions,
 } from './types.js';
 import type { BridgeAsyncStore } from './store.js';
@@ -36,9 +38,13 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 const nowIso = (now = new Date()): string => now.toISOString();
 
-const encodeKeyPart = (value: string): string => Buffer.from(value).toString('base64url');
+const encodeKeyPart = (value: string): string =>
+	Buffer.from(value).toString('base64url');
 
-const snapshotStorageKey = (prefix: string, query: AvailabilitySnapshotQuery): string =>
+const snapshotStorageKey = (
+	prefix: string,
+	query: AvailabilitySnapshotQuery,
+): string =>
 	[
 		prefix,
 		'snapshot',
@@ -51,8 +57,10 @@ const snapshotStorageKey = (prefix: string, query: AvailabilitySnapshotQuery): s
 const jobStorageKey = (prefix: string, operationId: string): string =>
 	`${prefix}:job:${operationId}`;
 
-const idempotencyStorageKey = (prefix: string, idempotencyKey: string): string =>
-	`${prefix}:idempotency:${encodeKeyPart(idempotencyKey)}`;
+const idempotencyStorageKey = (
+	prefix: string,
+	idempotencyKey: string,
+): string => `${prefix}:idempotency:${encodeKeyPart(idempotencyKey)}`;
 
 const readyJobsKey = (prefix: string): string => `${prefix}:jobs:ready`;
 
@@ -62,6 +70,62 @@ const claimLockKey = (prefix: string, operationId: string): string =>
 const readJson = async <A>(client: IORedis, key: string): Promise<A | null> => {
 	const raw = await client.get(key);
 	return raw ? (JSON.parse(raw) as A) : null;
+};
+
+const isRetryableFailedJob = (job: BridgeJobRecord): boolean =>
+	(job.status === 'failed_pre_submit' || job.status === 'reconcile_required') &&
+	job.failure?.retryable === true;
+
+const isReadyJob = (job: BridgeJobRecord, now: Date): boolean => {
+	if (job.status === 'queued') return true;
+	if (
+		(job.status !== 'leased' && job.status !== 'running') ||
+		!job.leasedUntil
+	) {
+		return false;
+	}
+	return Date.parse(job.leasedUntil) <= now.getTime();
+};
+
+const queueStatsFromJobs = (
+	jobs: readonly BridgeJobRecord[],
+	now = new Date(),
+): BridgeQueueStats => {
+	const buckets = new Map<string, BridgeQueueStatsKindStatus>();
+	let ready = 0;
+	let retryableFailed = 0;
+	let oldestQueuedAgeMs: number | undefined;
+
+	for (const job of jobs) {
+		const key = `${job.kind}:${job.status}`;
+		const ageMs = Math.max(0, now.getTime() - Date.parse(job.createdAt));
+		const previous = buckets.get(key);
+		buckets.set(key, {
+			kind: job.kind,
+			status: job.status,
+			count: (previous?.count ?? 0) + 1,
+			oldestAgeMs: Math.max(previous?.oldestAgeMs ?? 0, ageMs),
+		});
+		if (isReadyJob(job, now)) {
+			ready += 1;
+			oldestQueuedAgeMs = Math.max(oldestQueuedAgeMs ?? 0, ageMs);
+		}
+		if (isRetryableFailedJob(job)) {
+			retryableFailed += 1;
+		}
+	}
+
+	return {
+		total: jobs.length,
+		ready,
+		retryableFailed,
+		oldestQueuedAgeMs,
+		byKindStatus: [...buckets.values()].sort((a, b) =>
+			a.kind === b.kind
+				? a.status.localeCompare(b.status)
+				: a.kind.localeCompare(b.kind),
+		),
+	};
 };
 
 const writeJson = async <A>(
@@ -84,16 +148,23 @@ export const createRedisBridgeAsyncStore = (
 	}
 
 	const ownsClient = !options.client;
-	const client = options.client ?? new IORedisImpl(options.url!, options.redisOptions ?? {});
+	const client =
+		options.client ?? new IORedisImpl(options.url!, options.redisOptions ?? {});
 	const prefix = options.keyPrefix ?? DEFAULT_PREFIX;
 	const jobTtlSeconds = options.jobTtlSeconds ?? DEFAULT_JOB_TTL_SECONDS;
-	const snapshotTtlSeconds = options.snapshotTtlSeconds ?? DEFAULT_SNAPSHOT_TTL_SECONDS;
+	const snapshotTtlSeconds =
+		options.snapshotTtlSeconds ?? DEFAULT_SNAPSHOT_TTL_SECONDS;
 
 	const readJob = (operationId: string): Promise<BridgeJobRecord | null> =>
 		readJson<BridgeJobRecord>(client, jobStorageKey(prefix, operationId));
 
 	const writeJob = (job: BridgeJobRecord): Promise<void> =>
-		writeJson(client, jobStorageKey(prefix, job.operationId), job, jobTtlSeconds);
+		writeJson(
+			client,
+			jobStorageKey(prefix, job.operationId),
+			job,
+			jobTtlSeconds,
+		);
 
 	const store: BridgeAsyncStore & {
 		close?: () => Promise<void>;
@@ -101,9 +172,18 @@ export const createRedisBridgeAsyncStore = (
 	} = {
 		async enqueueJob(job: BridgeJobCommand, options?: EnqueueBridgeJobOptions) {
 			if (options?.idempotencyKey) {
-				const idempotencyKey = idempotencyStorageKey(prefix, options.idempotencyKey);
+				const idempotencyKey = idempotencyStorageKey(
+					prefix,
+					options.idempotencyKey,
+				);
 				const operationId = randomUUID();
-				const claimed = await client.set(idempotencyKey, operationId, 'EX', jobTtlSeconds, 'NX');
+				const claimed = await client.set(
+					idempotencyKey,
+					operationId,
+					'EX',
+					jobTtlSeconds,
+					'NX',
+				);
 				if (claimed !== 'OK') {
 					const existingOperationId = await client.get(idempotencyKey);
 					if (existingOperationId) {
@@ -126,7 +206,11 @@ export const createRedisBridgeAsyncStore = (
 					updatedAt: timestamp,
 				};
 				await writeJob(record);
-				await client.zadd(readyJobsKey(prefix), Date.parse(record.createdAt), operationId);
+				await client.zadd(
+					readyJobsKey(prefix),
+					Date.parse(record.createdAt),
+					operationId,
+				);
 				return clone(record);
 			}
 
@@ -142,7 +226,11 @@ export const createRedisBridgeAsyncStore = (
 				updatedAt: timestamp,
 			};
 			await writeJob(record);
-			await client.zadd(readyJobsKey(prefix), Date.parse(record.createdAt), operationId);
+			await client.zadd(
+				readyJobsKey(prefix),
+				Date.parse(record.createdAt),
+				operationId,
+			);
 			return clone(record);
 		},
 
@@ -191,7 +279,11 @@ export const createRedisBridgeAsyncStore = (
 			try {
 				const found = await readJob(operationId);
 				if (!found) return null;
-				if (found.status !== 'queued' && found.status !== 'leased' && found.status !== 'running') {
+				if (
+					found.status !== 'queued' &&
+					found.status !== 'leased' &&
+					found.status !== 'running'
+				) {
 					await client.zrem(readyJobsKey(prefix), operationId);
 					return null;
 				}
@@ -212,10 +304,16 @@ export const createRedisBridgeAsyncStore = (
 					updatedAt: nowIso(),
 				};
 				await writeJob(next);
-				await client.zadd(readyJobsKey(prefix), lease.leasedUntil.getTime(), operationId);
+				await client.zadd(
+					readyJobsKey(prefix),
+					lease.leasedUntil.getTime(),
+					operationId,
+				);
 				return clone(next);
 			} finally {
-				await client.eval(LUA_CAS_DEL, 1, lockKey, token).catch(() => undefined);
+				await client
+					.eval(LUA_CAS_DEL, 1, lockKey, token)
+					.catch(() => undefined);
 			}
 		},
 
@@ -283,8 +381,33 @@ export const createRedisBridgeAsyncStore = (
 		},
 
 		async getAvailabilitySnapshot(query) {
-			const found = await readJson<AvailabilitySnapshot>(client, snapshotStorageKey(prefix, query));
+			const found = await readJson<AvailabilitySnapshot>(
+				client,
+				snapshotStorageKey(prefix, query),
+			);
 			return found ? clone(found) : null;
+		},
+
+		async getQueueStats(now = new Date()) {
+			const stream = client.scanStream({
+				match: `${prefix}:job:*`,
+				count: 250,
+			});
+			const jobs: BridgeJobRecord[] = [];
+			for await (const keys of stream as AsyncIterable<string[]>) {
+				if (keys.length === 0) continue;
+				const raws = await client.mget(...keys);
+				for (const raw of raws) {
+					if (!raw) continue;
+					try {
+						jobs.push(JSON.parse(raw) as BridgeJobRecord);
+					} catch {
+						// Ignore malformed expired/corrupt job payloads in stats; job
+						// execution paths still read individual records strictly.
+					}
+				}
+			}
+			return queueStatsFromJobs(jobs, now);
 		},
 
 		async clear() {
