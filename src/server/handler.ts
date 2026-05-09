@@ -14,6 +14,7 @@
  *   POST /availability/check        - Check if a slot is available
  *   POST /availability/refresh      - Enqueue async availability refresh
  *   GET  /availability/snapshot     - Read latest availability snapshot
+ *   GET  /internal/availability/snapshot-canary - Auth-gated durable snapshot proof
  *   POST /booking/create            - Create booking (standard)
  *   POST /booking/create-with-payment - Deprecated sync paid booking endpoint
  *   POST /booking/jobs              - Enqueue async paid booking job
@@ -54,7 +55,12 @@ import {
 } from '../shared/acuity-service-catalog.js';
 import { getCached as redisL2GetCached, RedisL2 } from '../shared/redis-l2.js';
 import { runBridgeReadCached, type BridgeReadCacheClient } from '../shared/bridge-read-cache.js';
-import { metrics, recordAvailabilitySnapshotServed, renderMetrics } from '../shared/metrics.js';
+import {
+	metrics,
+	recordAvailabilitySnapshotRead,
+	recordAvailabilitySnapshotServed,
+	renderMetrics,
+} from '../shared/metrics.js';
 import { toSchedulingError, type MiddlewareError } from '../adapters/acuity/errors.js';
 import {
 	navigateToBooking,
@@ -667,6 +673,23 @@ const enqueueAvailabilityPrewarmJob = (
 };
 
 type AvailabilitySnapshotFreshness = 'fresh' | 'stale' | 'expired';
+type AvailabilitySnapshotReadMiss = 'missing' | 'expired' | 'error';
+
+interface AvailabilitySnapshotLayerHit<A extends readonly unknown[]> {
+	readonly ok: true;
+	readonly freshness: Exclude<AvailabilitySnapshotFreshness, 'expired'>;
+	readonly snapshot: AvailabilitySnapshot;
+	readonly result: { readonly ok: true; readonly value: A };
+	readonly durationMs: number;
+}
+
+interface AvailabilitySnapshotLayerMiss {
+	readonly ok: false;
+	readonly reason: AvailabilitySnapshotReadMiss;
+	readonly snapshot?: AvailabilitySnapshot;
+	readonly durationMs: number;
+	readonly error?: unknown;
+}
 
 const classifyAvailabilitySnapshotFreshness = (
 	snapshot: AvailabilitySnapshot,
@@ -682,15 +705,17 @@ const classifyAvailabilitySnapshotFreshness = (
 	return Number.isFinite(staleAtMs) && staleAtMs > nowMs ? 'fresh' : 'stale';
 };
 
-const readUsableAvailabilitySnapshot = async <A extends readonly unknown[]>(
+const readAvailabilitySnapshotLayer = async <A extends readonly unknown[]>(
 	context: RequestContext,
 	options: {
 		readonly kind: AvailabilitySnapshotKind;
 		readonly serviceId: string;
 		readonly serviceName?: string;
 		readonly scope: string;
+		readonly enqueueRefreshOnStale?: boolean;
 	},
-): Promise<Result<A> | null> => {
+): Promise<AvailabilitySnapshotLayerHit<A> | AvailabilitySnapshotLayerMiss> => {
+	const startedAt = Date.now();
 	try {
 		const snapshot = await bridgeAsyncStore.getAvailabilitySnapshot({
 			kind: options.kind,
@@ -698,7 +723,11 @@ const readUsableAvailabilitySnapshot = async <A extends readonly unknown[]>(
 			scope: options.scope,
 			baseUrl: ACUITY_BASE_URL,
 		});
-		if (!snapshot) return null;
+		if (!snapshot) {
+			const durationMs = Date.now() - startedAt;
+			recordAvailabilitySnapshotRead(options.kind, 'missing', 'miss', durationMs);
+			return { ok: false, reason: 'missing', durationMs };
+		}
 
 		const freshness = classifyAvailabilitySnapshotFreshness(snapshot);
 		logRequestEvent('INFO', 'Availability snapshot considered', context, {
@@ -713,15 +742,28 @@ const readUsableAvailabilitySnapshot = async <A extends readonly unknown[]>(
 			expiresAt: snapshot.expiresAt,
 		});
 
-		if (freshness === 'expired') return null;
+		const durationMs = Date.now() - startedAt;
+		if (freshness === 'expired') {
+			recordAvailabilitySnapshotRead(options.kind, 'expired', 'miss', durationMs);
+			return { ok: false, reason: 'expired', snapshot, durationMs };
+		}
 
 		recordAvailabilitySnapshotServed(options.kind, freshness);
-		if (freshness === 'stale') {
+		recordAvailabilitySnapshotRead(options.kind, freshness, 'hit', durationMs);
+		if (freshness === 'stale' && options.enqueueRefreshOnStale !== false) {
 			enqueueAvailabilityPrewarmJob(context, options);
 		}
 
-		return { ok: true, value: snapshot.value as A };
+		return {
+			ok: true,
+			freshness,
+			snapshot,
+			result: { ok: true, value: snapshot.value as A },
+			durationMs,
+		};
 	} catch (error) {
+		const durationMs = Date.now() - startedAt;
+		recordAvailabilitySnapshotRead(options.kind, 'error', 'error', durationMs);
 		logRequestEvent('WARN', 'Availability snapshot read failed', context, {
 			event: 'availability_snapshot_read_failed',
 			kind: options.kind,
@@ -729,8 +771,21 @@ const readUsableAvailabilitySnapshot = async <A extends readonly unknown[]>(
 			scope: options.scope,
 			error: describeLogValue(error),
 		});
-		return null;
+		return { ok: false, reason: 'error', durationMs, error };
 	}
+};
+
+const readUsableAvailabilitySnapshot = async <A extends readonly unknown[]>(
+	context: RequestContext,
+	options: {
+		readonly kind: AvailabilitySnapshotKind;
+		readonly serviceId: string;
+		readonly serviceName?: string;
+		readonly scope: string;
+	},
+): Promise<Result<A> | null> => {
+	const snapshot = await readAvailabilitySnapshotLayer<A>(context, options);
+	return snapshot.ok ? snapshot.result : null;
 };
 
 const scheduleDatePrewarm = (
@@ -1361,6 +1416,95 @@ const handleGetAvailabilitySnapshot = async (url: URL, res: ServerResponse) => {
 	return sendSuccess(res, snapshot);
 };
 
+const handleAvailabilitySnapshotCanary = async (url: URL, res: ServerResponse, context: RequestContext) => {
+	if (!AUTH_TOKEN) {
+		return sendJson(res, 404, {
+			success: false,
+			error: {
+				tag: 'InfrastructureError',
+				code: 'NOT_FOUND',
+				message: 'Not found',
+			},
+		});
+	}
+
+	const kind = url.searchParams.get('kind');
+	const serviceId = url.searchParams.get('serviceId');
+	const scope = url.searchParams.get('scope');
+	const serviceName = url.searchParams.get('serviceName') ?? undefined;
+	if (kind !== 'dates' && kind !== 'slots') {
+		return sendValidationError(res, 'kind', 'kind must be "dates" or "slots"');
+	}
+	if (!serviceId) {
+		return sendValidationError(res, 'serviceId', 'serviceId is required');
+	}
+	if (!scope) {
+		return sendValidationError(res, 'scope', 'scope is required');
+	}
+
+	const snapshot = await readAvailabilitySnapshotLayer<readonly unknown[]>(context, {
+		kind,
+		serviceId,
+		serviceName,
+		scope,
+		enqueueRefreshOnStale: false,
+	});
+
+	if (!snapshot.ok) {
+		const status = snapshot.reason === 'expired' ? 409 : snapshot.reason === 'missing' ? 404 : 500;
+		const code =
+			snapshot.reason === 'expired'
+				? 'SNAPSHOT_EXPIRED'
+				: snapshot.reason === 'missing'
+					? 'SNAPSHOT_NOT_FOUND'
+					: 'SNAPSHOT_READ_FAILED';
+		return sendJson(res, status, {
+			success: false,
+			error: {
+				tag: 'InfrastructureError',
+				code,
+				message: `Durable ${kind} snapshot canary ${snapshot.reason} for ${serviceId}/${scope}`,
+			},
+		});
+	}
+
+	return sendSuccess(res, {
+		layer: 'bridge_durable_snapshot',
+		kind,
+		serviceId,
+		scope,
+		freshness: snapshot.freshness,
+		valueCount: snapshot.result.value.length,
+		durationMs: snapshot.durationMs,
+		refreshQueued: false,
+		snapshot: {
+			snapshotId: snapshot.snapshot.snapshotId,
+			version: snapshot.snapshot.version,
+			observedAt: snapshot.snapshot.observedAt,
+			staleAt: snapshot.snapshot.staleAt,
+			expiresAt: snapshot.snapshot.expiresAt,
+			sourceJobId: snapshot.snapshot.sourceJobId,
+		},
+		metrics: {
+			servedCounter: {
+				name: 'acuity_availability_snapshot_served_total',
+				labels: {
+					kind,
+					freshness: snapshot.freshness,
+				},
+			},
+			durationHistogram: {
+				name: 'acuity_availability_snapshot_read_duration_seconds',
+				labels: {
+					kind,
+					freshness: snapshot.freshness,
+					outcome: 'hit',
+				},
+			},
+		},
+	});
+};
+
 // =============================================================================
 // SERVER
 // =============================================================================
@@ -1451,6 +1595,9 @@ const server = createServer(async (req, res) => {
 		}
 		if (path === '/availability/snapshot' && method === 'GET') {
 			return await handleGetAvailabilitySnapshot(url, res);
+		}
+		if (path === '/internal/availability/snapshot-canary' && method === 'GET') {
+			return await handleAvailabilitySnapshotCanary(url, res, context);
 		}
 		if (path.startsWith('/jobs/') && method === 'GET') {
 			const operationId = decodeURIComponent(path.slice('/jobs/'.length));

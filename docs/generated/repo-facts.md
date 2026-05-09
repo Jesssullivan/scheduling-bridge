@@ -10,9 +10,9 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 ## Package Identity
 
 - package: `@tummycrypt/scheduling-bridge`
-- package version: `0.5.3`
-- Bazel module version: `0.5.3`
-- Bazel package stanza: `@tummycrypt/scheduling-bridge@0.5.3`
+- package version: `0.5.4`
+- Bazel module version: `0.5.4`
+- Bazel package stanza: `@tummycrypt/scheduling-bridge@0.5.4`
 - repository: `git+https://github.com/Jesssullivan/scheduling-bridge.git`
 
 ## Toolchains

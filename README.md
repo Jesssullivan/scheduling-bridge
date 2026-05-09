@@ -43,6 +43,7 @@ HTTP Request
 | POST | `/availability/check` | Check if a slot is available |
 | POST | `/availability/refresh` | Enqueue async availability refresh |
 | GET | `/availability/snapshot` | Read latest durable availability snapshot |
+| GET | `/internal/availability/snapshot-canary` | Auth-gated durable snapshot layer proof |
 | POST | `/booking/create` | Create a booking (standard) |
 | POST | `/booking/create-with-payment` | Deprecated sync paid booking endpoint; returns `410 ASYNC_REQUIRED` |
 | POST | `/booking/jobs` | Enqueue async paid booking job |
@@ -54,6 +55,15 @@ snapshot returns immediately and queues an async refresh, and an expired/missing
 snapshot falls through to the Acuity read path. Serving a stale snapshot does
 not re-stamp it as freshly observed; only successful Acuity reads or worker
 refresh jobs advance snapshot freshness.
+
+`GET /internal/availability/snapshot-canary?kind=dates|slots&serviceId=...&scope=...`
+is an operator canary for K8s/runtime proof. It is hidden unless `AUTH_TOKEN`
+is configured, requires bearer auth when enabled, bypasses the Redis read cache,
+reads the durable snapshot store directly, and returns only metadata, count, and
+duration. Successful canary hits increment
+`acuity_availability_snapshot_served_total` and
+`acuity_availability_snapshot_read_duration_seconds`, so operators can prove the
+bridge snapshot layer separately from app Redis hits and bridge Redis hits.
 
 ### Health Contract
 

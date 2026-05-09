@@ -8,6 +8,7 @@ import {
 	recordCacheHit,
 	recordCacheMiss,
 	recordAvailabilitySnapshotServed,
+	recordAvailabilitySnapshotRead,
 	renderMetrics,
 	trackBrowserSession,
 } from './metrics.js';
@@ -28,6 +29,7 @@ describe('metrics', () => {
 		expect(names).toContain('acuity_bridge_read_cache_wait_duration_seconds');
 		expect(names).toContain('acuity_bridge_read_duration_seconds');
 		expect(names).toContain('acuity_availability_snapshot_served_total');
+		expect(names).toContain('acuity_availability_snapshot_read_duration_seconds');
 	});
 
 	it('renders Prometheus text format', async () => {
@@ -115,6 +117,21 @@ describe('bridge read cache metrics wiring', () => {
 		const before = await snapshotCounter('slots', 'stale');
 		recordAvailabilitySnapshotServed('slots', 'stale');
 		const after = await snapshotCounter('slots', 'stale');
+		expect(after).toBe(before + 1);
+	});
+
+	it('records durable snapshot read duration samples by layer outcome', async () => {
+		const before = await histogramCount('acuity_availability_snapshot_read_duration_seconds', {
+			kind: 'dates',
+			freshness: 'fresh',
+			outcome: 'hit',
+		});
+		recordAvailabilitySnapshotRead('dates', 'fresh', 'hit', 12);
+		const after = await histogramCount('acuity_availability_snapshot_read_duration_seconds', {
+			kind: 'dates',
+			freshness: 'fresh',
+			outcome: 'hit',
+		});
 		expect(after).toBe(before + 1);
 	});
 });

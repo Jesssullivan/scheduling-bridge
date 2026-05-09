@@ -106,6 +106,14 @@ const availabilitySnapshotServedTotal = new Counter({
 	registers: [registry],
 });
 
+const availabilitySnapshotReadDuration = new Histogram({
+	name: 'acuity_availability_snapshot_read_duration_seconds',
+	help: 'Wall time for durable availability snapshot store reads by kind, freshness, and outcome',
+	labelNames: ['kind', 'freshness', 'outcome'],
+	buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+	registers: [registry],
+});
+
 // ─── Derived cache hit-ratio ─────────────────────────────────────────────────
 //
 // `cacheHitRatio` is a derived gauge — prom-client cannot compute it for us,
@@ -190,6 +198,18 @@ export const recordAvailabilitySnapshotServed = (kind: string, freshness: 'fresh
 	availabilitySnapshotServedTotal.inc({ kind, freshness });
 };
 
+export const recordAvailabilitySnapshotRead = (
+	kind: string,
+	freshness: 'fresh' | 'stale' | 'expired' | 'missing' | 'error',
+	outcome: 'hit' | 'miss' | 'error',
+	durationMs: number,
+): void => {
+	availabilitySnapshotReadDuration.observe(
+		{ kind, freshness, outcome },
+		Math.max(0, durationMs) / 1000,
+	);
+};
+
 // ─── Page-operation timer helper ─────────────────────────────────────────────
 //
 // Keep label cardinality low: `operation` should be a small enum of
@@ -250,6 +270,7 @@ export const metrics = {
 	bridgeReadCacheWaitDuration,
 	bridgeReadDuration,
 	availabilitySnapshotServedTotal,
+	availabilitySnapshotReadDuration,
 	recordCacheHit,
 	recordCacheMiss,
 	setBrowserPageLimiterState,
@@ -258,6 +279,7 @@ export const metrics = {
 	recordBridgeReadCacheWait,
 	observeBridgeRead,
 	recordAvailabilitySnapshotServed,
+	recordAvailabilitySnapshotRead,
 	observePageOp,
 	observePageOpEffect,
 	trackBrowserSession,

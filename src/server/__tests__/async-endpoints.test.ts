@@ -282,6 +282,126 @@ describe('bridge async protocol endpoints', () => {
 		);
 	});
 
+	it('hides the internal snapshot canary unless bridge auth is configured', async () => {
+		const store = createInMemoryBridgeAsyncStore();
+		await store.upsertAvailabilitySnapshot({
+			kind: 'dates',
+			serviceId: service.id,
+			scope: '2026-06',
+			adapterProfile: {
+				backend: 'acuity',
+				baseUrl: 'https://example.as.me',
+			},
+			value: [{ date: '2026-06-15' }],
+			observedAt: '2999-01-01T00:00:00.000Z',
+			staleAt: '2999-01-01T00:05:00.000Z',
+			expiresAt: '2999-01-01T00:30:00.000Z',
+		});
+		const running = await listen(store);
+		activeServer = running.server;
+
+		const response = await fetch(
+			`${running.baseUrl}/internal/availability/snapshot-canary?kind=dates&serviceId=${service.id}&scope=2026-06`,
+		);
+		const body = await response.json();
+
+		expect(response.status).toBe(404);
+		expect(body).toMatchObject({
+			success: false,
+			error: {
+				code: 'NOT_FOUND',
+			},
+		});
+	});
+
+	it('auth-gates the internal snapshot canary and records durable snapshot layer metrics', async () => {
+		process.env.AUTH_TOKEN = 'canary-token';
+		const store = createInMemoryBridgeAsyncStore();
+		await store.upsertAvailabilitySnapshot({
+			kind: 'slots',
+			serviceId: service.id,
+			scope: '2026-06-15',
+			adapterProfile: {
+				backend: 'acuity',
+				baseUrl: 'https://example.as.me',
+			},
+			value: [{ time: '4:00 PM', datetime: '2026-06-15T16:00:00-04:00' }],
+			observedAt: '2000-01-01T00:00:00.000Z',
+			staleAt: '2000-01-01T00:01:00.000Z',
+			expiresAt: '2999-01-01T00:30:00.000Z',
+		});
+		const running = await listen(store);
+		activeServer = running.server;
+		const { metrics } = await import('../../shared/metrics.js');
+		const metricCount = async (
+			metricName: string,
+			labels: Record<string, string>,
+		): Promise<number> => {
+			const metric = metrics.registry.getSingleMetric(metricName);
+			const snap = await metric?.get();
+			const countName = `${metricName}_count`;
+			return (
+				snap?.values.find((v) => {
+					if (v.metricName !== countName) return false;
+					return Object.entries(labels).every(([key, value]) => v.labels[key] === value);
+				})?.value ?? 0
+			);
+		};
+		const snapshotServedCount = async (): Promise<number> => {
+			const snap = await metrics.availabilitySnapshotServedTotal.get();
+			return snap.values.find((v) => v.labels.kind === 'slots' && v.labels.freshness === 'stale')?.value ?? 0;
+		};
+		const durationBefore = await metricCount('acuity_availability_snapshot_read_duration_seconds', {
+			kind: 'slots',
+			freshness: 'stale',
+			outcome: 'hit',
+		});
+		const servedBefore = await snapshotServedCount();
+		const url = `${running.baseUrl}/internal/availability/snapshot-canary?kind=slots&serviceId=${service.id}&scope=2026-06-15`;
+
+		const unauthorized = await fetch(url);
+		expect(unauthorized.status).toBe(401);
+
+		const response = await fetch(url, {
+			headers: {
+				Authorization: 'Bearer canary-token',
+			},
+		});
+		const body = await response.json();
+
+		expect(response.status).toBe(200);
+		expect(body).toMatchObject({
+			success: true,
+			data: {
+				layer: 'bridge_durable_snapshot',
+				kind: 'slots',
+				serviceId: service.id,
+				scope: '2026-06-15',
+				freshness: 'stale',
+				valueCount: 1,
+				refreshQueued: false,
+				metrics: {
+					servedCounter: {
+						name: 'acuity_availability_snapshot_served_total',
+					},
+					durationHistogram: {
+						name: 'acuity_availability_snapshot_read_duration_seconds',
+					},
+				},
+			},
+		});
+		expect(typeof body.data.durationMs).toBe('number');
+		expect(await snapshotServedCount()).toBe(servedBefore + 1);
+		expect(
+			await metricCount('acuity_availability_snapshot_read_duration_seconds', {
+				kind: 'slots',
+				freshness: 'stale',
+				outcome: 'hit',
+			}),
+		).toBe(durationBefore + 1);
+		await expect(store.listReadyJobs(10)).resolves.toEqual([]);
+	});
+
 	it('ignores expired request-path snapshots and refreshes from Acuity', async () => {
 		const store = createInMemoryBridgeAsyncStore();
 		await store.upsertAvailabilitySnapshot({
