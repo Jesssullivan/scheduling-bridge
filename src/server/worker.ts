@@ -359,24 +359,29 @@ export const runBridgeWorkerLoop = async (
 		readonly workerId?: string;
 		readonly intervalMs?: number;
 		readonly limit?: number;
+		readonly concurrency?: number;
 		readonly signal?: AbortSignal;
 	} = {},
 ) => {
 	const workerId = options.workerId ?? process.env.HOSTNAME ?? `worker-${process.pid}`;
 	const intervalMs = options.intervalMs ?? Number(process.env.BRIDGE_WORKER_POLL_MS ?? 1000);
 	const limit = options.limit ?? Number(process.env.BRIDGE_WORKER_BATCH_SIZE ?? 5);
+	const concurrency =
+		options.concurrency ?? Number(process.env.BRIDGE_WORKER_CONCURRENCY ?? 1);
 
 	logEvent('INFO', 'Bridge worker loop started', {
 		event: 'bridge_worker_started',
 		workerId,
 		intervalMs,
 		limit,
+		concurrency,
 	});
 
 	while (!options.signal?.aborted) {
 		const results = await drainReadyBridgeJobs(store, executor, {
 			workerId,
 			limit,
+			concurrency,
 		});
 		if (results.length > 0) {
 			logEvent('INFO', 'Bridge worker drained jobs', {

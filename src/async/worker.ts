@@ -283,7 +283,13 @@ export const executeBridgeJob = async (
 
 export interface DrainBridgeJobsOptions extends ExecuteBridgeJobOptions {
 	readonly limit?: number;
+	readonly concurrency?: number;
 }
+
+const normalizeConcurrency = (value: number | undefined): number => {
+	if (!Number.isFinite(value ?? Number.NaN)) return 1;
+	return Math.max(1, Math.floor(value as number));
+};
 
 export const drainReadyBridgeJobs = async (
 	store: BridgeAsyncStore,
@@ -291,10 +297,16 @@ export const drainReadyBridgeJobs = async (
 	options: DrainBridgeJobsOptions,
 ): Promise<readonly BridgeJobRecord[]> => {
 	const ready = await store.listReadyJobs(options.limit ?? 10, options.now);
+	const concurrency = normalizeConcurrency(options.concurrency);
 	const completed: BridgeJobRecord[] = [];
-	for (const record of ready) {
-		const result = await executeBridgeJob(store, record, executor, options);
-		if (result) completed.push(result);
+	for (let index = 0; index < ready.length; index += concurrency) {
+		const chunk = ready.slice(index, index + concurrency);
+		const results = await Promise.all(
+			chunk.map((record) => executeBridgeJob(store, record, executor, options)),
+		);
+		for (const result of results) {
+			if (result) completed.push(result);
+		}
 	}
 	return completed;
 };

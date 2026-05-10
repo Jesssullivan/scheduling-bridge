@@ -156,6 +156,71 @@ describe('Bridge async worker', () => {
 		expect(results.every((job) => job.status === 'succeeded')).toBe(true);
 	});
 
+	it('can drain ready jobs with bounded concurrency', async () => {
+		const store = createInMemoryBridgeAsyncStore();
+		await store.enqueueJob({
+			kind: 'availability_dates_refresh',
+			command: {
+				serviceId: '53178494',
+				month: '2026-06',
+				adapterProfile: profile,
+			},
+		});
+		await store.enqueueJob({
+			kind: 'availability_slots_refresh',
+			command: {
+				serviceId: '53178494',
+				date: '2026-06-15',
+				adapterProfile: profile,
+			},
+		});
+
+		const started: string[] = [];
+		let releaseDates: (() => void) | undefined;
+		let releaseSlots: (() => void) | undefined;
+		const concurrentExecutor = executor();
+		vi.mocked(concurrentExecutor.refreshAvailabilityDates).mockImplementationOnce(
+			async () => {
+				started.push('dates');
+				await new Promise<void>((resolve) => {
+					releaseDates = resolve;
+				});
+				return [{ date: '2026-06-15' }];
+			},
+		);
+		vi.mocked(concurrentExecutor.refreshAvailabilitySlots).mockImplementationOnce(
+			async () => {
+				started.push('slots');
+				await new Promise<void>((resolve) => {
+					releaseSlots = resolve;
+				});
+				return [{
+					datetime: '2026-06-15T16:00:00.000Z',
+					available: true,
+				}];
+			},
+		);
+
+		const drain = drainReadyBridgeJobs(store, concurrentExecutor, {
+			workerId: 'worker-a',
+			limit: 2,
+			concurrency: 2,
+		});
+		await vi.waitFor(() => {
+			expect(started).toEqual(['dates', 'slots']);
+		});
+
+		releaseDates?.();
+		releaseSlots?.();
+		const results = await drain;
+
+		expect(results.map((job) => job.kind)).toEqual([
+			'availability_dates_refresh',
+			'availability_slots_refresh',
+		]);
+		expect(results.every((job) => job.status === 'succeeded')).toBe(true);
+	});
+
 	it('requeues booking jobs when a fresh slot snapshot cannot be produced within the blocking window', async () => {
 		const store = createInMemoryBridgeAsyncStore();
 		const job = await store.enqueueJob({
