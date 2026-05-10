@@ -987,6 +987,59 @@ describe('bridge async protocol endpoints', () => {
 		await expect(store.listReadyJobs(10)).resolves.toHaveLength(3);
 	});
 
+	it('uses the readiness freshness floor for normal heartbeat scheduling', async () => {
+		process.env.AUTH_TOKEN = 'heartbeat-token';
+		const store = createInMemoryBridgeAsyncStore();
+		await store.upsertAvailabilitySnapshot({
+			kind: 'dates',
+			serviceId: service.id,
+			scope: '2026-06',
+			adapterProfile: {
+				backend: 'acuity',
+				baseUrl: 'https://example.as.me',
+			},
+			value: [{ date: '2026-06-15' }],
+			observedAt: '2000-01-01T00:00:00.000Z',
+			staleAt: '2999-01-01T00:05:00.000Z',
+			expiresAt: '2999-01-01T00:30:00.000Z',
+		});
+		const running = await listen(store);
+		activeServer = running.server;
+
+		const response = await fetch(
+			`${running.baseUrl}/internal/availability/heartbeat`,
+			{
+				method: 'POST',
+				headers: {
+					Authorization: 'Bearer heartbeat-token',
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({
+					maxJobs: 1,
+					idempotencyKeyPrefix: 'test-heartbeat-readiness-floor',
+					demands: [{ serviceId: service.id, months: ['2026-06'] }],
+				}),
+			},
+		);
+		const body = await response.json();
+
+		expect(response.status).toBe(202);
+		expect(body.data.enqueued).toMatchObject([
+			{
+				kind: 'dates',
+				serviceId: service.id,
+				scope: '2026-06',
+				freshness: 'stale',
+			},
+		]);
+		await expect(store.listReadyJobs(10)).resolves.toMatchObject([
+			{
+				kind: 'availability_dates_refresh',
+				status: 'queued',
+			},
+		]);
+	});
+
 	it('requeues retryable heartbeat idempotency hits instead of reporting failed records as enqueued', async () => {
 		process.env.AUTH_TOKEN = 'heartbeat-token';
 		const store = createInMemoryBridgeAsyncStore();

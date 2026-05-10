@@ -170,6 +170,7 @@ export interface AvailabilityHeartbeatRequest {
 	readonly maxJobs?: number;
 	readonly idempotencyWindowMs?: number;
 	readonly idempotencyKeyPrefix?: string;
+	readonly snapshotFreshnessFloorMs?: number;
 }
 
 export interface EnqueueBridgeJobResponse {

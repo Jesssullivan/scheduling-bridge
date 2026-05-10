@@ -27,7 +27,7 @@ Toolchains:
 - CI publish node: `24`
 
 Protocol:
-- version: `1.1.0`
+- version: `1.2.0`
 - flow owner: `scheduling-bridge`
 - backend: `acuity`
 - transport: `http-json`
@@ -42,6 +42,8 @@ Endpoints:
 - `availabilityRefresh` -> `/availability/refresh`
 - `availabilitySnapshot` -> `/availability/snapshot`
 - `availabilityHeartbeat` -> `/internal/availability/heartbeat`
+- `availabilityReadiness` -> `/internal/availability/readiness`
+- `availabilityWaitReady` -> `/internal/availability/wait-ready`
 - `bookingCreate` -> `/booking/create`
 - `bookingCreateWithPayment` -> `/booking/create-with-payment`
 - `bookingJobs` -> `/booking/jobs`
@@ -56,6 +58,8 @@ Capabilities:
 - `availability:refresh-async`
 - `availability:snapshot`
 - `availability:heartbeat-internal`
+- `availability:readiness-internal`
+- `availability:wait-ready-internal`
 - `booking:create`
 - `booking:create-with-payment:deprecated`
 - `booking:create-with-payment-async`

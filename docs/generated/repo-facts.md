@@ -55,7 +55,7 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 
 ## Protocol Surface
 
-- protocol version: `1.1.0`
+- protocol version: `1.2.0`
 - flow owner: `scheduling-bridge`
 - transport: `http-json`
 - backend: `acuity`
@@ -73,6 +73,8 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 | `availabilityRefresh` | `/availability/refresh` |
 | `availabilitySnapshot` | `/availability/snapshot` |
 | `availabilityHeartbeat` | `/internal/availability/heartbeat` |
+| `availabilityReadiness` | `/internal/availability/readiness` |
+| `availabilityWaitReady` | `/internal/availability/wait-ready` |
 | `bookingCreate` | `/booking/create` |
 | `bookingCreateWithPayment` | `/booking/create-with-payment` |
 | `bookingJobs` | `/booking/jobs` |
@@ -88,6 +90,8 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
 - `availability:refresh-async`
 - `availability:snapshot`
 - `availability:heartbeat-internal`
+- `availability:readiness-internal`
+- `availability:wait-ready-internal`
 - `booking:create`
 - `booking:create-with-payment:deprecated`
 - `booking:create-with-payment-async`

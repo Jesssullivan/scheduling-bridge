@@ -2261,11 +2261,16 @@ const handleAvailabilityHeartbeat = async (
 		rawBody.idempotencyWindowMs,
 		HEARTBEAT_DEFAULT_IDEMPOTENCY_WINDOW_MS,
 	);
+	const snapshotFreshnessFloorMs = parsePositiveMs(
+		rawBody.snapshotFreshnessFloorMs,
+		READINESS_DEFAULT_FRESHNESS_FLOOR_MS,
+	);
 
 	const response = await runAvailabilityHeartbeat(candidates.value, {
 		maxJobs,
 		idempotencyWindowMs,
 		idempotencyKeyPrefix,
+		snapshotFreshnessFloorMs,
 		context,
 	});
 	return sendAccepted(res, response);
