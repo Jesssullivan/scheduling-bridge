@@ -101,6 +101,27 @@ requeues that existing operation before reporting it as work; non-retryable
 terminal jobs are reported under `skipped` instead of masquerading as newly
 enqueued refreshes.
 
+### Queue Hygiene
+
+Bridge `0.5.9` supports bounded worker drain concurrency through
+`BRIDGE_WORKER_CONCURRENCY`. The package default remains `1`; the MassageIthaca
+K8s deployment currently opts into `2` through Blahaj/OpenTofu after proving the
+datepicker readiness gate remains green.
+
+Readiness and queue stats are related but not identical. A scoped datepicker
+readiness check can be green while historical retryable refresh failures remain
+in the async store until the store TTL expires. Live K8s sampling after the
+`0.5.9` rollout found fresh datepicker snapshots and no runnable backlog, but
+also retained failed refresh records from transient browser/network failures:
+
+- `NETWORK` / `PAGE_FAILED` on date and slot refresh jobs
+- `SCRAPE_FAILED` calendar-load timeouts on date refresh jobs
+
+Track this as queue-hygiene work, not a regression of the sustained datepicker
+gate. `Jesssullivan/scheduling-bridge#129` owns the next package pass: failed
+refresh observability, retention/TTL configuration, retry/stat semantics, and
+tests.
+
 `POST /internal/availability/readiness` is the operator read path for
 cutover/deploy proof. It accepts the same demand shape as heartbeat, does not
 enqueue jobs, and returns `200` when every requested date/slot scope has a
