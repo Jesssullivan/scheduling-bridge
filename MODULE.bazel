@@ -45,8 +45,9 @@ bazel_dep(name = "aspect_rules_swc", version = "2.6.1")
 # Inter-module dependencies (tinyland building blocks + scheduling-kit)
 # =============================================================================
 
-# Primary dependency: scheduling-kit (peer; bridge orchestrates over kit's adapters).
-bazel_dep(name = "tummycrypt_scheduling_kit", version = "0.8.0")
+# Primary dependency: scheduling-kit (resolved via the Bzlmod module graph from
+# tinyland-inc/bazel-registry; the npm edge is retired — see BUILD.bazel npm_link_package).
+bazel_dep(name = "tummycrypt_scheduling_kit", version = "0.9.1")
 
 # Auth surface (payment capability types come through tinyland-auth).
 bazel_dep(name = "tummycrypt_tinyland_auth", version = "0.3.0")
