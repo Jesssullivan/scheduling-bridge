@@ -7,7 +7,10 @@ of the Acuity scheduling middleware.
 ## Build
 
 ```bash
-# one-shot PDF (tectonic required: `brew install tectonic`)
+# preferred repo-managed shell
+nix develop
+
+# one-shot PDF
 pnpm paper:build
 
 # dev watcher
@@ -16,6 +19,11 @@ pnpm paper:dev
 
 The watcher rebuilds on change to any `.tex` / `.bib` file in this
 directory.
+
+When the repo's deployment or build story changes, keep this paper
+workspace aligned with the current runtime truth: Bazel/flake-first
+tooling, local `pkg/` derivation from `bazel-bin/pkg`, and
+`dist/server/handler.js` as the deployed Node entrypoint.
 
 ## Figures
 

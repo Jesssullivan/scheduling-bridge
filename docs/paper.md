@@ -220,12 +220,12 @@ The live implementation uses two nested `acquireRelease` pairs: the outer pair m
 
 The middleware is deployed on Modal Labs [3] using the official Playwright Docker image as a base. The deployment configuration:
 
-- **Image**: `mcr.microsoft.com/playwright:v1.58.2-noble` with Node.js 22 LTS
+- **Image**: `mcr.microsoft.com/playwright:v1.58.2-noble` with Node.js 24 LTS
 - **Resources**: 2 CPU cores, 2048 MB memory, no GPU
 - **Concurrency**: `max_inputs=3` per container (each request gets an isolated browser context)
 - **Scaling**: `min_containers=1` for warm-pool latency reduction
 - **Timeout**: 300 seconds (wizard flows take 15-60 seconds depending on operation)
-- **Bundling**: esbuild produces a single `server.mjs` with all dependencies inlined except `playwright-core` (provided by base image), eliminating `node_modules` for faster cold starts
+- **Build authority**: Bazel `//:pkg` produces the package artifact, `pnpm build` materializes local `pkg/` and `dist/` from it, and Docker/Modal consume that derived package rather than compiling source again inside the runtime image
 
 The `max_inputs=3` concurrency allows multiple browser sessions per container, each with an isolated browser context. Modal horizontally scales by spawning additional containers when all contexts in a container are occupied. This was increased from `max_inputs=1` after production profiling showed that container cold starts dominated latency more than memory contention.
 

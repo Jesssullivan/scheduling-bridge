@@ -120,22 +120,21 @@ image = (
     modal.Image.from_registry(
         "mcr.microsoft.com/playwright:v1.58.2-noble"
     )
-    .run_commands("rm -rf /usr/local/lib/nodejs", "...")
-    .run_commands("npm install -g corepack && corepack enable")
-    .copy_local_dir(".", "/app")
-    .run_commands("cd /app && pnpm install")
     .run_commands(
-        "cd /app && npx esbuild src/middleware/server.ts "
-        "--bundle --platform=node --format=esm "
-        "--outfile=dist/server.mjs "
-        "--external:playwright-core"
+        "apt-get remove -y nodejs || true",
+        "curl -fsSL https://deb.nodesource.com/setup_24.x | bash -",
+        "apt-get install -y nodejs",
+        "corepack enable && corepack prepare pnpm@9.15.9 --activate",
     )
+    .copy_local_dir("pkg", "/app")
+    .copy_local_file("pnpm-lock.yaml", "/app/pnpm-lock.yaml")
+    .run_commands("cd /app && pnpm install --prod --frozen-lockfile --ignore-scripts")
 )
 ```
 
-Start with Microsoft's official Playwright image (which includes Chromium). Swap Node 24 for Node 22 LTS. Install pnpm. Bundle everything into a single `server.mjs` with esbuild- all dependencies inlined except `playwright-core`, which the base image already provides.
+Start with Microsoft's official Playwright image (which includes Chromium). Re-anchor the image on Node 24 LTS, install pnpm, and copy in the already-derived local `pkg/` package produced by `pnpm build`. The runtime image installs only production dependencies and launches the Bazel-derived `dist/server/handler.js` entrypoint, instead of rebuilding from source.
 
-The runtime config is 2 CPU cores, 2048 MB memory, `max_inputs=1` per container. That last bit is critical. Each browser session has page-level state- navigation history, cookies, form data. Concurrent requests on the same page instance would race. Modal scales horizontally by spawning additional containers, each with its own isolated browser. `min_containers=1` keeps one warm for low-latency reads.
+The runtime config is 2 CPU cores, 2048 MB memory, `max_inputs=3` per container. Each request still gets its own isolated browser context, but sharing a warm container reduced latency more than strict one-request serialization. Modal scales horizontally by spawning additional containers once those context slots are full, and `min_containers=1` keeps one warm for low-latency reads.
 
 The result is a standalone HTTP server at a Modal URL that accepts scheduling API calls and translates them into wizard automation. The `RemoteWizardAdapter` in the SvelteKit app is just an HTTP client:
 
