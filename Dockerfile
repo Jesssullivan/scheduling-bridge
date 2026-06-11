@@ -15,26 +15,18 @@
 
 FROM mcr.microsoft.com/playwright:v1.58.2-noble
 
-# Install Node.js 22 LTS + pnpm
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+# Install the canonical Node 24 LTS runtime lane plus pnpm for package install.
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
     apt-get install -y nodejs && \
     corepack enable && corepack prepare pnpm@9.15.9 --activate && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy package files for dependency install
-COPY package.json pnpm-lock.yaml ./
-
-# Install dependencies needed to build the dist/server/handler.js artifact
-RUN pnpm install --frozen-lockfile
-
-# Copy source
-COPY src/ ./src/
-COPY tsconfig.json ./
-
-# Build the production server artifact, then prune devDependencies
-RUN pnpm build && pnpm prune --prod
+# Copy the already-derived package artifact and install only runtime deps.
+COPY pkg/ ./
+COPY pnpm-lock.yaml .npmrc ./
+RUN pnpm install --prod --frozen-lockfile --ignore-scripts
 
 # Non-root user for security
 RUN useradd -m -s /bin/bash middleware

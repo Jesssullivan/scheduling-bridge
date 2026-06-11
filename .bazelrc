@@ -14,7 +14,7 @@ build --show_timestamps
 # TypeScript settings
 build --@aspect_rules_ts//ts:skipLibCheck=always
 build --spawn_strategy=sandboxed,worker,local
-build --local_ram_resources=HOST_RAM*.75
+build --local_resources=memory=HOST_RAM*.75
 
 # Test configuration
 test --test_output=errors

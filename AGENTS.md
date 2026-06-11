@@ -33,17 +33,20 @@ That makes this repo central to the migration paper and to the operational beta-
 
 ## Current Tracking
 
-As of `2026-04-15`, the active structural work here is:
+As of `2026-04-23`, the active tracker truth around this repo is:
 
-- `TIN-101` mini sprint: toolchain authority and hermetic package convergence
-- `TIN-104` adopt Bazel-built artifact truth in package publish lanes
-- package dependency convergence with `@tummycrypt/scheduling-kit 0.7.x`
+- initiative: `Practitioner Kit Platform` is active
+- project: `Practitioner Kit Roadmap` is active
+- `TIN-101` was completed on `2026-04-20`
+- `TIN-104` was canceled as a duplicate on `2026-04-19`
+- active repo-adjacent work clusters around `TIN-89`, `TIN-165`, `TIN-189`,
+  and GitHub issues `#43`, `#44`, `#47`, and `#10`
 
 Operationally relevant truth:
 
-- the current published bridge line is `0.4.1`
-- the current ESM artifact fix bumps metadata to `0.4.2`
-- that branch aligns the bridge dependency on `@tummycrypt/scheduling-kit ^0.7.1`
+- the current published bridge line is `0.4.2`
+- the bridge dependency is `@tummycrypt/scheduling-kit ^0.7.2`
+- `MassageIthaca` currently consumes `@tummycrypt/scheduling-bridge ^0.4.2`
 
 ## Deployment Truth
 
@@ -132,9 +135,15 @@ If beta feels slow, do not dismiss that as “just Playwright.” Measure the st
 Important commands:
 
 ```bash
+pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm docs:generate
+pnpm docs:build
+bazel build //:pkg
+bazel build //:typecheck
+bazel test //:test
 ```
 
 Current publish flow targets:
@@ -144,9 +153,31 @@ Current publish flow targets:
 
 The repo name is still `acuity-middleware`, but the package name is `scheduling-bridge`. Preserve that distinction.
 
-Today, the publish lane is still pnpm/npm-first. Bazel metadata exists, but it
-is not yet the artifact authority. `TIN-104` exists to change that deliberately
-rather than by implication.
+Today the repo is derivation-first, not pnpm-first:
+
+- Bazel `//:pkg` is the publishable artifact authority
+- `pnpm build` materializes local `pkg/` and `dist/` from `bazel-bin/pkg`
+- Docker and Modal should consume the derived local `pkg/` package instead of
+  compiling source again inside the runtime image
+- `pnpm typecheck` and `pnpm test` delegate to Bazel targets instead of
+  maintaining parallel TypeScript or Vitest authority
+- CI/publish extract and publish `./bazel-bin/pkg`
+- CI `build_command` is only an artifact-authority contract check; Bazel
+  target validation and package-surface validation own the actual package build
+- the repo-local dev shell should provide Bazelisk, Node 24 LTS, pnpm,
+  MkDocs, Tectonic, and Playwright browsers via `nix develop` / `direnv`
+- the declared consumer support window is Node `>=24 <26`; CI spans Node 24
+  and 25 while Bazel, Nix, Modal, and Docker anchor the canonical build lane
+  on Node 24 LTS
+
+## Docs / LLM Surfaces
+
+- `llms.txt` and `docs/generated/repo-facts.md` are generated from
+  package/build/protocol metadata via `pnpm docs:generate`
+- `mkdocs.yml` plus `docs/**` is the operator-facing and LLM-friendly doc site
+  surface
+- do not hand-edit generated doc files; change the source metadata or the
+  generator instead
 
 ## Important Files
 
@@ -168,3 +199,4 @@ rather than by implication.
 - Do not confuse this repo with the reusable UI/package layer.
 - Do not let the bridge package declare stale `scheduling-kit` dependencies
   while downstream apps have already moved on.
+- Do not let `pnpm build` out-rank Bazel `//:pkg`; `pnpm build` is a derivation surface, not a second build authority.

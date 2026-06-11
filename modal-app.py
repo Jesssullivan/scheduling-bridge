@@ -18,6 +18,7 @@ Environment variables (set in Modal dashboard or .env):
 """
 
 import os
+from pathlib import Path
 
 import modal
 
@@ -26,6 +27,9 @@ RELEASE_SHA = os.environ.get("MIDDLEWARE_RELEASE_SHA", "local")
 RELEASE_REF = os.environ.get("MIDDLEWARE_RELEASE_REF", "local")
 RELEASE_VERSION = os.environ.get("MIDDLEWARE_RELEASE_VERSION", "local")
 RELEASE_BUILT_AT = os.environ.get("MIDDLEWARE_RELEASE_BUILT_AT", "")
+
+if not Path("pkg/package.json").exists():
+    raise RuntimeError("Missing derived package artifact at ./pkg. Run `pnpm build` before `modal deploy modal-app.py`.")
 
 app = modal.App(APP_NAME)
 
@@ -42,23 +46,21 @@ image = (
         "MIDDLEWARE_RELEASE_BUILT_AT": RELEASE_BUILT_AT,
     })
     .run_commands(
-        # Remove Node 24 from Playwright image, install Node 22 LTS
+        # Replace the bundled Node with the canonical Node 24 LTS runtime lane.
         "apt-get remove -y nodejs || true",
         "rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx",
-        "curl -fsSL https://deb.nodesource.com/setup_22.x | bash -",
+        "curl -fsSL https://deb.nodesource.com/setup_24.x | bash -",
         "apt-get install -y nodejs",
         "node --version",
         "corepack enable && corepack prepare pnpm@9.15.9 --activate",
         "apt-get clean && rm -rf /var/lib/apt/lists/*",
     )
-    .add_local_file("package.json", "/app/package.json", copy=True)
+    .add_local_dir("pkg", "/app", copy=True)
     .add_local_file("pnpm-lock.yaml", "/app/pnpm-lock.yaml", copy=True)
-    .add_local_dir("src", "/app/src", copy=True)
-    .add_local_file("tsconfig.json", "/app/tsconfig.json", copy=True)
+    .add_local_file(".npmrc", "/app/.npmrc", copy=True)
     .run_commands(
-        # Build the same dist/server/handler.js artifact used by pnpm start.
-        "cd /app && pnpm install --frozen-lockfile",
-        "cd /app && pnpm build",
+        # Install runtime deps into the already-derived package artifact.
+        "cd /app && pnpm install --prod --frozen-lockfile --ignore-scripts",
         "ls -la /app/dist/server/handler.js",
     )
 )

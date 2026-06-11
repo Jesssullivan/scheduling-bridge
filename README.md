@@ -108,12 +108,13 @@ The bridge emits NDJSON logs to stdout/stderr for runtime analysis.
 pnpm install
 pnpm dev           # Development with tsx against src/server/handler.ts
 # or
-pnpm build && pnpm start  # Production via dist/server/handler.js
+pnpm build && pnpm start  # Materialize Bazel-derived pkg/ + dist/ then run dist/server/handler.js
 ```
 
 ### Docker
 
 ```bash
+pnpm build
 docker build -t scheduling-bridge .
 docker run -p 3001:3001 \
   -e AUTH_TOKEN=your-secret-token \
@@ -122,12 +123,15 @@ docker run -p 3001:3001 \
   scheduling-bridge
 ```
 
+The Docker image consumes the local derived package at `pkg/` rather than building from source inside the image.
+
 ### Modal Labs
 
 ```bash
 # Set secrets in Modal dashboard first:
 #   AUTH_TOKEN, ACUITY_BASE_URL, ACUITY_BYPASS_COUPON
-# The Modal image builds the same dist/server/handler.js artifact used by pnpm start.
+# `pnpm build` must run first so `modal-app.py` can consume the derived `pkg/` artifact.
+pnpm build
 modal deploy modal-app.py
 ```
 
@@ -150,9 +154,20 @@ Operationally, this means:
 ### Nix
 
 ```bash
-nix develop   # Enter dev shell with Node.js + Playwright
+nix develop   # Enter dev shell with Node 24 LTS, pnpm, Bazelisk, MkDocs, Tectonic, Playwright
+direnv allow  # Optional: auto-load the same flake via .envrc
 pnpm install
 pnpm dev
+```
+
+### Bazel And Docs
+
+```bash
+pnpm docs:generate
+pnpm docs:build
+bazel build //:pkg
+bazel build //:typecheck
+bazel test //:test
 ```
 
 ## Release Authority
@@ -166,11 +181,14 @@ Current release authority:
 The current publish + deploy shape is:
 
 1. release metadata declared once
-2. Bazel validates/builds the publishable artifact
-3. CI dry-runs the extracted Bazel package surface before release
-4. GitHub Actions publishes that extracted artifact
-5. GitHub Actions deploys the Modal runtime from `main`
-6. downstream apps consume the published package and verify the live runtime tuple via `/health`
+2. Bazel builds the publishable artifact at `bazel-bin/pkg`
+3. `pnpm build` materializes local `pkg/` and `dist/` from that Bazel artifact
+4. Docker and Modal consume the derived local `pkg/` package instead of compiling source again
+5. CI dry-runs that extracted Bazel package surface before release
+6. GitHub Actions publishes the extracted Bazel package directory
+7. GitHub Actions deploy the Modal runtime from `main`
+8. downstream apps consume the published package and verify the live runtime tuple via `/health`
+9. the declared Node support window is `>=24 <26`, with Node 24 as the canonical build lane and Node 25 covered as the current-release compatibility lane
 
 This repo is the sole owner of Acuity automation concerns. App repos and shared
 packages may consume the bridge and assert its runtime tuple, but they should
@@ -181,9 +199,14 @@ not duplicate bridge runtime ownership or release truth logic.
 ```bash
 pnpm install      # Install dependencies
 pnpm dev          # Start dev server with tsx
+pnpm docs:generate
+pnpm docs:build
 pnpm typecheck    # Run TypeScript type checking
-pnpm build        # Compile TypeScript to dist/
-pnpm test         # Run tests
+pnpm build        # Materialize pkg/ + dist/ from Bazel //:pkg
+pnpm test         # Run Bazel-backed tests
+pnpm check:package
+bazel build //:pkg
+bazel test //:test
 ```
 
 ## License

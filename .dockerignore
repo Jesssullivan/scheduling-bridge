@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!.dockerignore
+!.npmrc
+!pnpm-lock.yaml
+!pkg/
+!pkg/**
