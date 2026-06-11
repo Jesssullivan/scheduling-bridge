@@ -17,3 +17,6 @@ nav:
   - Build And Release: build-and-release.md
   - Consumers: consumers.md
   - Generated Facts: generated/repo-facts.md
+  - Paper: paper.md
+  - Paper Workspace: paper/README.md
+  - Phase 1 Data: paper/data/phase1/README.md

@@ -1,5 +1,8 @@
 node_modules/
 dist/
+pkg/
+.direnv/
+site/
 .env
 .env.*
 !.env.example

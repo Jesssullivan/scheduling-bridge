@@ -52,8 +52,11 @@ As of `2026-05-10`, the active structural work here is:
 
 Operationally relevant truth:
 
-- current package metadata is `@tummycrypt/scheduling-bridge` `0.5.11`
-- `0.5.11` depends on `@tummycrypt/scheduling-kit ^0.8.0`
+- the published npm line is `@tummycrypt/scheduling-bridge` `0.5.11`; repo
+  package metadata on `main` is `0.5.13` (publish pending)
+- the `0.5.x` line depends on `@tummycrypt/scheduling-kit ^0.8.0`
+- production runs the `main` container image `ghcr` `sha-1de594e` on K8s since
+  `2026-05-14`
 - the `0.5.x` line is the async bridge redesign lane: async booking jobs,
   availability snapshots, Redis/Postgres async stores, and request-path
   availability prewarm enqueueing
