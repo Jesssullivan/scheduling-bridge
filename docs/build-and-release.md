@@ -44,11 +44,21 @@ pnpm docs:generate
 through Bazel so local and CI paths exercise the same package graph.
 
 There is no host-Vitest lane (`test:host` is retired): `@tummycrypt/scheduling-kit`
-is resolved from the Bzlmod module graph rather than npm, so it is absent from
-`package.json`/`pnpm-lock.yaml` and raw host Vitest cannot resolve the bridge's
-value imports of the kit. Bazel's `//:test` is the Vitest lane — the sandbox
-links `node_modules/@tummycrypt/scheduling-kit` from the registry-fetched,
-Bazel-built kit `//:pkg` via `npm_link_package`.
+is resolved from the Bzlmod module graph rather than npm, so it has no
+`dependencies` edge and is absent from `pnpm-lock.yaml`, and raw host Vitest
+cannot resolve the bridge's value imports of the kit. Bazel's `//:test` is the
+Vitest lane — the sandbox links `node_modules/@tummycrypt/scheduling-kit` from
+the registry-fetched, Bazel-built kit `//:pkg` via `npm_link_package`.
+
+The kit is declared as a required `peerDependency` in `package.json` so the
+derived GitHub Packages artifact carries an explicit, enforced kit requirement
+for npm-style consumers (see `docs/consumers.md` for the alias pair). For the
+bridge repo's own installs the peer is metadata only: `.npmrc` sets
+`auto-install-peers=false` so pnpm does not try to resolve
+`@tummycrypt/scheduling-kit@^0.9.1` from npmjs (where the kit is frozen below
+that range). The Docker and Modal runtime images copy `.npmrc` next to
+`pnpm-lock.yaml` for the same reason — the lockfile records
+`autoInstallPeers: false` and frozen installs must agree with it.
 
 For sandboxed local validation where Bazel cannot write its default output root,
 set `BAZEL_OUTPUT_USER_ROOT=/tmp/<repo>-bazel-out`.

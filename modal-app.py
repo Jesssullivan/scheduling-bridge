@@ -53,6 +53,10 @@ image = (
     )
     .add_local_file("package.json", "/app/package.json", copy=True)
     .add_local_file("pnpm-lock.yaml", "/app/pnpm-lock.yaml", copy=True)
+    # auto-install-peers=false must match the lockfile autoInstallPeers
+    # setting (the scheduling-kit peer is satisfied by the Bazel module
+    # graph, not npm).
+    .add_local_file(".npmrc", "/app/.npmrc", copy=True)
     .add_local_dir("pkg", "/app", copy=True)
     .run_commands(
         # Runtime image consumes the same Bazel-derived artifact that npm publishes.

@@ -27,7 +27,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
 WORKDIR /app
 
 # Copy the Bazel-derived package plus lockfile for runtime dependency install.
-COPY package.json pnpm-lock.yaml ./
+# .npmrc carries auto-install-peers=false, which must match the lockfile's
+# autoInstallPeers setting for frozen installs (the scheduling-kit peer is
+# satisfied by the Bazel module graph, not npm).
+COPY package.json pnpm-lock.yaml .npmrc ./
 COPY pkg/ ./
 
 RUN test -f dist/server/handler.js && \
