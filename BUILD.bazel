@@ -14,7 +14,7 @@ Architecture:
   (future) //:glossgenius_adapter
 """
 
-load("@aspect_rules_js//npm:defs.bzl", "npm_package")
+load("@aspect_rules_js//npm:defs.bzl", "npm_link_package", "npm_package")
 load("@aspect_rules_ts//ts:defs.bzl", "ts_project")
 load("@tummycrypt_scheduling_bridge_npm//:defs.bzl", "npm_link_all_packages")
 load("@tummycrypt_scheduling_bridge_npm//:vitest/package_json.bzl", vitest_bin = "bin")
@@ -24,6 +24,15 @@ load("@tummycrypt_scheduling_bridge_npm//:vitest/package_json.bzl", vitest_bin =
 # =============================================================================
 
 npm_link_all_packages(name = "node_modules")
+
+# scheduling-kit is consumed from the Bzlmod module graph (bazel_dep in
+# MODULE.bazel, served by tinyland-inc/bazel-registry), not from npm.
+# The link label is byte-identical to what npm_link_all_packages used to
+# produce, so downstream deps/data entries are unchanged.
+npm_link_package(
+    name = "node_modules/@tummycrypt/scheduling-kit",
+    src = "@tummycrypt_scheduling_kit//:pkg",
+)
 
 # =============================================================================
 # Core types (re-exports from scheduling-kit)
@@ -177,6 +186,7 @@ vitest_bin.vitest_test(
         ":node_modules",
         "tsconfig.json",
         ":node_modules/vitest",
+        ":node_modules/@tummycrypt/scheduling-kit",
         "vitest.config.ts",
     ] + glob([
         "src/**/*.ts",

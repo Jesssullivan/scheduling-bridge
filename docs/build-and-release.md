@@ -43,10 +43,12 @@ pnpm docs:generate
 `pnpm typecheck`, `pnpm test`, `pnpm build`, and `pnpm check:package` route
 through Bazel so local and CI paths exercise the same package graph.
 
-`pnpm test:host` intentionally bypasses Bazel and runs Vitest under the host
-Node selected by CI. Keep it in the package workflow when widening consumer
-engine support so the matrix proves the published package can execute on every
-advertised downstream major.
+There is no host-Vitest lane (`test:host` is retired): `@tummycrypt/scheduling-kit`
+is resolved from the Bzlmod module graph rather than npm, so it is absent from
+`package.json`/`pnpm-lock.yaml` and raw host Vitest cannot resolve the bridge's
+value imports of the kit. Bazel's `//:test` is the Vitest lane — the sandbox
+links `node_modules/@tummycrypt/scheduling-kit` from the registry-fetched,
+Bazel-built kit `//:pkg` via `npm_link_package`.
 
 For sandboxed local validation where Bazel cannot write its default output root,
 set `BAZEL_OUTPUT_USER_ROOT=/tmp/<repo>-bazel-out`.

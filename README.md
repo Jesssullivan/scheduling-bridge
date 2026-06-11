@@ -316,6 +316,11 @@ Current release authority:
   from the Bazel `//:pkg` artifact
 - npmjs (`@tummycrypt/scheduling-bridge`): retired for new versions, frozen at
   `0.5.11`; `npm_publish_mode: disabled` is permanent policy
+- `@tummycrypt/scheduling-kit` is resolved from the Bzlmod module graph
+  (`bazel_dep` on `tummycrypt_scheduling_kit`), not from npm; it is deliberately
+  absent from `package.json` dependencies. Out-of-ecosystem consumers of the
+  GitHub Packages artifact must install the kit themselves, aliased:
+  `"@tummycrypt/scheduling-kit": "npm:@jesssullivan/scheduling-kit@^0.9.1"`
 
 The current publish + deploy shape is:
 

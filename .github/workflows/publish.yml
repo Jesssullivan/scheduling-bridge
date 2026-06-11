@@ -40,7 +40,7 @@ jobs:
       unit_test_command: pnpm test
       build_command: node scripts/check-artifact-authority.mjs
       package_check_command: pnpm check:package
-      bazel_targets: "//:pkg"
+      bazel_targets: "//:pkg //:test"
       package_dir: ./bazel-bin/pkg
       npm_access: public
       github_package_name: "@jesssullivan/scheduling-bridge"

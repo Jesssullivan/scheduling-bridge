@@ -33,13 +33,13 @@ This page is generated from `package.json`, `MODULE.bazel`, `BUILD.bazel`,
   from the Bazel `//:pkg` artifact
 - npmjs publish mode: `disabled` (npmjs frozen at `0.5.11`,
   retired for new versions)
-- Bazel artifact target: `//:pkg`
+- Bazel artifact target: `//:pkg //:test`
 - CI package directory: `./bazel-bin/pkg`
 - Publish package directory: `./bazel-bin/pkg`
 - local build command: `node scripts/build-derived-artifacts.mjs`
 - local derived package directory: `pkg/`
 - CI typecheck command: `pnpm typecheck`
-- CI unit test command: `pnpm test:host && pnpm test`
+- CI unit test command: `pnpm test`
 - CI build command: `node scripts/check-artifact-authority.mjs`
 - runtime start command: `node dist/server/handler.js`
 
