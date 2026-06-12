@@ -93,6 +93,22 @@ describe('validateFlowPlan', () => {
 		expect(violations.some((v) => v.includes('invalid maxReentries'))).toBe(true);
 	});
 
+	it('rejects duplicate recovery edge targets on a node (budgets are keyed by from=>to)', () => {
+		const bad = plan([
+			node('a', { provides: ['x'] }),
+			node('b', {
+				needs: ['x'],
+				dependsOn: ['a'],
+				recoveries: [
+					{ to: 'a', maxReentries: 1 },
+					{ to: 'a', maxReentries: 2 },
+				],
+			}),
+		]);
+		const violations = validateFlowPlan(bad, []);
+		expect(violations.some((v) => v.includes("duplicate recovery edge to 'a'"))).toBe(true);
+	});
+
 	it('rejects non-contiguous segments and duplicate stepIds', () => {
 		const bad = plan([
 			node('a', { segment: 's1' }),

@@ -6,9 +6,11 @@
  * Scope region with the (parameterizable) session layer provided once. Per node: decode needs
  * from accumulated state, journal 'started', run with Effect.retry(meta.retry ?? Schedule.stop),
  * compare observed vs expects into a LandingOutcome, journal 'completed'/'failed'/'rerouted',
- * merge provides. Recoverable reroutes along a DECLARED recovery edge with a journaled,
- * decremented re-entry budget; exhaustion escalates to Diverged, which fails with the
- * observation attached. On failure, compensate handlers of succeeded steps run in REVERSE
+ * merge provides. A known-but-unexpected landing is Recoverable ONLY when the step's typed
+ * recovery chooser (design §5 step 3: targets are data; choosers are typed code) names a
+ * DECLARED, budgeted recovery edge for the observed station; the traversal journals the
+ * decremented re-entry budget. Chooser declining, naming an undeclared target, or budget
+ * exhaustion escalates to Diverged, which fails with the observation attached. On failure, compensate handlers of succeeded steps run in REVERSE
  * order of success (outside segment scopes — vendor-side cleanup only). Journal append failure
  * is log-and-continue (evidence-only in 0.6.x). Termination: total step executions are bounded
  * by |nodes| x (1 + sum of maxReentries over recovery edges).
@@ -130,11 +132,22 @@ export const runFlow = <Spec extends FlowStateSpec, E, R, RS = never, ES = never
 			if (observed.observed !== 'unknown' && node.expects.includes(observed.observed)) {
 				return { _tag: 'OnTrack', landing: observed.observed };
 			}
+			// Known-but-unexpected landings reroute ONLY when the step's typed chooser names a
+			// declared, budgeted recovery edge for THIS observation (targets are data; choosers
+			// are typed code). No chooser, chooser declines, undeclared target, or exhausted
+			// budget: a true divergence — never masked into a reroute.
 			if (observed.observed !== 'unknown') {
-				for (const edge of node.recoveries ?? []) {
-					if ((budgets.get(`${node.stepId}=>${edge.to}`) ?? 0) > 0) {
-						return { _tag: 'Recoverable', landing: observed.observed, rerouteTo: edge.to };
-					}
+				const chooser = flow.choosers.get(node.stepId);
+				const target = chooser?.(
+					{ ...state } as Readonly<Partial<StateOf<Spec>>>,
+					observed.observed,
+				);
+				if (
+					target !== undefined &&
+					(node.recoveries ?? []).some((edge) => edge.to === target) &&
+					(budgets.get(`${node.stepId}=>${target}`) ?? 0) > 0
+				) {
+					return { _tag: 'Recoverable', landing: observed.observed, rerouteTo: target };
 				}
 			}
 			return { _tag: 'Diverged', observation: observed };

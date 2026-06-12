@@ -52,6 +52,7 @@ export {
 	type Flow,
 	type FlowBuilder,
 	type FlowIdentity,
+	type RecoveryChooser,
 } from './flow.js';
 export {
 	FlowJournal,

@@ -161,9 +161,15 @@ export const validateFlowPlan = (
 		}
 	}
 
-	// Recovery edges: targets must exist; budgets must be positive integers.
+	// Recovery edges: targets must exist and be unique per node (budgets are keyed by
+	// from=>to, so a duplicate target would alias one budget); budgets must be positive.
 	for (const node of plan.nodes) {
+		const targets = new Set<string>();
 		for (const edge of node.recoveries ?? []) {
+			if (targets.has(edge.to)) {
+				violations.push(`step '${node.stepId}' declares duplicate recovery edge to '${edge.to}'`);
+			}
+			targets.add(edge.to);
 			if (!ids.has(edge.to)) {
 				violations.push(`step '${node.stepId}' declares recovery edge to unknown step '${edge.to}'`);
 			}

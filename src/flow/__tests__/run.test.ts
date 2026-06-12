@@ -149,7 +149,11 @@ describe('runFlow', () => {
 						}),
 				}),
 			)
-			.recover('acuity/navigate', { to: 'acuity/navigate', maxReentries: 1 })
+			.recover(
+				'acuity/navigate',
+				(_state, observed) => (observed === 'acuity:service-selection' ? 'acuity/navigate' : undefined),
+				[{ to: 'acuity/navigate', maxReentries: 1 }],
+			)
 			.build(identity);
 
 		const outcome = await Effect.runPromise(
@@ -187,7 +191,11 @@ describe('runFlow', () => {
 						}),
 				}),
 			)
-			.recover('acuity/navigate', { to: 'acuity/navigate', maxReentries: 2 })
+			.recover(
+				'acuity/navigate',
+				(_state, observed) => (observed === 'acuity:service-selection' ? 'acuity/navigate' : undefined),
+				[{ to: 'acuity/navigate', maxReentries: 2 }],
+			)
 			.build(identity);
 
 		const exit = await Effect.runPromiseExit(
@@ -211,6 +219,164 @@ describe('runFlow', () => {
 		]);
 		expect(rows.filter((r) => r.status === 'rerouted').map((r) => r.reroute?.remaining)).toEqual([1, 0]);
 		expect(rows[5].error?.code).toBe('FLOW_DIVERGED');
+	});
+
+	it('diverges (never reroutes) when the observed landing is not claimed by the chooser', async () => {
+		// Must-fix regression: a step expecting 'acuity:client-form' with a recovery edge
+		// motivated by 'acuity:service-selection' lands on an UNRELATED known station.
+		// Without the chooser this was masked into a budget-bounded reroute; it must diverge.
+		const journal = createInMemoryFlowJournal();
+		let runs = 0;
+		const flow = makeFlow(spec, ['bookingRef'])
+			.add(
+				makeStep({
+					id: 'acuity/navigate',
+					needs: ['bookingRef'],
+					provides: ['navResult'],
+					expects: ['acuity:client-form'],
+					run: () =>
+						Effect.sync(() => {
+							runs += 1;
+							return {
+								state: { navResult: 'ok' },
+								observed: observation('acuity:fatal-error-page', ['acuity:client-form']),
+							};
+						}),
+				}),
+			)
+			.recover(
+				'acuity/navigate',
+				(_state, observed) => (observed === 'acuity:service-selection' ? 'acuity/navigate' : undefined),
+				[{ to: 'acuity/navigate', maxReentries: 1 }],
+			)
+			.build(identity);
+
+		const exit = await Effect.runPromiseExit(
+			runFlow(flow, { bookingRef: 'r' }, options).pipe(Effect.provideService(FlowJournal, journal)),
+		);
+		const error = failureOf(exit) as FlowDivergedError;
+		expect(error._tag).toBe('FlowDivergedError');
+		expect(error.observation.observed).toBe('acuity:fatal-error-page');
+		expect(runs).toBe(1); // never re-driven
+		const rows = await Effect.runPromise(journal.read('op-1'));
+		expect(rows.map((r) => r.status)).toEqual(['started', 'failed']);
+		expect(rows.some((r) => r.status === 'rerouted')).toBe(false);
+	});
+
+	it('diverges when the chooser names a target that is not a declared recovery edge', async () => {
+		const journal = createInMemoryFlowJournal();
+		const flow = makeFlow(spec, ['bookingRef'])
+			.add(
+				makeStep({
+					id: 'acuity/navigate',
+					needs: ['bookingRef'],
+					provides: ['navResult'],
+					expects: ['acuity:client-form'],
+					run: () =>
+						Effect.succeed({
+							state: { navResult: 'ok' },
+							observed: observation('acuity:service-selection', ['acuity:client-form']),
+						}),
+				}),
+			)
+			.add(
+				makeStep({
+					id: 'acuity/fill-form',
+					needs: ['navResult'],
+					provides: ['formResult'],
+					run: () => Effect.succeed({ state: { formResult: 'ok' } }),
+				}),
+			)
+			// Chooser bug: names a real step that is NOT among the declared edges. Fail closed.
+			.recover('acuity/navigate', () => 'acuity/fill-form', [
+				{ to: 'acuity/navigate', maxReentries: 1 },
+			])
+			.build(identity);
+
+		const exit = await Effect.runPromiseExit(
+			runFlow(flow, { bookingRef: 'r' }, options).pipe(Effect.provideService(FlowJournal, journal)),
+		);
+		const error = failureOf(exit) as FlowDivergedError;
+		expect(error._tag).toBe('FlowDivergedError');
+		const rows = await Effect.runPromise(journal.read('op-1'));
+		expect(rows.some((r) => r.status === 'rerouted')).toBe(false);
+	});
+
+	it('routes via the chooser by observed station (not declaration order) with accumulated state', async () => {
+		const journal = createInMemoryFlowJournal();
+		let finalRuns = 0;
+		let stateSeenByChooser: Record<string, unknown> | undefined;
+		const flow = makeFlow(spec)
+			.add(
+				makeStep({
+					id: 'seed',
+					needs: [],
+					provides: ['navResult'],
+					run: () => Effect.succeed({ state: { navResult: 'ok' } }),
+				}),
+			)
+			.add(
+				makeStep({
+					id: 'mid',
+					needs: ['navResult'],
+					provides: ['formResult'],
+					run: () => Effect.succeed({ state: { formResult: 'ok' } }),
+				}),
+			)
+			.add(
+				makeStep({
+					id: 'final',
+					needs: ['formResult'],
+					provides: ['confirmation'],
+					expects: ['acuity:confirmation'],
+					run: () =>
+						Effect.sync(() => {
+							finalRuns += 1;
+							return {
+								state: { confirmation: 'ok' },
+								observed:
+									finalRuns === 1
+										? observation('acuity:lost-form', ['acuity:confirmation'])
+										: observation('acuity:confirmation', ['acuity:confirmation']),
+							};
+						}),
+				}),
+			)
+			// 'seed' is declared FIRST; the chooser must still pick 'mid' for 'acuity:lost-form'.
+			.recover(
+				'final',
+				(state, observed) => {
+					stateSeenByChooser = { ...state };
+					if (observed === 'acuity:lost-session') return 'seed';
+					if (observed === 'acuity:lost-form') return 'mid';
+					return undefined;
+				},
+				[
+					{ to: 'seed', maxReentries: 1 },
+					{ to: 'mid', maxReentries: 1 },
+				],
+			)
+			.build(identity);
+
+		const outcome = await Effect.runPromise(
+			runFlow(flow, {}, options).pipe(Effect.provideService(FlowJournal, journal)),
+		);
+		expect(outcome.landed).toBe('alternate-terminal');
+		expect(stateSeenByChooser?.formResult).toBe('ok');
+		const rows = await Effect.runPromise(journal.read('op-1'));
+		expect(rows.find((r) => r.status === 'rerouted')?.reroute).toEqual({ to: 'mid', remaining: 0 });
+		expect(rows.map((r) => [r.stepId, r.status])).toEqual([
+			['seed', 'started'],
+			['seed', 'completed'],
+			['mid', 'started'],
+			['mid', 'completed'],
+			['final', 'started'],
+			['final', 'rerouted'],
+			['mid', 'started'],
+			['mid', 'completed'],
+			['final', 'started'],
+			['final', 'completed'],
+		]);
 	});
 
 	it('leaves an effectful-once started-without-completed trail visible in the journal', async () => {
@@ -370,7 +536,11 @@ describe('runFlow', () => {
 						}),
 				}),
 			)
-			.recover('payment/apply-coupon', { to: 'payment/apply-coupon', maxReentries: 1 })
+			.recover(
+				'payment/apply-coupon',
+				(_state, observed) => (observed === 'acuity:service-selection' ? 'payment/apply-coupon' : undefined),
+				[{ to: 'payment/apply-coupon', maxReentries: 1 }],
+			)
 			.build(identity);
 
 		await Effect.runPromise(
