@@ -162,6 +162,8 @@ export const createRedisBridgeAsyncStore = (
 					attempts: 0,
 					createdAt: timestamp,
 					updatedAt: timestamp,
+					planHash: options.planHash,
+					flowVersion: options.flowVersion,
 				};
 				await writeJob(record);
 				await client.zadd(
@@ -182,6 +184,8 @@ export const createRedisBridgeAsyncStore = (
 				attempts: 0,
 				createdAt: timestamp,
 				updatedAt: timestamp,
+				planHash: options?.planHash,
+				flowVersion: options?.flowVersion,
 			};
 			await writeJob(record);
 			await client.zadd(
