@@ -37,6 +37,9 @@ create table if not exists bridge_jobs (
 create index if not exists bridge_jobs_ready_idx
   on bridge_jobs (status, created_at);
 
+alter table bridge_jobs add column if not exists plan_hash text;
+alter table bridge_jobs add column if not exists flow_version text;
+
 create table if not exists bridge_availability_snapshots (
   snapshot_id uuid primary key,
   kind text not null,
@@ -71,6 +74,8 @@ interface BridgeJobRow {
 	leased_until: Date | string | null;
 	result: BridgeJobResult | null;
 	failure: BridgeJobFailure | null;
+	plan_hash: string | null;
+	flow_version: string | null;
 }
 
 interface AvailabilitySnapshotRow {
@@ -129,6 +134,8 @@ const jobFromRow = (row: BridgeJobRow): BridgeJobRecord => ({
 	leasedUntil: row.leased_until ? iso(row.leased_until) : undefined,
 	result: row.result ?? undefined,
 	failure: row.failure ?? undefined,
+	planHash: row.plan_hash ?? undefined,
+	flowVersion: row.flow_version ?? undefined,
 });
 
 const snapshotFromRow = (
@@ -220,9 +227,11 @@ export const createPostgresBridgeAsyncStore = (
 					kind,
 					status,
 					command,
-					idempotency_key
+					idempotency_key,
+					plan_hash,
+					flow_version
 				)
-				values ($1, $2, 'queued', $3::jsonb, $4)
+				values ($1, $2, 'queued', $3::jsonb, $4, $5, $6)
 				on conflict (idempotency_key)
 				do update set updated_at = bridge_jobs.updated_at
 				returning *
@@ -232,6 +241,8 @@ export const createPostgresBridgeAsyncStore = (
 					job.kind,
 					JSON.stringify(job.command),
 					options?.idempotencyKey ?? null,
+					options?.planHash ?? null,
+					options?.flowVersion ?? null,
 				],
 			);
 			return jobFromRow(inserted.rows[0]!);

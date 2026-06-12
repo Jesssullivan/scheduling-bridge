@@ -83,6 +83,8 @@ export const createInMemoryBridgeAsyncStore = (): BridgeAsyncStore => {
 				attempts: 0,
 				createdAt: timestamp,
 				updatedAt: timestamp,
+				planHash: options?.planHash,
+				flowVersion: options?.flowVersion,
 			};
 			jobs.set(operationId, record);
 			if (idempotencyKey) idempotencyKeys.set(idempotencyKey, operationId);

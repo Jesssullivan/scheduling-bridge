@@ -113,6 +113,14 @@ export interface BridgeJobRecord {
 	readonly leasedUntil?: string;
 	readonly result?: BridgeJobResult;
 	readonly failure?: BridgeJobFailure;
+	/**
+	 * sha256 of the canonical FlowPlan JSON, pinned at enqueue (additive, 0.6.0;
+	 * design docs/design/flow-dag-formalization.md §5 plan-hash pinning). Absent on
+	 * records enqueued before flows existed or outside the flow runner.
+	 */
+	readonly planHash?: string;
+	/** Flow shape semver pinned at enqueue alongside `planHash` (additive, 0.6.0). */
+	readonly flowVersion?: string;
 }
 
 export interface AvailabilitySnapshot {
@@ -138,6 +146,10 @@ export interface AvailabilitySnapshotQuery {
 
 export interface EnqueueBridgeJobOptions {
 	readonly idempotencyKey?: string;
+	/** Pins `BridgeJobRecord.planHash` at enqueue (additive, 0.6.0). */
+	readonly planHash?: string;
+	/** Pins `BridgeJobRecord.flowVersion` at enqueue (additive, 0.6.0). */
+	readonly flowVersion?: string;
 }
 
 export interface EnqueueBookingJobRequest {
