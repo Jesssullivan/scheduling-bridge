@@ -318,9 +318,27 @@ Current release authority:
   `0.5.11`; `npm_publish_mode: disabled` is permanent policy
 - `@tummycrypt/scheduling-kit` is resolved from the Bzlmod module graph
   (`bazel_dep` on `tummycrypt_scheduling_kit`), not from npm; it is deliberately
-  absent from `package.json` dependencies. Out-of-ecosystem consumers of the
-  GitHub Packages artifact must install the kit themselves, aliased:
-  `"@tummycrypt/scheduling-kit": "npm:@jesssullivan/scheduling-kit@^0.9.1"`
+  absent from `package.json` `dependencies`, but it is declared as a required
+  `peerDependency` so npm-style consumers of the derived GitHub Packages
+  artifact get an explicit, enforced kit requirement instead of a silent
+  runtime import failure
+- out-of-ecosystem (npm-style) consumers of the GitHub Packages artifact must
+  satisfy that peer themselves with both aliases:
+
+  ```json
+  {
+    "dependencies": {
+      "@tummycrypt/scheduling-bridge": "npm:@jesssullivan/scheduling-bridge@^0.5.13",
+      "@tummycrypt/scheduling-kit": "npm:@jesssullivan/scheduling-kit@^0.9.1"
+    }
+  }
+  ```
+
+  The kit alias is the required companion of the bridge's
+  `@tummycrypt/scheduling-kit` peer dependency: the bridge's
+  `capabilities` surface unconditionally imports
+  `@tummycrypt/scheduling-kit/payments` at runtime. Bazel consumers need
+  neither alias — the module graph supplies the kit.
 
 The current publish + deploy shape is:
 

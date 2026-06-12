@@ -4,7 +4,13 @@ scheduling-bridge - Bazel Module Configuration
 Backend-agnostic scheduling adapter hub. Currently provides Acuity adapter
 via Playwright automation. Future adapters: CalCom, GlossGenius, etc.
 
-Published as @tummycrypt/scheduling-bridge on npm.
+Delivery doctrine:
+  - SSOT: this Bazel module (tummycrypt_scheduling_bridge) via the
+    tinyland-inc/bazel-registry module graph.
+  - Derived npm-style route: GitHub Packages @jesssullivan/scheduling-bridge,
+    built from the Bazel //:pkg artifact.
+  - npmjs @tummycrypt/scheduling-bridge is retired for new versions and
+    frozen at 0.5.11 (npm_publish_mode: disabled is permanent policy).
 
 Build targets:
   bazel build //:scheduling_bridge   # TypeScript compilation
@@ -48,9 +54,6 @@ bazel_dep(name = "aspect_rules_swc", version = "2.6.1")
 # Primary dependency: scheduling-kit (resolved via the Bzlmod module graph from
 # tinyland-inc/bazel-registry; the npm edge is retired — see BUILD.bazel npm_link_package).
 bazel_dep(name = "tummycrypt_scheduling_kit", version = "0.9.1")
-
-# Auth surface (payment capability types come through tinyland-auth).
-bazel_dep(name = "tummycrypt_tinyland_auth", version = "0.3.0")
 
 # =============================================================================
 # Node.js toolchain
