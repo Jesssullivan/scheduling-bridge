@@ -3,9 +3,10 @@
  * Design: docs/design/flow-dag-formalization.md §4 (journal.ts) and §5.
  *
  * This file ships the interface plus the MEMORY implementation (per-operation array,
- * serial seq). Redis (atomic Lua LLEN+RPUSH seq append) and Postgres (`flow_checkpoints`
- * table, PRIMARY KEY (operation_id, seq)) implementations are a later lane; they implement
- * the same `FlowJournalShape` and slot in behind the same Context tag.
+ * serial seq). The durable implementations live beside it — Redis (atomic Lua
+ * LLEN+RPUSH seq append, `redis-journal.ts`) and Postgres (`flow_checkpoints` table,
+ * PRIMARY KEY (operation_id, seq), `postgres-journal.ts`) — implementing the same
+ * `FlowJournalShape` behind the same Context tag.
  */
 
 import { Context, Data, Effect, Layer } from 'effect';
