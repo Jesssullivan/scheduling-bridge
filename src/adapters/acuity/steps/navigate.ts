@@ -19,7 +19,8 @@ import type { Page } from 'playwright-core';
 import { BrowserService } from '../../../shared/browser-service.js';
 import { observePageOpEffect } from '../../../shared/metrics.js';
 import { WizardStepError } from '../errors.js';
-import { resolveSelector, probe, Selectors } from '../selectors.js';
+import { resolveSelector, Selectors } from '../selectors.js';
+import { detectLandingStep } from '../station-detector.js';
 import {
 	resolveServiceOnPage,
 	toServiceResolutionSummary,
@@ -529,22 +530,8 @@ const clickSelectAndContinue = (page: Page): Effect.Effect<void, WizardStepError
 // HELPERS
 // =============================================================================
 
-const detectLandingStep = (page: Page) =>
-	Effect.gen(function* () {
-		const hasClientForm = yield* probe(page, 'firstNameInput');
-		if (hasClientForm) return 'client-form' as const;
-
-		const hasTimeSlots = yield* probe(page, 'timeSlot');
-		if (hasTimeSlots) return 'time-slots' as const;
-
-		const hasCalendar = yield* probe(page, 'calendarDay');
-		if (hasCalendar) return 'calendar' as const;
-
-		const hasServiceList = yield* probe(page, 'serviceList');
-		if (hasServiceList) return 'service-selection' as const;
-
-		return 'unknown' as const;
-	});
+// `detectLandingStep` was physically extracted to ../station-detector.ts
+// (design §7 / §10-0.7.0; TIN-2094) and is imported above.
 
 /**
  * Parse a Date from ISO 8601 datetime string.

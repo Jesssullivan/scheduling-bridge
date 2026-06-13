@@ -9,9 +9,15 @@
  *   - Standard: firstName, lastName, email, phone
  *   - 3 yes/no radio groups (aria-required, NO name/id attrs)
  *   - "How did you hear" multi-checkbox (at least 1 required)
- *   - Medication textarea (fields[field-16606770])
- *   - Terms checkbox (fields[field-13933959])
+ *   - Medication textarea (tenant custom field; selector lives in the profile)
+ *   - Terms checkbox (tenant custom field; selector lives in the profile)
  *   - ALL must be filled before "Continue to Payment" advances
+ *
+ * De-tenanting (design §7, 0.7.0; TIN-2094): the tenant-customizable selectors
+ * (terms / how-did-you-hear / medication) and the terms-field id excluded from
+ * the referral fallback are selector-profile DATA (selector-profile.ts), keyed
+ * by `BridgeAdapterProfile.selectorProfile`. This module names ZERO tenant
+ * specifics; it reads the active profile's data.
  */
 
 import { Effect } from 'effect';
@@ -19,6 +25,7 @@ import type { Page } from 'playwright-core';
 import { BrowserService } from '../../../shared/browser-service.js';
 import { WizardStepError } from '../errors.js';
 import { resolveSelector, Selectors } from '../selectors.js';
+import { DEFAULT_SELECTOR_PROFILE } from '../selector-profile.js';
 import type { ClientInfo } from '../../../core/types.js';
 
 // =============================================================================
@@ -30,7 +37,8 @@ export interface FillFormParams {
 	readonly customFields?: Record<string, string>;
 	/** Answer for yes/no radio questions (default: "no") */
 	readonly intakeRadioAnswer?: 'yes' | 'no';
-	/** Which "How did you hear" checkbox to select (default: "Internet search") */
+	/** Which "How did you hear" checkbox to select. Defaults to the active
+	 * selector profile's `defaultHowDidYouHear` intake option (profile DATA). */
 	readonly howDidYouHear?: string;
 	/** Medication text (default: "None") */
 	readonly medication?: string;
@@ -94,8 +102,12 @@ export const fillFormFields = (params: FillFormParams) =>
 		yield* fillIntakeRadios(page, radioAnswer);
 		intakeFieldsCompleted.push('radioButtons');
 
-		// Fill "How did you hear" checkbox (may not exist on current form)
-		const hearOption = params.howDidYouHear ?? 'Internet search';
+		// Fill "How did you hear" checkbox (may not exist on current form).
+		// The default option name is profile DATA (tenant intake option), never a
+		// constant in this generic step. Empty string when no profile default and
+		// no caller value — the fallback path then handles selection.
+		const hearOption =
+			params.howDidYouHear ?? DEFAULT_SELECTOR_PROFILE.defaultHowDidYouHear ?? '';
 		yield* fillHowDidYouHear(page, hearOption);
 		intakeFieldsCompleted.push('howDidYouHear');
 
@@ -298,10 +310,22 @@ const fillIntakeRadios = (
 	});
 
 /**
+ * Build the ":not(...)" exclusion fragment for the referral fallback. The terms
+ * agreement checkbox must never be auto-checked as the referral answer; its
+ * tenant custom-field id is profile DATA (`excludeFallbackFieldId`), not a
+ * constant in this generic code. When the active profile names no exclusion,
+ * the fallback matches any checkbox (vendor-neutral).
+ */
+const referralFallbackNot = (): string => {
+	const fieldId = DEFAULT_SELECTOR_PROFILE.excludeFallbackFieldId;
+	return fieldId ? `:not([name*="${fieldId}"])` : '';
+};
+
+/**
  * Select at least one "How did you hear" checkbox.
  *
- * These checkboxes have plain-text name attributes like "Internet search".
- * Uses the same label-click locator strategy as radio buttons.
+ * These checkboxes have plain-text name attributes (the tenant intake option
+ * names). Uses the same label-click locator strategy as radio buttons.
  */
 const fillHowDidYouHear = (
 	page: Page,
@@ -315,11 +339,12 @@ const fillHowDidYouHear = (
 				await labelLocator.first().scrollIntoViewIfNeeded();
 				await labelLocator.first().click({ timeout: 3000 });
 			} else {
-				// Fallback: click the first non-terms checkbox
-				const fallback = page.locator('input[type="checkbox"]:not([name*="field-13933959"])');
+				// Fallback: click the first checkbox that is not the terms field.
+				const not = referralFallbackNot();
+				const fallback = page.locator(`input[type="checkbox"]${not}`);
 				const fallbackCount = await fallback.count();
 				if (fallbackCount > 0) {
-					const parent = page.locator('label:has(input[type="checkbox"]:not([name*="field-13933959"]))');
+					const parent = page.locator(`label:has(input[type="checkbox"]${not})`);
 					await parent.first().scrollIntoViewIfNeeded();
 					await parent.first().click({ timeout: 3000 });
 				}

@@ -192,7 +192,7 @@ export const fetchBusinessData = async (baseUrl: string): Promise<AcuityBusiness
  * Convert Acuity's BUSINESS.appointmentTypes to our Service[] format.
  * Flattens the category-grouped structure and filters to active services.
  *
- * Critical: Uses Acuity's numeric ID (e.g. 53178494) as the service ID.
+ * Critical: Uses Acuity's numeric appointmentType ID as the service ID.
  * Our internal IDs (e.g. 'urgent-pain-relief') are PG-side only.
  * The wizard/scraper/availability endpoints need Acuity's numeric IDs.
  */

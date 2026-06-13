@@ -49,6 +49,7 @@ import {
 	extractBusinessFromPage,
 	businessToServices,
 } from './steps/extract-business.js';
+import { LANDING_PROBE_KEYS as stationDetectorLandingProbeKeys } from './station-detector.js';
 import { redactable } from '../../flow/redaction.js';
 
 // =============================================================================
@@ -76,13 +77,15 @@ export const ACUITY_STATIONS = [
 
 export type AcuityStation = (typeof ACUITY_STATIONS)[number];
 
-/** Probe keys `detectLandingStep` (steps/navigate.ts) checks, in probe order. */
-export const LANDING_PROBE_KEYS = {
-	'client-form': 'firstNameInput',
-	'time-slots': 'timeSlot',
-	calendar: 'calendarDay',
-	'service-selection': 'serviceList',
-} as const;
+/**
+ * Probe keys the station detector checks, in probe order. Now owned by the
+ * extracted station-detector module (design §7 / §10-0.7.0; TIN-2094) and
+ * re-exported here for the established import path. Defining it in
+ * station-detector.ts (rather than importing flow-steps from there) keeps the
+ * detector free of the flow-steps → steps/index → navigate → station-detector
+ * cycle.
+ */
+export const LANDING_PROBE_KEYS = stationDetectorLandingProbeKeys;
 
 /** Map a `NavigateResult.landingStep` onto the station vocabulary. */
 export const landingStepToStation = (
