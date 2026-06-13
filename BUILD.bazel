@@ -190,6 +190,9 @@ vitest_bin.vitest_test(
         "vitest.config.ts",
     ] + glob([
         "src/**/*.ts",
+        # Committed test fixtures (e.g. the recorded trace-conformance golden
+        # traces under src/**/__fixtures__/) must be sandboxed alongside the suites.
+        "src/**/__fixtures__/**/*.json",
         "tests/**/*.ts",
         "parity/**/*.ts",
         "bench/**/*.ts",

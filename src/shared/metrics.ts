@@ -162,20 +162,6 @@ const availabilitySnapshotAgeSeconds = new Gauge({
 	registers: [registry],
 });
 
-const flowShadowRunsTotal = new Counter({
-	name: 'acuity_flow_shadow_runs_total',
-	help: 'Flow shadow-mode comparisons of plan-predicted vs executed step sequences by flow and result',
-	labelNames: ['flow_id', 'result'],
-	registers: [registry],
-});
-
-const flowShadowStepMismatchTotal = new Counter({
-	name: 'acuity_flow_shadow_step_mismatch_total',
-	help: 'Flow shadow-mode per-step divergences between the plan-predicted and executed step ids',
-	labelNames: ['flow_id', 'step_id', 'kind'],
-	registers: [registry],
-});
-
 // ─── Per-stepId flow runtime metrics (design §10 0.6.x "per-stepId metrics") ────
 //
 // Recorded by the fold (src/flow/run.ts via the FlowMetricsHook) when the flag is
@@ -427,81 +413,6 @@ export const setAvailabilitySnapshotAge = (
 	);
 };
 
-// ─── Flow shadow mode (design docs/design/flow-dag-formalization.md §10 0.6.x) ──
-//
-// The shadow runs on the non-executing path. After the 0.6.x flip the fold (runFlow)
-// is the default, so shadow only fires under the `BRIDGE_FLOW_RUNNER=0` kill switch:
-// the legacy execution paths then diff the FlowPlan-predicted step sequence (what the
-// fold WOULD have run) against the step ids the legacy composition actually executed.
-// Plans only — no dual execution of effects, zero behavior change. Step-id label
-// cardinality is bounded by the registered flow plans (a handful of stable ids),
-// never per-request data.
-
-export type FlowShadowResult = 'match' | 'prefix' | 'mismatch';
-
-/**
- * Compare the plan-predicted step-id sequence against the actually-executed one and
- * record the outcome. A failed legacy run legitimately executes a prefix of the plan,
- * so prefixes are distinguished from genuine shape mismatches.
- *
- * Recorded only on the legacy worker path (src/server/worker.ts), which after the
- * 0.6.x flip runs only under the `BRIDGE_FLOW_RUNNER=0` kill switch. The shadow
- * therefore measures the non-executing path: when legacy runs (rollback) it diffs
- * the real trace against the plan the fold would have run. When the fold runs
- * (default) it IS the plan and needs no shadow comparison.
- */
-export const recordFlowShadowComparison = (
-	flowId: string,
-	predicted: readonly string[],
-	executed: readonly string[],
-): FlowShadowResult => {
-	const isPrefix =
-		executed.length <= predicted.length &&
-		executed.every((stepId, index) => stepId === predicted[index]);
-	const result: FlowShadowResult =
-		isPrefix && executed.length === predicted.length
-			? 'match'
-			: isPrefix
-				? 'prefix'
-				: 'mismatch';
-	flowShadowRunsTotal.inc({ flow_id: flowId, result });
-	if (result !== 'match') {
-		const executedSet = new Set(executed);
-		const predictedSet = new Set(predicted);
-		for (const stepId of predicted) {
-			if (!executedSet.has(stepId)) {
-				flowShadowStepMismatchTotal.inc({
-					flow_id: flowId,
-					step_id: stepId,
-					kind: 'missing',
-				});
-			}
-		}
-		for (const stepId of executed) {
-			if (!predictedSet.has(stepId)) {
-				flowShadowStepMismatchTotal.inc({
-					flow_id: flowId,
-					step_id: stepId,
-					kind: 'unexpected',
-				});
-			}
-		}
-		if (result === 'mismatch') {
-			const firstDivergence = executed.findIndex(
-				(stepId, index) => stepId !== predicted[index],
-			);
-			if (firstDivergence >= 0 && predictedSet.has(executed[firstDivergence])) {
-				flowShadowStepMismatchTotal.inc({
-					flow_id: flowId,
-					step_id: executed[firstDivergence],
-					kind: 'out_of_order',
-				});
-			}
-		}
-	}
-	return result;
-};
-
 // ─── Page-operation timer helper ─────────────────────────────────────────────
 //
 // Keep label cardinality low: `operation` should be a small enum of
@@ -574,8 +485,6 @@ export const metrics = {
 	bridgeQueueDepth,
 	bridgeQueueOldestAgeSeconds,
 	availabilitySnapshotAgeSeconds,
-	flowShadowRunsTotal,
-	flowShadowStepMismatchTotal,
 	flowStepAttemptsTotal,
 	flowStepFailuresTotal,
 	flowStepReroutesTotal,
@@ -601,7 +510,6 @@ export const metrics = {
 	setBridgeQueueDepth,
 	setBridgeQueueOldestAge,
 	setAvailabilitySnapshotAge,
-	recordFlowShadowComparison,
 	observePageOp,
 	observePageOpEffect,
 	trackBrowserSession,

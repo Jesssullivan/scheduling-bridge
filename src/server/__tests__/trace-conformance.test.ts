@@ -1,32 +1,41 @@
 /**
- * Trace-conformance harness (TIN-2072; design §10 0.6.x bullet 1, §11 "Trace
- * conformance"). THE FLAG-FLIP GATE: a green run of this suite is the parity
- * evidence the BRIDGE_FLOW_RUNNER default flip requires. Evidence summary lives in
- * docs/design/parity-evidence.md.
+ * Trace-conformance harness (TIN-2072 parity gate → TIN-2093 deletion gate; design
+ * §10 0.7.0, §11 "Trace conformance"). THE PARITY GUARANTEE after the deletion gate:
+ * the three legacy hand-written compositions are GONE, so `runFlow` (the fold) is the
+ * only execution path. This harness asserts the fold reproduces the RECORDED GOLDEN
+ * fixtures — captured from the REAL legacy path before deletion
+ * (src/server/__tests__/__fixtures__/trace-golden/) — byte-for-byte, for every
+ * scenario. A regression in fold step order / per-step outcome / terminal status /
+ * scope layout turns this suite red.
  *
- * Mechanics: BOTH execution paths — the legacy production worker executor
- * (src/server/worker.ts, flag off) and the runFlow fold (src/server/flow-runner.ts,
- * flag on) — are driven over IDENTICAL substituted stub step sets. Every stub is
+ * Mechanics: the fold executor (`createAcuityBridgeJobExecutor`) is driven over the
+ * SAME substituted stub step set the goldens were captured under. Every stub is
  * wrapped in a tracing decorator that records, in execution order:
  *
- *   - `scope-open` events: one per browser-session Scope acquisition (the legacy
- *     `runWizardStep` page-per-step lifecycle vs the fold's one-Scope-per-segment
- *     lifecycle), recorded by a counting session Layer on both paths;
+ *   - `scope-open` events: one per browser-session Scope acquisition (the fold's
+ *     one-Scope-per-segment lifecycle), recorded by a counting session Layer;
  *   - `step` events: the underlying step program invoked + its outcome.
  *
  * The recorded trace (ordered step ids + per-step outcome + terminal job status) is
- * deep-compared between the two paths for all three job kinds, across happy paths,
- * the bypass-proof boundary (PAYMENT_BYPASS_NOT_PROVEN), pre-submit failures,
- * the submit/post-submit reconcile_required boundary, and job-level retry
- * (requeue + re-lease — the only retry the legacy path performs; no step has
- * `meta.retry`). The segment layout is pinned against the production worker's
- * page lifecycle by asserting scope-acquisition counts and step groupings.
+ * deep-compared against the committed golden for all three job kinds, across happy
+ * paths, the bypass-proof boundary (PAYMENT_BYPASS_NOT_PROVEN), pre-submit failures,
+ * the submit/post-submit reconcile_required boundary, and job-level retry (requeue +
+ * re-lease). The segment layout is pinned by asserting scope-acquisition counts and
+ * step groupings against the golden and against the plan's declared segments.
  *
- * No production module is modified: stubs are substituted at the module boundary
- * (the flow-runner.test.ts seam style) and the browser layers are replaced with
- * counting succeed/sync Layers, so no Chromium is ever launched.
+ * Two scenarios are KNOWN, INTENTIONAL fold-vs-legacy cutoff differences (the fold is
+ * STRICTLY less vendor work for the same terminal — docs/design/parity-evidence.md):
+ * COUPON_REQUIRED (the fold guards before any browser work) and ambiguous submit (the
+ * fold Diverges AT submit instead of blindly probing extract). Their goldens are the
+ * FOLD traces — the canonical behavior of the only surviving path.
+ *
+ * No production module is modified: stubs are substituted at the module boundary and
+ * the browser layers are replaced with counting succeed/sync Layers, so no Chromium is
+ * ever launched.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { Effect, Layer } from 'effect';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,7 +49,7 @@ const harness = vi.hoisted(() => {
 	 * Wrap a stub step program so its invocation + outcome land on the shared trace
 	 * at EXECUTION time (Effect.suspend), i.e. inside whatever session Scope the
 	 * executing path opened — this is what makes scope-open/step interleavings
-	 * comparable across the two paths. `E` is the dynamically imported `effect`
+	 * comparable against the recorded golden. `E` is the dynamically imported `effect`
 	 * module (vi.mock factories run before static imports resolve).
 	 */
 	const traced =
@@ -82,9 +91,8 @@ const stepMocks = vi.hoisted(() => ({
 	readSlotsViaUrl: vi.fn(),
 }));
 
-// Both the legacy worker (direct imports) and the flow step wrappers
-// (src/adapters/acuity/flow-steps.ts) resolve these modules, so ONE substitution
-// feeds the identical stub set to BOTH execution paths.
+// The fold step wrappers (src/adapters/acuity/flow-steps.ts) resolve these modules,
+// so this substitution feeds the identical stub set the goldens were captured under.
 vi.mock('../../adapters/acuity/steps/index.js', async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import('../../adapters/acuity/steps/index.js')>();
@@ -125,10 +133,6 @@ vi.mock('../../adapters/acuity/steps/read-via-url.js', async () => {
 	};
 });
 
-// The legacy path's page lifecycle: every `runWizardStep` call provides
-// BrowserSessionLive once — replacing it with a counting Layer.sync records one
-// `scope-open` per legacy page acquisition. (The flagged path gets an explicit
-// counting sessionLayer in `makeExecutors` below.)
 vi.mock('../../shared/browser-service.js', async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import('../../shared/browser-service.js')>();
@@ -179,7 +183,18 @@ import { acuityFlows } from '../../adapters/acuity/flows.js';
 import type { Flow } from '../../flow/index.js';
 
 // =============================================================================
-// FIXTURES
+// GOLDEN FIXTURES (recorded from the legacy path before deletion)
+// =============================================================================
+
+const GOLDEN_DIR = fileURLToPath(
+	new URL('./__fixtures__/trace-golden/', import.meta.url),
+);
+
+const golden = (name: string): any =>
+	JSON.parse(readFileSync(`${GOLDEN_DIR}${name}.json`, 'utf8'));
+
+// =============================================================================
+// FIXTURES (inputs)
 // =============================================================================
 
 const adapterProfile: BridgeAdapterProfile = {
@@ -228,7 +243,7 @@ const step = (stepId: string, outcome = 'ok'): TraceEvent => ({
 	outcome,
 });
 
-/** Segment names the flagged fold requested (one push per segment Scope entry). */
+/** Segment names the fold requested (one push per segment Scope entry). */
 const sessionSegments: string[] = [];
 
 const fakeSessionService = {
@@ -242,19 +257,14 @@ const resetTrace = () => {
 	sessionSegments.length = 0;
 };
 
-const makeExecutors = () => {
+const makeExecutor = () => {
 	const journal = createInMemoryFlowJournal();
-	const legacy = createAcuityBridgeJobExecutor({
+	const fold = createAcuityBridgeJobExecutor({
 		redisClient: null,
-		flowRunner: false,
-	});
-	const flagged = createAcuityBridgeJobExecutor({
-		redisClient: null,
-		flowRunner: true,
 		flowJournal: journal,
 		// One counting Layer per segment (the run.test.ts session-counting pattern):
-		// each build = one fold Scope acquisition, recorded on the SAME trace as the
-		// legacy page acquisitions so the layouts are directly comparable.
+		// each build = one fold Scope acquisition, recorded on the trace so the layout
+		// is directly comparable to the recorded golden's scope-open events.
 		sessionLayer: (segment) => {
 			sessionSegments.push(segment);
 			return Layer.sync(BrowserService, () => {
@@ -263,7 +273,7 @@ const makeExecutors = () => {
 			});
 		},
 	});
-	return { journal, legacy, flagged };
+	return { journal, fold };
 };
 
 interface Terminal {
@@ -453,29 +463,26 @@ beforeEach(() => {
 });
 
 // =============================================================================
-// HAPPY PATHS — all three job kinds
+// HAPPY PATHS — all three job kinds (fold reproduces the recorded golden)
 // =============================================================================
 
-describe('trace conformance: happy paths (legacy worker vs runFlow fold)', () => {
-	it('booking: identical step trace, scope layout, terminal status, and booking result', async () => {
-		const { legacy, flagged, journal } = makeExecutors();
+describe('trace conformance: happy paths (runFlow fold vs recorded golden)', () => {
+	it('booking: reproduces the golden step trace, scope layout, terminal status, and booking result', async () => {
+		const { fold, journal } = makeExecutor();
 
-		const legacyTrace = await runBookingTrace(legacy, bookingCommand('TEST-100'), {
-			executionPath: 'browser',
-		});
-		const flaggedTrace = await runBookingTrace(flagged, bookingCommand('TEST-100'), {
+		const foldTrace = await runBookingTrace(fold, bookingCommand('TEST-100'), {
 			executionPath: 'browser',
 			operationId: 'op-trace-happy',
 		});
-		const flaggedSegments = [...sessionSegments];
+		const foldSegments = [...sessionSegments];
 
-		// The gate: byte-identical traces (ordered step ids + per-step outcomes +
-		// scope acquisitions) and identical terminal status/result.
-		expect(flaggedTrace).toEqual(legacyTrace);
+		// The gate: the fold reproduces the recorded golden byte-for-byte (ordered
+		// step ids + per-step outcomes + scope acquisitions + terminal + result).
+		expect(foldTrace).toEqual(golden('happy-booking'));
 
-		// Pin the literal expected trace so a both-paths-equally-wrong regression
-		// cannot slip through the equality assertion.
-		expect(legacyTrace.events).toEqual([
+		// Pin the literal expected trace too, so a golden corrupted to match a broken
+		// fold cannot slip through.
+		expect(foldTrace.events).toEqual([
 			open,
 			step('acuity/navigate'),
 			open,
@@ -487,11 +494,11 @@ describe('trace conformance: happy paths (legacy worker vs runFlow fold)', () =>
 			open,
 			step('acuity/extract-confirmation'),
 		]);
-		expect(legacyTrace.terminal).toEqual({ status: 'succeeded' });
-		expect((legacyTrace.result as { id: string }).id).toBe('apt_123');
+		expect(foldTrace.terminal).toEqual({ status: 'succeeded' });
+		expect((foldTrace.result as { id: string }).id).toBe('apt_123');
 
 		// The fold entered one Scope per plan segment, in plan order.
-		expect(flaggedSegments).toEqual(
+		expect(foldSegments).toEqual(
 			acuityFlows.booking_create_with_payment.plan.nodes.map((node) => node.segment),
 		);
 
@@ -511,23 +518,22 @@ describe('trace conformance: happy paths (legacy worker vs runFlow fold)', () =>
 			['acuity/extract-confirmation', 'completed'],
 		]);
 		expect(rows.filter((row) => row.status === 'started').map((row) => row.stepId)).toEqual(
-			legacyTrace.events
+			foldTrace.events
 				.filter((event) => event.kind === 'step')
 				.map((event) => event.stepId),
 		);
 	});
 
-	it('availability dates: identical traces for both dispatch arms (via-url and wizard)', async () => {
-		const { legacy, flagged } = makeExecutors();
+	it('availability dates: reproduces the golden for both dispatch arms (via-url and wizard)', async () => {
+		const { fold } = makeExecutor();
 
 		// Numeric appointment-type id → via-url read.
 		const numeric = { serviceId: '53178494', month: '2026-06', adapterProfile };
-		const legacyNumeric = await runDatesTrace(legacy, numeric);
-		const flaggedNumeric = await runDatesTrace(flagged, numeric);
-		expect(flaggedNumeric).toEqual(legacyNumeric);
-		expect(legacyNumeric.events).toEqual([open, step('acuity/read-dates:via-url')]);
-		expect(legacyNumeric.terminal).toEqual({ status: 'succeeded' });
-		expect(legacyNumeric.result).toEqual(DATES_FIXTURE);
+		const foldNumeric = await runDatesTrace(fold, numeric);
+		expect(foldNumeric).toEqual(golden('happy-dates-via-url'));
+		expect(foldNumeric.events).toEqual([open, step('acuity/read-dates:via-url')]);
+		expect(foldNumeric.terminal).toEqual({ status: 'succeeded' });
+		expect(foldNumeric.result).toEqual(DATES_FIXTURE);
 
 		// Non-numeric service id → wizard click-through read (worker dispatch parity).
 		const named = {
@@ -536,22 +542,20 @@ describe('trace conformance: happy paths (legacy worker vs runFlow fold)', () =>
 			month: '2026-06',
 			adapterProfile,
 		};
-		const legacyNamed = await runDatesTrace(legacy, named);
-		const flaggedNamed = await runDatesTrace(flagged, named);
-		expect(flaggedNamed).toEqual(legacyNamed);
-		expect(legacyNamed.events).toEqual([open, step('acuity/read-dates:wizard')]);
-		expect(legacyNamed.result).toEqual(WIZARD_DATES_FIXTURE);
+		const foldNamed = await runDatesTrace(fold, named);
+		expect(foldNamed).toEqual(golden('happy-dates-wizard'));
+		expect(foldNamed.events).toEqual([open, step('acuity/read-dates:wizard')]);
+		expect(foldNamed.result).toEqual(WIZARD_DATES_FIXTURE);
 	});
 
-	it('availability slots: identical traces for both dispatch arms (via-url and wizard)', async () => {
-		const { legacy, flagged } = makeExecutors();
+	it('availability slots: reproduces the golden for both dispatch arms (via-url and wizard)', async () => {
+		const { fold } = makeExecutor();
 
 		const numeric = { serviceId: '53178494', date: '2026-06-15', adapterProfile };
-		const legacyNumeric = await runSlotsTrace(legacy, numeric);
-		const flaggedNumeric = await runSlotsTrace(flagged, numeric);
-		expect(flaggedNumeric).toEqual(legacyNumeric);
-		expect(legacyNumeric.events).toEqual([open, step('acuity/read-slots:via-url')]);
-		expect(legacyNumeric.result).toEqual(SLOTS_FIXTURE);
+		const foldNumeric = await runSlotsTrace(fold, numeric);
+		expect(foldNumeric).toEqual(golden('happy-slots-via-url'));
+		expect(foldNumeric.events).toEqual([open, step('acuity/read-slots:via-url')]);
+		expect(foldNumeric.result).toEqual(SLOTS_FIXTURE);
 
 		const named = {
 			serviceId: 'relaxation-massage',
@@ -559,11 +563,10 @@ describe('trace conformance: happy paths (legacy worker vs runFlow fold)', () =>
 			date: '2026-06-21',
 			adapterProfile,
 		};
-		const legacyNamed = await runSlotsTrace(legacy, named);
-		const flaggedNamed = await runSlotsTrace(flagged, named);
-		expect(flaggedNamed).toEqual(legacyNamed);
-		expect(legacyNamed.events).toEqual([open, step('acuity/read-slots:wizard')]);
-		expect(legacyNamed.result).toEqual(WIZARD_SLOTS_FIXTURE);
+		const foldNamed = await runSlotsTrace(fold, named);
+		expect(foldNamed).toEqual(golden('happy-slots-wizard'));
+		expect(foldNamed.events).toEqual([open, step('acuity/read-slots:wizard')]);
+		expect(foldNamed.result).toEqual(WIZARD_SLOTS_FIXTURE);
 	});
 });
 
@@ -576,28 +579,27 @@ describe('trace conformance: bypass-proof failure (design §6 — Diverged on th
 		[
 			'coupon applied but total not zero',
 			{ couponApplied: true, code: 'TEST-100', totalAfterCoupon: '$5.00' },
+			'bypass-not-proven-total',
 		],
 		[
 			'coupon not applied',
 			{ couponApplied: false, code: 'TEST-100', totalAfterCoupon: null },
+			'bypass-not-proven-coupon',
 		],
 	])(
-		'PAYMENT_BYPASS_NOT_PROVEN: identical terminal status AND identical step cutoff (%s)',
-		async (_label, bypassResult) => {
+		'PAYMENT_BYPASS_NOT_PROVEN: reproduces the golden terminal AND step cutoff (%s)',
+		async (_label, bypassResult, fixture) => {
 			stepMocks.bypassPayment.mockReturnValue(Effect.succeed(bypassResult));
-			const { legacy, flagged } = makeExecutors();
+			const { fold } = makeExecutor();
 
-			const legacyTrace = await runBookingTrace(legacy, bookingCommand('TEST-100'), {
-				executionPath: 'browser',
-			});
-			const flaggedTrace = await runBookingTrace(flagged, bookingCommand('TEST-100'), {
+			const foldTrace = await runBookingTrace(fold, bookingCommand('TEST-100'), {
 				executionPath: 'browser',
 			});
 
-			expect(flaggedTrace).toEqual(legacyTrace);
+			expect(foldTrace).toEqual(golden(fixture));
 			// Same cutoff: the bypass step program ran (and "succeeded" as a program —
-			// the PROOF failed), and neither path ever invoked submit or extract.
-			expect(legacyTrace.events).toEqual([
+			// the PROOF failed), and the fold never invoked submit or extract.
+			expect(foldTrace.events).toEqual([
 				open,
 				step('acuity/navigate'),
 				open,
@@ -605,7 +607,7 @@ describe('trace conformance: bypass-proof failure (design §6 — Diverged on th
 				open,
 				step('acuity/bypass-payment'),
 			]);
-			expect(legacyTrace.terminal).toEqual({
+			expect(foldTrace.terminal).toEqual({
 				status: 'failed_pre_submit',
 				code: 'PAYMENT_BYPASS_NOT_PROVEN',
 				step: 'bypass-payment',
@@ -623,67 +625,58 @@ describe('trace conformance: bypass-proof failure (design §6 — Diverged on th
 // =============================================================================
 
 describe('trace conformance: pre-submit failures (failed_pre_submit parity)', () => {
-	it('navigate failure: identical trace cutoff and retryable failed_pre_submit terminal', async () => {
+	it('navigate failure: reproduces the golden trace cutoff and retryable failed_pre_submit terminal', async () => {
 		stepMocks.navigateToBooking.mockReturnValue(
 			Effect.fail(new WizardStepError({ step: 'navigate', message: 'nav broke' })),
 		);
-		const { legacy, flagged } = makeExecutors();
+		const { fold } = makeExecutor();
 
-		const legacyTrace = await runBookingTrace(legacy, bookingCommand('TEST-100'), {
-			executionPath: 'browser',
-		});
-		const flaggedTrace = await runBookingTrace(flagged, bookingCommand('TEST-100'), {
+		const foldTrace = await runBookingTrace(fold, bookingCommand('TEST-100'), {
 			executionPath: 'browser',
 		});
 
-		expect(flaggedTrace).toEqual(legacyTrace);
-		expect(legacyTrace.events).toEqual([
+		expect(foldTrace).toEqual(golden('navigate-failure'));
+		expect(foldTrace.events).toEqual([
 			open,
 			step('acuity/navigate', 'error:WizardStepError'),
 		]);
-		expect(legacyTrace.terminal.status).toBe('failed_pre_submit');
-		expect(legacyTrace.terminal.step).toBe('navigate');
-		expect(legacyTrace.terminal.retryable).toBe(true);
+		expect(foldTrace.terminal.status).toBe('failed_pre_submit');
+		expect(foldTrace.terminal.step).toBe('navigate');
+		expect(foldTrace.terminal.retryable).toBe(true);
 	});
 
-	it('fill-form failure: identical trace cutoff and terminal', async () => {
+	it('fill-form failure: reproduces the golden trace cutoff and terminal', async () => {
 		stepMocks.fillFormFields.mockReturnValue(
 			Effect.fail(new WizardStepError({ step: 'fill-form', message: 'form broke' })),
 		);
-		const { legacy, flagged } = makeExecutors();
+		const { fold } = makeExecutor();
 
-		const legacyTrace = await runBookingTrace(legacy, bookingCommand('TEST-100'), {
-			executionPath: 'browser',
-		});
-		const flaggedTrace = await runBookingTrace(flagged, bookingCommand('TEST-100'), {
+		const foldTrace = await runBookingTrace(fold, bookingCommand('TEST-100'), {
 			executionPath: 'browser',
 		});
 
-		expect(flaggedTrace).toEqual(legacyTrace);
-		expect(legacyTrace.events).toEqual([
+		expect(foldTrace).toEqual(golden('fill-form-failure'));
+		expect(foldTrace.events).toEqual([
 			open,
 			step('acuity/navigate'),
 			open,
 			step('acuity/fill-form', 'error:WizardStepError'),
 		]);
-		expect(legacyTrace.terminal.status).toBe('failed_pre_submit');
-		expect(legacyTrace.terminal.step).toBe('fill-form');
-		expect(legacyTrace.terminal.retryable).toBe(true);
+		expect(foldTrace.terminal.status).toBe('failed_pre_submit');
+		expect(foldTrace.terminal.step).toBe('fill-form');
+		expect(foldTrace.terminal.retryable).toBe(true);
 	});
 
-	it('REST execution-path guard: identical (empty) trace and terminal on both paths', async () => {
-		const { legacy, flagged } = makeExecutors();
+	it('REST execution-path guard: reproduces the golden (empty) trace and terminal', async () => {
+		const { fold } = makeExecutor();
 
-		const legacyTrace = await runBookingTrace(legacy, bookingCommand('TEST-100'), {
-			executionPath: 'rest',
-		});
-		const flaggedTrace = await runBookingTrace(flagged, bookingCommand('TEST-100'), {
+		const foldTrace = await runBookingTrace(fold, bookingCommand('TEST-100'), {
 			executionPath: 'rest',
 		});
 
-		expect(flaggedTrace).toEqual(legacyTrace);
-		expect(legacyTrace.events).toEqual([]);
-		expect(legacyTrace.terminal).toMatchObject({
+		expect(foldTrace).toEqual(golden('rest-guard'));
+		expect(foldTrace.events).toEqual([]);
+		expect(foldTrace.terminal).toMatchObject({
 			status: 'failed_pre_submit',
 			code: 'REST_BOOKING_NOT_WIRED',
 			step: 'execution-path',
@@ -691,35 +684,24 @@ describe('trace conformance: pre-submit failures (failed_pre_submit parity)', ()
 		});
 	});
 
-	it('COUPON_REQUIRED guard: identical terminal; the flagged path front-loads the guard (documented cutoff difference)', async () => {
-		const { legacy, flagged } = makeExecutors();
+	it('COUPON_REQUIRED guard: the fold guards BEFORE any browser work (documented cutoff vs the deleted legacy path)', async () => {
+		const { fold } = makeExecutor();
 
-		const legacyTrace = await runBookingTrace(legacy, bookingCommand(undefined), {
-			executionPath: 'browser',
-		});
-		const flaggedTrace = await runBookingTrace(flagged, bookingCommand(undefined), {
+		const foldTrace = await runBookingTrace(fold, bookingCommand(undefined), {
 			executionPath: 'browser',
 		});
 
-		// Terminal parity is exact.
-		expect(flaggedTrace.terminal).toEqual(legacyTrace.terminal);
-		expect(legacyTrace.terminal).toMatchObject({
+		// KNOWN, INTENTIONAL cutoff (docs/design/parity-evidence.md): the deleted legacy
+		// worker only discovered the missing coupon after navigate + fill-form; the fold
+		// executor guards before any browser work. Strictly less vendor work, same
+		// terminal failure. The fold trace is the canonical behavior of the only path.
+		expect(foldTrace.events).toEqual([]);
+		expect(foldTrace.terminal).toMatchObject({
 			status: 'failed_pre_submit',
 			code: 'COUPON_REQUIRED',
 			step: 'bypass-payment',
 			retryable: false,
 		});
-		// KNOWN, INTENTIONAL cutoff difference (docs/design/parity-evidence.md): the
-		// legacy worker only discovers the missing coupon after navigate + fill-form;
-		// the flagged executor guards BEFORE any browser work (src/server/worker.ts).
-		// Strictly less vendor work, same terminal failure.
-		expect(legacyTrace.events).toEqual([
-			open,
-			step('acuity/navigate'),
-			open,
-			step('acuity/fill-form'),
-		]);
-		expect(flaggedTrace.events).toEqual([]);
 	});
 });
 
@@ -728,21 +710,18 @@ describe('trace conformance: pre-submit failures (failed_pre_submit parity)', ()
 // =============================================================================
 
 describe('trace conformance: submit/post-submit ambiguity (reconcile_required parity)', () => {
-	it('submit failure: identical trace cutoff, reconcile_required, non-retryable', async () => {
+	it('submit failure: reproduces the golden trace cutoff, reconcile_required, non-retryable', async () => {
 		stepMocks.submitBooking.mockReturnValue(
 			Effect.fail(new WizardStepError({ step: 'submit', message: 'submit broke' })),
 		);
-		const { legacy, flagged } = makeExecutors();
+		const { fold } = makeExecutor();
 
-		const legacyTrace = await runBookingTrace(legacy, bookingCommand('TEST-100'), {
-			executionPath: 'browser',
-		});
-		const flaggedTrace = await runBookingTrace(flagged, bookingCommand('TEST-100'), {
+		const foldTrace = await runBookingTrace(fold, bookingCommand('TEST-100'), {
 			executionPath: 'browser',
 		});
 
-		expect(flaggedTrace).toEqual(legacyTrace);
-		expect(legacyTrace.events).toEqual([
+		expect(foldTrace).toEqual(golden('submit-failure'));
+		expect(foldTrace.events).toEqual([
 			open,
 			step('acuity/navigate'),
 			open,
@@ -752,27 +731,24 @@ describe('trace conformance: submit/post-submit ambiguity (reconcile_required pa
 			open,
 			step('acuity/submit', 'error:WizardStepError'),
 		]);
-		expect(legacyTrace.terminal.status).toBe('reconcile_required');
-		expect(legacyTrace.terminal.step).toBe('submit');
-		expect(legacyTrace.terminal.retryable).toBe(false);
+		expect(foldTrace.terminal.status).toBe('reconcile_required');
+		expect(foldTrace.terminal.step).toBe('submit');
+		expect(foldTrace.terminal.retryable).toBe(false);
 		expect(stepMocks.extractConfirmation).not.toHaveBeenCalled();
 	});
 
-	it('extract-confirmation failure: identical full-length trace, reconcile_required', async () => {
+	it('extract-confirmation failure: reproduces the golden full-length trace, reconcile_required', async () => {
 		stepMocks.extractConfirmation.mockReturnValue(
 			Effect.fail(new WizardStepError({ step: 'extract', message: 'extract broke' })),
 		);
-		const { legacy, flagged } = makeExecutors();
+		const { fold } = makeExecutor();
 
-		const legacyTrace = await runBookingTrace(legacy, bookingCommand('TEST-100'), {
-			executionPath: 'browser',
-		});
-		const flaggedTrace = await runBookingTrace(flagged, bookingCommand('TEST-100'), {
+		const foldTrace = await runBookingTrace(fold, bookingCommand('TEST-100'), {
 			executionPath: 'browser',
 		});
 
-		expect(flaggedTrace).toEqual(legacyTrace);
-		expect(legacyTrace.events).toEqual([
+		expect(foldTrace).toEqual(golden('extract-failure'));
+		expect(foldTrace.events).toEqual([
 			open,
 			step('acuity/navigate'),
 			open,
@@ -784,43 +760,37 @@ describe('trace conformance: submit/post-submit ambiguity (reconcile_required pa
 			open,
 			step('acuity/extract-confirmation', 'error:WizardStepError'),
 		]);
-		expect(legacyTrace.terminal.status).toBe('reconcile_required');
-		expect(legacyTrace.terminal.step).toBe('extract-confirmation');
-		expect(legacyTrace.terminal.retryable).toBe(false);
+		expect(foldTrace.terminal.status).toBe('reconcile_required');
+		expect(foldTrace.terminal.step).toBe('extract-confirmation');
+		expect(foldTrace.terminal.retryable).toBe(false);
 	});
 
-	it('ambiguous submit (confirmation page not reached): both paths land on reconcile_required; the fold halts at submit instead of probing extract (documented cutoff difference)', async () => {
+	it('ambiguous submit (confirmation page not reached): the fold Diverges AT submit instead of probing extract (documented cutoff vs the deleted legacy path)', async () => {
 		stepMocks.submitBooking.mockReturnValue(
 			Effect.succeed({ submitted: true, confirmationPageReached: false }),
 		);
-		// In production the legacy path discovers the ambiguity one step later, when
-		// extractConfirmation fails its triple-probe on the non-confirmation page.
+		// The deleted legacy path discovered the ambiguity one step later, when
+		// extractConfirmation failed its triple-probe on the non-confirmation page.
 		stepMocks.extractConfirmation.mockReturnValue(
 			Effect.fail(
 				new WizardStepError({ step: 'extract', message: 'Not on confirmation page' }),
 			),
 		);
-		const { legacy, flagged } = makeExecutors();
+		const { fold } = makeExecutor();
 
-		const legacyTrace = await runBookingTrace(legacy, bookingCommand('TEST-100'), {
-			executionPath: 'browser',
-		});
-		const flaggedTrace = await runBookingTrace(flagged, bookingCommand('TEST-100'), {
+		const foldTrace = await runBookingTrace(fold, bookingCommand('TEST-100'), {
 			executionPath: 'browser',
 		});
 
-		// reconcile_required parity: the terminal STATUS and retryability agree.
-		expect(flaggedTrace.terminal.status).toBe('reconcile_required');
-		expect(legacyTrace.terminal.status).toBe('reconcile_required');
-		expect(flaggedTrace.terminal.retryable).toBe(false);
-		expect(legacyTrace.terminal.retryable).toBe(false);
+		// reconcile_required parity with the deleted legacy path: terminal STATUS and
+		// retryability agree (the legacy golden recorded the same status at extract).
+		expect(foldTrace.terminal.status).toBe('reconcile_required');
+		expect(foldTrace.terminal.retryable).toBe(false);
 
-		// KNOWN, INTENTIONAL cutoff difference (docs/design/parity-evidence.md): the
-		// fold classifies the unknown landing as Diverged AT submit (never blindly
-		// extracting from an ambiguous page); the legacy path runs extract and fails
-		// there. The flagged trace is a strict prefix of the legacy trace.
-		expect(flaggedTrace.events).toEqual(legacyTrace.events.slice(0, 8));
-		expect(flaggedTrace.events).toEqual([
+		// KNOWN, INTENTIONAL cutoff (docs/design/parity-evidence.md): the fold classifies
+		// the unknown landing as Diverged AT submit (never blindly extracting from an
+		// ambiguous page). The fold trace is a strict prefix of what the legacy path ran.
+		expect(foldTrace.events).toEqual([
 			open,
 			step('acuity/navigate'),
 			open,
@@ -830,16 +800,15 @@ describe('trace conformance: submit/post-submit ambiguity (reconcile_required pa
 			open,
 			step('acuity/submit'),
 		]);
-		expect(flaggedTrace.terminal.code).toBe('FLOW_DIVERGED');
-		expect(flaggedTrace.terminal.step).toBe('submit');
-		expect(legacyTrace.terminal.step).toBe('extract-confirmation');
-		// extract ran exactly once — on the legacy path only.
-		expect(stepMocks.extractConfirmation).toHaveBeenCalledTimes(1);
+		expect(foldTrace.terminal.code).toBe('FLOW_DIVERGED');
+		expect(foldTrace.terminal.step).toBe('submit');
+		// The fold never invokes extract on the ambiguous page.
+		expect(stepMocks.extractConfirmation).not.toHaveBeenCalled();
 	});
 });
 
 // =============================================================================
-// RETRY BEHAVIOR (job-level requeue + re-lease — where the legacy path retries)
+// RETRY BEHAVIOR (job-level requeue + re-lease — the only retry the worker performs)
 // =============================================================================
 
 describe('trace conformance: retry behavior (requeue + re-lease, full job machinery)', () => {
@@ -881,30 +850,29 @@ describe('trace conformance: retry behavior (requeue + re-lease, full job machin
 		return { events: harness.snapshot(), transitions };
 	};
 
-	it('availability dates: identical retry trace and status transitions across requeue + re-lease', async () => {
-		const { legacy, flagged } = makeExecutors();
+	it('availability dates: reproduces the golden retry trace and status transitions across requeue + re-lease', async () => {
+		const { fold } = makeExecutor();
 
-		const legacyRun = await runDatesRetry(legacy);
-		const flaggedRun = await runDatesRetry(flagged);
+		const foldRun = await runDatesRetry(fold);
 
-		expect(flaggedRun).toEqual(legacyRun);
-		expect(legacyRun.events).toEqual([
+		expect(foldRun).toEqual(golden('retry-dates'));
+		expect(foldRun.events).toEqual([
 			open,
 			step('acuity/read-dates:via-url', 'error:WizardStepError'),
 			open,
 			step('acuity/read-dates:via-url'),
 		]);
-		expect(legacyRun.transitions[0].status).toBe('failed_pre_submit');
-		expect(legacyRun.transitions[0].failure?.retryable).toBe(true);
-		expect(legacyRun.transitions[0].failure?.step).toBe('refresh-availability-dates');
-		expect(legacyRun.transitions[1].status).toBe('queued');
-		expect(legacyRun.transitions[2].status).toBe('succeeded');
-		expect(legacyRun.transitions[2].attempts).toBe(2);
+		expect(foldRun.transitions[0].status).toBe('failed_pre_submit');
+		expect(foldRun.transitions[0].failure?.retryable).toBe(true);
+		expect(foldRun.transitions[0].failure?.step).toBe('refresh-availability-dates');
+		expect(foldRun.transitions[1].status).toBe('queued');
+		expect(foldRun.transitions[2].status).toBe('succeeded');
+		expect(foldRun.transitions[2].attempts).toBe(2);
 	});
 
-	/** Fail navigate once (retryable pre-submit), requeue, re-lease: BOTH paths must
+	/** Fail navigate once (retryable pre-submit), requeue, re-lease: the fold must
 	 * re-run the whole booking from navigate (no resume in 0.6.x — design §5 states
-	 * this honestly) and produce identical cross-attempt traces. */
+	 * this honestly) and reproduce the recorded cross-attempt trace. */
 	const runBookingRetry = async (executor: BridgeJobExecutor) => {
 		resetTrace();
 		stepMocks.navigateToBooking.mockReset();
@@ -952,14 +920,13 @@ describe('trace conformance: retry behavior (requeue + re-lease, full job machin
 		return { events: harness.snapshot(), transitions };
 	};
 
-	it('booking: identical cross-attempt trace — re-lease re-runs from navigate on both paths', async () => {
-		const { legacy, flagged } = makeExecutors();
+	it('booking: reproduces the golden cross-attempt trace — re-lease re-runs from navigate', async () => {
+		const { fold } = makeExecutor();
 
-		const legacyRun = await runBookingRetry(legacy);
-		const flaggedRun = await runBookingRetry(flagged);
+		const foldRun = await runBookingRetry(fold);
 
-		expect(flaggedRun).toEqual(legacyRun);
-		expect(legacyRun.events).toEqual([
+		expect(foldRun).toEqual(golden('retry-booking'));
+		expect(foldRun.events).toEqual([
 			// Attempt 1: navigate fails, retryable.
 			open,
 			step('acuity/navigate', 'error:WizardStepError'),
@@ -975,11 +942,11 @@ describe('trace conformance: retry behavior (requeue + re-lease, full job machin
 			open,
 			step('acuity/extract-confirmation'),
 		]);
-		expect(legacyRun.transitions[0].status).toBe('failed_pre_submit');
-		expect(legacyRun.transitions[0].failure?.retryable).toBe(true);
-		expect(legacyRun.transitions[1].status).toBe('queued');
-		expect(legacyRun.transitions[2].status).toBe('succeeded');
-		expect(legacyRun.transitions[2].attempts).toBe(2);
+		expect(foldRun.transitions[0].status).toBe('failed_pre_submit');
+		expect(foldRun.transitions[0].failure?.retryable).toBe(true);
+		expect(foldRun.transitions[1].status).toBe('queued');
+		expect(foldRun.transitions[2].status).toBe('succeeded');
+		expect(foldRun.transitions[2].attempts).toBe(2);
 	});
 });
 
@@ -987,24 +954,19 @@ describe('trace conformance: retry behavior (requeue + re-lease, full job machin
 // SEGMENT LAYOUT PINNED AGAINST THE WORKER PAGE LIFECYCLE (design §5 step 1)
 // =============================================================================
 
-describe('segment layout: the fold opens session scopes exactly as the production worker does', () => {
-	it('booking: five single-step scopes on both paths, identical groupings, plan-declared segments', async () => {
-		const { legacy, flagged } = makeExecutors();
+describe('segment layout: the fold opens session scopes exactly as the (recorded) worker did', () => {
+	it('booking: five single-step scopes, golden groupings, plan-declared segments', async () => {
+		const { fold } = makeExecutor();
 
-		const legacyTrace = await runBookingTrace(legacy, bookingCommand('TEST-100'), {
+		const foldTrace = await runBookingTrace(fold, bookingCommand('TEST-100'), {
 			executionPath: 'browser',
 		});
-		const legacyGroups = stepGroupings(legacyTrace.events);
+		const foldGroups = stepGroupings(foldTrace.events);
+		const foldSegments = [...sessionSegments];
 
-		const flaggedTrace = await runBookingTrace(flagged, bookingCommand('TEST-100'), {
-			executionPath: 'browser',
-		});
-		const flaggedGroups = stepGroupings(flaggedTrace.events);
-		const flaggedSegments = [...sessionSegments];
-
-		// Same number of scope acquisitions, same step groupings.
-		expect(flaggedGroups).toEqual(legacyGroups);
-		expect(legacyGroups).toEqual([
+		// Same step groupings as the recorded golden, and the canonical layout.
+		expect(foldGroups).toEqual(stepGroupings(golden('happy-booking').events));
+		expect(foldGroups).toEqual([
 			['acuity/navigate'],
 			['acuity/fill-form'],
 			['acuity/bypass-payment'],
@@ -1012,13 +974,13 @@ describe('segment layout: the fold opens session scopes exactly as the productio
 			['acuity/extract-confirmation'],
 		]);
 
-		// And the layout the PLAN declares is the layout the legacy worker exhibits:
+		// And the layout the PLAN declares is the layout the recorded worker exhibited:
 		// the page-per-step lifecycle is plan data, not coincidence (flow-steps.ts
 		// header — worker-exact single-step segments by explicit decision).
 		const declared = planSegmentGroupings(acuityFlows.booking_create_with_payment);
-		expect(declared.map((group) => group.steps)).toEqual(legacyGroups);
-		expect(flaggedSegments).toEqual(declared.map((group) => group.segment));
-		expect(flaggedSegments).toEqual([
+		expect(declared.map((group) => group.steps)).toEqual(foldGroups);
+		expect(foldSegments).toEqual(declared.map((group) => group.segment));
+		expect(foldSegments).toEqual([
 			'navigate',
 			'fill-form',
 			'bypass-payment',
@@ -1027,45 +989,42 @@ describe('segment layout: the fold opens session scopes exactly as the productio
 		]);
 	});
 
-	it('availability reads: exactly one scope on both paths (dates and slots)', async () => {
-		const { legacy, flagged } = makeExecutors();
+	it('availability reads: exactly one scope (dates and slots)', async () => {
+		const { fold } = makeExecutor();
 		const datesCommand = { serviceId: '53178494', month: '2026-06', adapterProfile };
 		const slotsCommand = { serviceId: '53178494', date: '2026-06-15', adapterProfile };
 
-		const legacyDates = await runDatesTrace(legacy, datesCommand);
-		expect(stepGroupings(legacyDates.events)).toEqual([['acuity/read-dates:via-url']]);
-
-		const flaggedDates = await runDatesTrace(flagged, datesCommand);
-		expect(stepGroupings(flaggedDates.events)).toEqual([['acuity/read-dates:via-url']]);
+		const foldDates = await runDatesTrace(fold, datesCommand);
+		expect(stepGroupings(foldDates.events)).toEqual([['acuity/read-dates:via-url']]);
+		expect(stepGroupings(foldDates.events)).toEqual(
+			stepGroupings(golden('happy-dates-via-url').events),
+		);
 		expect([...sessionSegments]).toEqual(['read-dates']);
 
-		const legacySlots = await runSlotsTrace(legacy, slotsCommand);
-		expect(stepGroupings(legacySlots.events)).toEqual([['acuity/read-slots:via-url']]);
-
-		const flaggedSlots = await runSlotsTrace(flagged, slotsCommand);
-		expect(stepGroupings(flaggedSlots.events)).toEqual([['acuity/read-slots:via-url']]);
+		const foldSlots = await runSlotsTrace(fold, slotsCommand);
+		expect(stepGroupings(foldSlots.events)).toEqual([['acuity/read-slots:via-url']]);
+		expect(stepGroupings(foldSlots.events)).toEqual(
+			stepGroupings(golden('happy-slots-via-url').events),
+		);
 		expect([...sessionSegments]).toEqual(['read-slots']);
 	});
 
-	it('failure cutoffs never open scopes past the failed segment on either path', async () => {
+	it('failure cutoffs never open scopes past the failed segment', async () => {
 		stepMocks.bypassPayment.mockReturnValue(
 			Effect.succeed({ couponApplied: false, code: 'TEST-100', totalAfterCoupon: null }),
 		);
-		const { legacy, flagged } = makeExecutors();
+		const { fold } = makeExecutor();
 
-		const legacyTrace = await runBookingTrace(legacy, bookingCommand('TEST-100'), {
-			executionPath: 'browser',
-		});
-		const flaggedTrace = await runBookingTrace(flagged, bookingCommand('TEST-100'), {
+		const foldTrace = await runBookingTrace(fold, bookingCommand('TEST-100'), {
 			executionPath: 'browser',
 		});
 
 		const opens = (events: readonly TraceEvent[]) =>
 			events.filter((event) => event.kind === 'scope-open').length;
-		expect(opens(legacyTrace.events)).toBe(3);
-		expect(opens(flaggedTrace.events)).toBe(3);
-		expect(stepGroupings(flaggedTrace.events)).toEqual(
-			stepGroupings(legacyTrace.events),
+		expect(opens(foldTrace.events)).toBe(3);
+		expect(opens(golden('bypass-not-proven-coupon').events)).toBe(3);
+		expect(stepGroupings(foldTrace.events)).toEqual(
+			stepGroupings(golden('bypass-not-proven-coupon').events),
 		);
 	});
 });

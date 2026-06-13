@@ -1,29 +1,14 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { Effect, Exit, Cause, ManagedRuntime, Scope } from 'effect';
+import { Effect, ManagedRuntime } from 'effect';
 import { Redis as IORedisImpl } from 'ioredis';
 import type { Redis as IORedis } from 'ioredis';
 import {
 	BrowserProcessLive,
-	BrowserService,
 	BrowserSessionLive,
 	defaultBrowserConfig,
 	type BrowserConfig,
 } from '../shared/browser-service.js';
-import { toSchedulingError, type MiddlewareError } from '../adapters/acuity/errors.js';
-import {
-	navigateToBooking,
-	fillFormFields,
-	bypassPayment,
-	submitBooking,
-	extractConfirmation,
-	toBooking,
-	readAvailableDates,
-	readTimeSlots,
-} from '../adapters/acuity/steps/index.js';
-import {
-	readDatesViaUrl,
-	readSlotsViaUrl,
-} from '../adapters/acuity/steps/read-via-url.js';
+import type { MiddlewareError } from '../adapters/acuity/errors.js';
 import { buildAvailabilityDatesCacheKey } from './date-prewarm.js';
 import { buildAvailabilitySlotsCacheKey } from './slot-prewarm.js';
 import type {
@@ -43,18 +28,15 @@ import {
 	type BridgeJobLeaseContext,
 } from '../async/worker.js';
 import { ndjsonLog } from '../shared/logger.js';
-import { recordFlowShadowComparison } from '../shared/metrics.js';
 import { parseRedisAsyncJobTtlSeconds } from '../async/config.js';
 import type { Context, Layer } from 'effect';
 import type { VendorFlowPack } from '../flow/vendor.js';
 import type { Flow, FlowJournalShape } from '../flow/index.js';
 import { acuityFlowPack } from '../adapters/acuity/flow-pack.js';
-import { acuityFlowStepIds } from '../adapters/acuity/flows.js';
 import type { AcuityBookingFlowSpec } from '../adapters/acuity/flow-steps.js';
 import {
 	executeBookingThroughFlow,
 	executeReadThroughFlow,
-	parseBridgeFlowRunnerEnabled,
 	selectFlowJournal,
 	type FlowExecutionDeps,
 	type RunFlowExit,
@@ -117,71 +99,6 @@ const logEvent = (
 	});
 };
 
-const isAcuityAppointmentTypeId = (serviceId: string): boolean => /^\d+$/.test(serviceId);
-
-const schedulingErrorFields = (error: unknown) => {
-	if (typeof error === 'object' && error !== null) {
-		const maybe = error as { _tag?: string; code?: string; message?: string };
-		return {
-			code: maybe.code ?? maybe._tag ?? 'UNKNOWN',
-			message: maybe.message ?? JSON.stringify(error),
-		};
-	}
-	return {
-		code: 'UNKNOWN',
-		message: error instanceof Error ? error.message : String(error),
-	};
-};
-
-const exitToValue = <A>(
-	exit: Exit.Exit<A, MiddlewareError | undefined>,
-	step: string,
-	status: 'failed_pre_submit' | 'reconcile_required',
-): A => {
-	if (Exit.isSuccess(exit)) return exit.value;
-	const failure = Cause.failureOption(exit.cause);
-	const error = failure._tag === 'Some' && failure.value !== undefined
-		? toSchedulingError(failure.value)
-		: { _tag: 'InfrastructureError', code: 'UNKNOWN', message: Cause.pretty(exit.cause) };
-	const fields = schedulingErrorFields(error);
-	throw new BridgeJobExecutionError({
-		status,
-		code: fields.code,
-		message: fields.message,
-		step,
-		retryable: status === 'failed_pre_submit',
-	});
-};
-
-const runWizardStep = async <A>(
-	effect: Effect.Effect<A, MiddlewareError | undefined, BrowserService | Scope.Scope>,
-	step: string,
-	status: 'failed_pre_submit' | 'reconcile_required' = 'failed_pre_submit',
-): Promise<A> => {
-	const exit = await browserRuntime.runPromiseExit(
-		Effect.scoped(effect.pipe(Effect.provide(BrowserSessionLive))),
-	);
-	return exitToValue(exit, step, status);
-};
-
-const assertPaymentBypassProven = (result: {
-	readonly couponApplied: boolean;
-	readonly totalAfterCoupon: string | null;
-}) => {
-	const numericTotal = result.totalAfterCoupon
-		? Number(result.totalAfterCoupon.replace(/[^0-9.]/g, ''))
-		: null;
-	if (!result.couponApplied || numericTotal !== 0) {
-		throw new BridgeJobExecutionError({
-			status: 'failed_pre_submit',
-			code: 'PAYMENT_BYPASS_NOT_PROVEN',
-			message: 'Payment bypass was not proven before submit',
-			step: 'bypass-payment',
-			retryable: false,
-		});
-	}
-};
-
 const valueTtlSeconds = (value: readonly unknown[]): number =>
 	value.length === 0 ? EMPTY_READ_CACHE_TTL_SECONDS : READ_CACHE_TTL_SECONDS;
 
@@ -217,12 +134,6 @@ const writeReadCache = async (
 
 export interface AcuityBridgeJobExecutorOptions {
 	readonly redisClient?: IORedis | null;
-	/**
-	 * BRIDGE_FLOW_RUNNER override for tests; default reads the env flag
-	 * (`parseBridgeFlowRunnerEnabled`, ON unless the `BRIDGE_FLOW_RUNNER=0`/'false'
-	 * kill switch is set — design §10 0.6.x flip).
-	 */
-	readonly flowRunner?: boolean;
 	/** FlowJournal override for tests; default rides the store selection order. */
 	readonly flowJournal?: FlowJournalShape;
 	/** VendorFlowPack substitution seam (stub packs/steps in tests; design §7). */
@@ -233,6 +144,17 @@ export interface AcuityBridgeJobExecutorOptions {
 	readonly runFlowExit?: RunFlowExit;
 }
 
+/**
+ * The bridge job executor: `runFlow` is the ONLY execution path (design §10 0.7.0
+ * deletion gate, the anti-renaming guarantee). The three legacy hand-written
+ * compositions and the `BRIDGE_FLOW_RUNNER` flag have been deleted; the fold's parity
+ * with the (now-removed) legacy path is locked in by the recorded golden fixtures and
+ * the trace-conformance harness (src/server/__tests__/trace-conformance.test.ts).
+ *
+ * The REST-path and COUPON_REQUIRED guards stay here, in the executor, so their codes
+ * are byte-identical to what the deleted legacy path produced (the fold path in
+ * flow-runner.ts relies on these executor-level guards).
+ */
 export const createAcuityBridgeJobExecutor = (
 	options: AcuityBridgeJobExecutorOptions = {},
 ): BridgeJobExecutor => {
@@ -240,10 +162,9 @@ export const createAcuityBridgeJobExecutor = (
 		options.redisClient === undefined
 			? getDefaultExecutorRedisClient()
 			: options.redisClient;
-	const flowRunnerEnabled = options.flowRunner ?? parseBridgeFlowRunnerEnabled();
 	const flowPack = options.flowPack ?? acuityFlowPack;
 
-	// Lazy so the default (flag-off) path never selects a journal or touches flow deps.
+	// Lazy so journal selection / flow-dep construction is deferred to first use.
 	let flowDeps: FlowExecutionDeps | null = null;
 	const getFlowDeps = (): FlowExecutionDeps => {
 		flowDeps ??= {
@@ -272,66 +193,26 @@ export const createAcuityBridgeJobExecutor = (
 				command.month,
 			);
 
-			if (flowRunnerEnabled) {
-				const dates = await executeReadThroughFlow<
-					readonly { readonly date: string; readonly slots: number }[]
-				>(
-					getFlowDeps(),
-					flowPack.flows.availability_dates_refresh,
-					{
-						serviceId: command.serviceId,
-						month: command.month,
-						serviceName: command.serviceName ?? null,
-					},
-					'dates',
-					context,
-				);
-				await writeReadCache(
-					readCacheRedisClient,
-					'availability_dates',
-					cacheKey,
-					dates,
-				);
-				return dates;
-			}
-
-			// Legacy path (kill switch `BRIDGE_FLOW_RUNNER=0`) + shadow mode: diff the
-			// plan-predicted step sequence vs the executed step ids into
-			// shared/metrics.ts (plans only, no dual execution of effects — design §10).
-			// Shadow runs on the NON-executing path: the fold is the default now, so
-			// when legacy executes (kill switch) we diff its real trace against the plan
-			// the fold WOULD have run. When the fold executes (default) it IS the plan,
-			// so no shadow comparison is needed.
-			const executedStepIds: string[] = [];
-			try {
-				executedStepIds.push('acuity/read-dates');
-				const dates = isAcuityAppointmentTypeId(command.serviceId)
-					? await runWizardStep(
-							readDatesViaUrl(command.serviceId, command.month),
-							'refresh-availability-dates',
-						)
-					: await runWizardStep(
-						readAvailableDates({
-							serviceName: command.serviceName ?? command.serviceId,
-							targetMonth: command.month,
-							monthsToScan: 2,
-						}),
-						'refresh-availability-dates',
-					);
-				await writeReadCache(
-					readCacheRedisClient,
-					'availability_dates',
-					cacheKey,
-					dates,
-				);
-				return dates;
-			} finally {
-				recordFlowShadowComparison(
-					'availability_dates_refresh',
-					acuityFlowStepIds('availability_dates_refresh'),
-					executedStepIds,
-				);
-			}
+			const dates = await executeReadThroughFlow<
+				readonly { readonly date: string; readonly slots: number }[]
+			>(
+				getFlowDeps(),
+				flowPack.flows.availability_dates_refresh,
+				{
+					serviceId: command.serviceId,
+					month: command.month,
+					serviceName: command.serviceName ?? null,
+				},
+				'dates',
+				context,
+			);
+			await writeReadCache(
+				readCacheRedisClient,
+				'availability_dates',
+				cacheKey,
+				dates,
+			);
+			return dates;
 		},
 
 		refreshAvailabilitySlots: async (
@@ -344,58 +225,26 @@ export const createAcuityBridgeJobExecutor = (
 				command.date,
 			);
 
-			if (flowRunnerEnabled) {
-				const slots = await executeReadThroughFlow<
-					readonly { readonly datetime: string; readonly available: boolean }[]
-				>(
-					getFlowDeps(),
-					flowPack.flows.availability_slots_refresh,
-					{
-						serviceId: command.serviceId,
-						date: command.date,
-						serviceName: command.serviceName ?? null,
-					},
-					'slots',
-					context,
-				);
-				await writeReadCache(
-					readCacheRedisClient,
-					'availability_slots',
-					cacheKey,
-					slots,
-				);
-				return slots;
-			}
-
-			const executedStepIds: string[] = [];
-			try {
-				executedStepIds.push('acuity/read-slots');
-				const slots = isAcuityAppointmentTypeId(command.serviceId)
-					? await runWizardStep(
-							readSlotsViaUrl(command.serviceId, command.date),
-							'refresh-availability-slots',
-						)
-					: await runWizardStep(
-						readTimeSlots({
-							serviceName: command.serviceName ?? command.serviceId,
-							date: command.date,
-						}),
-						'refresh-availability-slots',
-					);
-				await writeReadCache(
-					readCacheRedisClient,
-					'availability_slots',
-					cacheKey,
-					slots,
-				);
-				return slots;
-			} finally {
-				recordFlowShadowComparison(
-					'availability_slots_refresh',
-					acuityFlowStepIds('availability_slots_refresh'),
-					executedStepIds,
-				);
-			}
+			const slots = await executeReadThroughFlow<
+				readonly { readonly datetime: string; readonly available: boolean }[]
+			>(
+				getFlowDeps(),
+				flowPack.flows.availability_slots_refresh,
+				{
+					serviceId: command.serviceId,
+					date: command.date,
+					serviceName: command.serviceName ?? null,
+				},
+				'slots',
+				context,
+			);
+			await writeReadCache(
+				readCacheRedisClient,
+				'availability_slots',
+				cacheKey,
+				slots,
+			);
+			return slots;
 		},
 
 		createBookingWithPayment: async (command: AppointmentCommand, context) => {
@@ -409,94 +258,26 @@ export const createAcuityBridgeJobExecutor = (
 				});
 			}
 
-			if (flowRunnerEnabled) {
-				if (!command.couponCode) {
-					throw new BridgeJobExecutionError({
-						status: 'failed_pre_submit',
-						code: 'COUPON_REQUIRED',
-						message: 'Browser booking execution requires a coupon bypass code',
-						step: 'bypass-payment',
-						retryable: false,
-					});
-				}
-				return executeBookingThroughFlow(
-					getFlowDeps(),
-					flowPack.flows.booking_create_with_payment as Flow<
-						AcuityBookingFlowSpec,
-						MiddlewareError | undefined,
-						any
-					>,
-					command,
-					command.couponCode,
-					context,
-				);
+			if (!command.couponCode) {
+				throw new BridgeJobExecutionError({
+					status: 'failed_pre_submit',
+					code: 'COUPON_REQUIRED',
+					message: 'Browser booking execution requires a coupon bypass code',
+					step: 'bypass-payment',
+					retryable: false,
+				});
 			}
-
-			// Legacy path (kill switch `BRIDGE_FLOW_RUNNER=0`) + shadow mode: diff the
-			// executed step ids vs the plan the fold WOULD run (plans only; no dual
-			// effect execution). Shadow rides the non-executing path — see the dates
-			// branch above; the fold is the default and needs no shadow.
-			const executedStepIds: string[] = [];
-			try {
-				const serviceName = command.serviceName ?? command.request.serviceId;
-				executedStepIds.push('acuity/navigate');
-				await runWizardStep(
-					navigateToBooking({
-						serviceName,
-						datetime: command.request.datetime,
-						client: command.request.client,
-						appointmentTypeId: command.request.serviceId,
-					}),
-					'navigate',
-				);
-				executedStepIds.push('acuity/fill-form');
-				await runWizardStep(
-					fillFormFields({
-						client: command.request.client,
-						customFields: command.request.client.customFields,
-					}),
-					'fill-form',
-				);
-				if (!command.couponCode) {
-					throw new BridgeJobExecutionError({
-						status: 'failed_pre_submit',
-						code: 'COUPON_REQUIRED',
-						message: 'Browser booking execution requires a coupon bypass code',
-						step: 'bypass-payment',
-						retryable: false,
-					});
-				}
-				executedStepIds.push('acuity/bypass-payment');
-				const bypass = await runWizardStep(
-					bypassPayment(command.couponCode),
-					'bypass-payment',
-				);
-				assertPaymentBypassProven(bypass);
-				executedStepIds.push('acuity/submit');
-				await runWizardStep(
-					submitBooking(),
-					'submit',
-					'reconcile_required',
-				);
-				executedStepIds.push('acuity/extract-confirmation');
-				const confirmation = await runWizardStep(
-					extractConfirmation(),
-					'extract-confirmation',
-					'reconcile_required',
-				);
-				return toBooking(
-					confirmation,
-					command.request,
-					command.paymentRef,
-					command.paymentProcessor,
-				);
-			} finally {
-				recordFlowShadowComparison(
-					'booking_create_with_payment',
-					acuityFlowStepIds('booking_create_with_payment'),
-					executedStepIds,
-				);
-			}
+			return executeBookingThroughFlow(
+				getFlowDeps(),
+				flowPack.flows.booking_create_with_payment as Flow<
+					AcuityBookingFlowSpec,
+					MiddlewareError | undefined,
+					any
+				>,
+				command,
+				command.couponCode,
+				context,
+			);
 		},
 	};
 };

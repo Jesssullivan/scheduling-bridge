@@ -17,10 +17,10 @@
  * - Payment-injection token reuse: a resumed bypass segment threads the journaled
  *   idempotencyToken (the coupon code) back into the step instead of minting.
  *
- * Everything here is BRIDGE_FLOW_RUNNER-gated (flag-off behavior is pinned
- * untouched by flow-runner.test.ts's poison-journal tests and the
- * trace-conformance harness). Seams: the flow-runner.test.ts module-boundary
- * style — stub steps + succeed-Layer browser service, no Chromium.
+ * Everything here exercises the fold (`runFlow`), the only execution path after the
+ * 0.7.0 deletion gate; the byte-level baseline is the recorded golden fixtures + the
+ * trace-conformance harness. Seams: the flow-runner.test.ts module-boundary style —
+ * stub steps + succeed-Layer browser service, no Chromium.
  */
 
 import { Effect, Layer } from 'effect';
