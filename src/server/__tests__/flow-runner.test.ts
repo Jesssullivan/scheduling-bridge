@@ -1,21 +1,21 @@
 /**
- * BRIDGE_FLOW_RUNNER wiring tests (TIN-2036; flip TIN-2072; design §5, §10 0.6.x):
+ * Flow runner wiring tests (TIN-2036; flip TIN-2072; deletion gate TIN-2093; design
+ * §5, §10 0.7.0). After the deletion gate `runFlow` is the ONLY execution path — the
+ * `BRIDGE_FLOW_RUNNER` flag, the legacy executor, and shadow mode are deleted. These
+ * tests exercise the fold directly:
  *
- * - Kill switch BRIDGE_FLOW_RUNNER=0 (rollback to legacy): the legacy executor path
- *   runs exactly as before the flip, the flow journal is never touched (runFlow not
- *   invoked), and shadow mode diffs the plan-predicted step sequence vs the executed
- *   step ids into shared/metrics.ts.
- * - Flag ON (the DEFAULT after the 0.6.x flip): booking and availability jobs execute
- *   through runFlow with one session layer per segment, and every status transition
- *   EQUALS the legacy transition — asserted by running BOTH executors over the same
- *   substituted stub steps.
- * - Lease-time plan-hash skew (flagged path only): mismatch ⇒ requeue with
- *   FLOW_PLAN_SKEW; mismatch after an effectful-once 'started' journal row ⇒
- *   reconcile_required.
+ * - Booking and availability jobs execute through runFlow with one session layer per
+ *   segment, producing the documented status vocabulary the legacy path produced (the
+ *   recorded golden fixtures + trace-conformance harness are the byte-level baseline).
+ * - The bypass-proof boundary (Diverged ⇒ PAYMENT_BYPASS_NOT_PROVEN), the COUPON_REQUIRED
+ *   and REST_BOOKING_NOT_WIRED executor guards, landing divergence, and read-flow
+ *   journal sampling.
+ * - Lease-time plan-hash skew: mismatch ⇒ requeue with FLOW_PLAN_SKEW; mismatch after
+ *   an effectful-once 'started' journal row ⇒ reconcile_required.
  *
- * Step stubs are substituted at the module boundary (the same seam style the
- * existing server suites use); the browser layers are substituted with succeed-Layers
- * so no Chromium is ever launched.
+ * Step stubs are substituted at the module boundary (the same seam style the existing
+ * server suites use); the browser layers are substituted with succeed-Layers so no
+ * Chromium is ever launched.
  */
 
 import { Effect } from 'effect';
@@ -74,14 +74,9 @@ vi.mock('../../shared/browser-service.js', async (importOriginal) => {
 });
 
 import { createAcuityBridgeJobExecutor } from '../worker.js';
-import {
-	parseBridgeFlowRunnerEnabled,
-	selectFlowJournal,
-} from '../flow-runner.js';
+import { selectFlowJournal } from '../flow-runner.js';
 import {
 	createInMemoryFlowJournal,
-	type FlowJournalShape,
-	JournalError,
 } from '../../flow/index.js';
 import { createInMemoryBridgeAsyncStore } from '../../async/store.js';
 import {
@@ -91,7 +86,6 @@ import {
 import type { AppointmentCommand, BridgeAdapterProfile } from '../../async/types.js';
 import { WizardStepError } from '../../adapters/acuity/errors.js';
 import { acuityFlowEnqueuePinning } from '../../adapters/acuity/flows.js';
-import { metrics } from '../../shared/metrics.js';
 
 const adapterProfile: BridgeAdapterProfile = {
 	backend: 'acuity',
@@ -119,34 +113,13 @@ const bookingCommand = (couponCode?: string): AppointmentCommand => ({
 	executionPreference: 'auto',
 });
 
-/** A journal that must never be touched (proves runFlow is not invoked flag-off). */
-const poisonJournal = (): FlowJournalShape & { touched: () => boolean } => {
-	let appends = 0;
-	return {
-		append: () =>
-			Effect.suspend(() => {
-				appends += 1;
-				return Effect.fail(
-					new JournalError({ message: 'journal must not be touched flag-off' }),
-				);
-			}),
-		read: () => Effect.succeed([]),
-		touched: () => appends > 0,
-	};
-};
-
-const makeExecutors = () => {
+const makeExecutor = () => {
 	const journal = createInMemoryFlowJournal();
-	const legacy = createAcuityBridgeJobExecutor({
+	const fold = createAcuityBridgeJobExecutor({
 		redisClient: null,
-		flowRunner: false,
-	});
-	const flagged = createAcuityBridgeJobExecutor({
-		redisClient: null,
-		flowRunner: true,
 		flowJournal: journal,
 	});
-	return { journal, legacy, flagged };
+	return { journal, fold };
 };
 
 const captureExecutionError = async (
@@ -167,20 +140,6 @@ const transitionOf = (error: BridgeJobExecutionError) => ({
 	step: error.step,
 	retryable: error.retryable,
 });
-
-const shadowRunCount = async (
-	flowId: string,
-	result: string,
-): Promise<number> => {
-	const data = await metrics.flowShadowRunsTotal.get();
-	return (
-		data.values.find(
-			(v) =>
-				(v.labels as Record<string, string>).flow_id === flowId &&
-				(v.labels as Record<string, string>).result === result,
-		)?.value ?? 0
-	);
-};
 
 beforeEach(() => {
 	vi.clearAllMocks();
@@ -236,116 +195,16 @@ beforeEach(() => {
 	);
 });
 
-describe('parseBridgeFlowRunnerEnabled default direction (0.6.x flip)', () => {
-	it('defaults ON when BRIDGE_FLOW_RUNNER is unset', () => {
-		expect(parseBridgeFlowRunnerEnabled({})).toBe(true);
-	});
-
-	it('accepts the explicit-on spellings', () => {
-		expect(parseBridgeFlowRunnerEnabled({ BRIDGE_FLOW_RUNNER: '1' })).toBe(true);
-		expect(parseBridgeFlowRunnerEnabled({ BRIDGE_FLOW_RUNNER: 'true' })).toBe(
-			true,
-		);
-	});
-
-	it('disables only on the documented kill-switch spellings', () => {
-		expect(parseBridgeFlowRunnerEnabled({ BRIDGE_FLOW_RUNNER: '0' })).toBe(false);
-		expect(parseBridgeFlowRunnerEnabled({ BRIDGE_FLOW_RUNNER: 'false' })).toBe(
-			false,
-		);
-	});
-
-	it('treats any other value as ON (fail-open to the default path)', () => {
-		expect(parseBridgeFlowRunnerEnabled({ BRIDGE_FLOW_RUNNER: 'yes' })).toBe(
-			true,
-		);
-	});
-});
-
-describe('kill switch BRIDGE_FLOW_RUNNER=0: legacy path + shadow mode, zero behavior change', () => {
-	it('executes the legacy booking path without touching the flow journal', async () => {
-		const journal = poisonJournal();
-		const executor = createAcuityBridgeJobExecutor({
-			redisClient: null,
-			flowRunner: false,
-			flowJournal: journal,
-		});
-		const before = await shadowRunCount('booking_create_with_payment', 'match');
-
-		const booking = await executor.createBookingWithPayment(
-			bookingCommand('TEST-100'),
-			{ executionPath: 'browser' },
-		);
-
-		expect(booking.id).toBe('apt_123');
-		expect(booking.status).toBe('confirmed');
-		expect(journal.touched()).toBe(false);
-		expect(stepMocks.navigateToBooking).toHaveBeenCalledTimes(1);
-		expect(stepMocks.fillFormFields).toHaveBeenCalledTimes(1);
-		expect(stepMocks.bypassPayment).toHaveBeenCalledTimes(1);
-		expect(stepMocks.submitBooking).toHaveBeenCalledTimes(1);
-		expect(stepMocks.extractConfirmation).toHaveBeenCalledTimes(1);
-
-		const after = await shadowRunCount('booking_create_with_payment', 'match');
-		expect(after - before).toBe(1);
-	});
-
-	it('records a shadow prefix when the legacy path fails part-way', async () => {
-		stepMocks.submitBooking.mockReturnValue(
-			Effect.fail(new WizardStepError({ step: 'submit', message: 'boom' })),
-		);
-		const executor = createAcuityBridgeJobExecutor({
-			redisClient: null,
-			flowRunner: false,
-		});
-		const before = await shadowRunCount('booking_create_with_payment', 'prefix');
-
-		await captureExecutionError(
-			executor.createBookingWithPayment(bookingCommand('TEST-100'), {
-				executionPath: 'browser',
-			}),
-		);
-
-		const after = await shadowRunCount('booking_create_with_payment', 'prefix');
-		expect(after - before).toBe(1);
-	});
-
-	it('shadows the availability refresh flows too', async () => {
-		const executor = createAcuityBridgeJobExecutor({
-			redisClient: null,
-			flowRunner: false,
-		});
-		const before = await shadowRunCount('availability_dates_refresh', 'match');
-
-		const dates = await executor.refreshAvailabilityDates({
-			serviceId: '53178494',
-			month: '2026-06',
-			adapterProfile,
-		});
-
-		expect(dates).toEqual([{ date: '2026-06-20', slots: 1 }]);
-		expect(stepMocks.readDatesViaUrl).toHaveBeenCalledTimes(1);
-		const after = await shadowRunCount('availability_dates_refresh', 'match');
-		expect(after - before).toBe(1);
-	});
-});
-
-describe('flag ON: status-transition parity with the legacy path (stub steps)', () => {
-	it('produces the same booking as the legacy path on success', async () => {
-		const { legacy, flagged, journal } = makeExecutors();
-		const legacyBooking = await legacy.createBookingWithPayment(
-			bookingCommand('TEST-100'),
-			{ executionPath: 'browser' },
-		);
-		const flaggedBooking = await flagged.createBookingWithPayment(
+describe('runFlow execution: the fold is the only path (status vocabulary preserved)', () => {
+	it('produces the booking and the full journal evidence trail on success', async () => {
+		const { fold, journal } = makeExecutor();
+		const booking = await fold.createBookingWithPayment(
 			bookingCommand('TEST-100'),
 			{ executionPath: 'browser', operationId: 'op-success' },
 		);
 
-		expect({ ...flaggedBooking, createdAt: 'pinned' }).toEqual({
-			...legacyBooking,
-			createdAt: 'pinned',
-		});
+		expect(booking.id).toBe('apt_123');
+		expect(booking.status).toBe('confirmed');
 
 		// The journal carries the full evidence trail: started+completed per step,
 		// in plan order, with the coupon code as the payment-injection
@@ -376,6 +235,7 @@ describe('flag ON: status-transition parity with the legacy path (stub steps)', 
 				stepMocks.navigateToBooking.mockReturnValue(
 					Effect.fail(new WizardStepError({ step: 'navigate', message: 'nav broke' })),
 				),
+			{ status: 'failed_pre_submit', step: 'navigate', retryable: true },
 		],
 		[
 			'fill-form failure',
@@ -383,6 +243,7 @@ describe('flag ON: status-transition parity with the legacy path (stub steps)', 
 				stepMocks.fillFormFields.mockReturnValue(
 					Effect.fail(new WizardStepError({ step: 'fill-form', message: 'form broke' })),
 				),
+			{ status: 'failed_pre_submit', step: 'fill-form', retryable: true },
 		],
 		[
 			'submit failure (reconcile_required boundary)',
@@ -390,6 +251,7 @@ describe('flag ON: status-transition parity with the legacy path (stub steps)', 
 				stepMocks.submitBooking.mockReturnValue(
 					Effect.fail(new WizardStepError({ step: 'submit', message: 'submit broke' })),
 				),
+			{ status: 'reconcile_required', step: 'submit', retryable: false },
 		],
 		[
 			'extract failure (reconcile_required boundary)',
@@ -397,33 +259,23 @@ describe('flag ON: status-transition parity with the legacy path (stub steps)', 
 				stepMocks.extractConfirmation.mockReturnValue(
 					Effect.fail(new WizardStepError({ step: 'extract', message: 'extract broke' })),
 				),
+			{ status: 'reconcile_required', step: 'extract-confirmation', retryable: false },
 		],
-		[
-			'payment bypass not proven',
-			() =>
-				stepMocks.bypassPayment.mockReturnValue(
-					Effect.succeed({
-						couponApplied: true,
-						code: 'TEST-100',
-						totalAfterCoupon: '$5.00',
-					}),
-				),
-		],
-	])('matches legacy status transitions: %s', async (_label, arrange) => {
-		arrange();
-		const { legacy, flagged } = makeExecutors();
-		const legacyError = await captureExecutionError(
-			legacy.createBookingWithPayment(bookingCommand('TEST-100'), {
-				executionPath: 'browser',
-			}),
-		);
-		const flaggedError = await captureExecutionError(
-			flagged.createBookingWithPayment(bookingCommand('TEST-100'), {
-				executionPath: 'browser',
-			}),
-		);
-		expect(transitionOf(flaggedError)).toEqual(transitionOf(legacyError));
-	});
+	])(
+		'maps step failures onto the legacy status boundaries: %s',
+		async (_label, arrange, expected) => {
+			arrange();
+			const { fold } = makeExecutor();
+			const error = await captureExecutionError(
+				fold.createBookingWithPayment(bookingCommand('TEST-100'), {
+					executionPath: 'browser',
+				}),
+			);
+			expect(error.status).toBe(expected.status);
+			expect(error.step).toBe(expected.step);
+			expect(error.retryable).toBe(expected.retryable);
+		},
+	);
 
 	it('preserves the exact PAYMENT_BYPASS_NOT_PROVEN failure (Diverged on the payment-injection segment)', async () => {
 		stepMocks.bypassPayment.mockReturnValue(
@@ -433,9 +285,9 @@ describe('flag ON: status-transition parity with the legacy path (stub steps)', 
 				totalAfterCoupon: null,
 			}),
 		);
-		const { flagged } = makeExecutors();
+		const { fold } = makeExecutor();
 		const error = await captureExecutionError(
-			flagged.createBookingWithPayment(bookingCommand('TEST-100'), {
+			fold.createBookingWithPayment(bookingCommand('TEST-100'), {
 				executionPath: 'browser',
 			}),
 		);
@@ -448,37 +300,31 @@ describe('flag ON: status-transition parity with the legacy path (stub steps)', 
 		expect(error.message).toBe('Payment bypass was not proven before submit');
 	});
 
-	it('matches the legacy COUPON_REQUIRED and REST_BOOKING_NOT_WIRED guards', async () => {
-		const { legacy, flagged } = makeExecutors();
+	it('keeps the COUPON_REQUIRED and REST_BOOKING_NOT_WIRED executor guards', async () => {
+		const { fold } = makeExecutor();
 
-		const legacyCoupon = await captureExecutionError(
-			legacy.createBookingWithPayment(bookingCommand(undefined), {
+		const coupon = await captureExecutionError(
+			fold.createBookingWithPayment(bookingCommand(undefined), {
 				executionPath: 'browser',
 			}),
 		);
-		const flaggedCoupon = await captureExecutionError(
-			flagged.createBookingWithPayment(bookingCommand(undefined), {
-				executionPath: 'browser',
-			}),
-		);
-		expect(transitionOf(flaggedCoupon)).toEqual(transitionOf(legacyCoupon));
-		expect(flaggedCoupon.code).toBe('COUPON_REQUIRED');
+		expect(coupon.code).toBe('COUPON_REQUIRED');
+		expect(coupon.status).toBe('failed_pre_submit');
+		expect(coupon.step).toBe('bypass-payment');
+		expect(coupon.retryable).toBe(false);
 
-		const legacyRest = await captureExecutionError(
-			legacy.createBookingWithPayment(bookingCommand('TEST-100'), {
+		const rest = await captureExecutionError(
+			fold.createBookingWithPayment(bookingCommand('TEST-100'), {
 				executionPath: 'rest',
 			}),
 		);
-		const flaggedRest = await captureExecutionError(
-			flagged.createBookingWithPayment(bookingCommand('TEST-100'), {
-				executionPath: 'rest',
-			}),
-		);
-		expect(transitionOf(flaggedRest)).toEqual(transitionOf(legacyRest));
-		expect(flaggedRest.code).toBe('REST_BOOKING_NOT_WIRED');
+		expect(rest.code).toBe('REST_BOOKING_NOT_WIRED');
+		expect(rest.status).toBe('failed_pre_submit');
+		expect(rest.step).toBe('execution-path');
+		expect(rest.retryable).toBe(false);
 	});
 
-	it('maps a landing divergence to failed_pre_submit (the status the legacy path reaches in production)', async () => {
+	it('maps a landing divergence to failed_pre_submit (the status the legacy path reached in production)', async () => {
 		stepMocks.navigateToBooking.mockReturnValue(
 			Effect.succeed({
 				url: 'https://example.as.me/schedule/mock',
@@ -489,9 +335,9 @@ describe('flag ON: status-transition parity with the legacy path (stub steps)', 
 				selectedTime: '12:00 PM',
 			}),
 		);
-		const { flagged } = makeExecutors();
+		const { fold } = makeExecutor();
 		const error = await captureExecutionError(
-			flagged.createBookingWithPayment(bookingCommand('TEST-100'), {
+			fold.createBookingWithPayment(bookingCommand('TEST-100'), {
 				executionPath: 'browser',
 			}),
 		);
@@ -501,45 +347,40 @@ describe('flag ON: status-transition parity with the legacy path (stub steps)', 
 		expect(error.retryable).toBe(true);
 	});
 
-	it('matches legacy availability refresh results and failure transitions', async () => {
-		const { legacy, flagged } = makeExecutors();
+	it('refreshes availability and maps read failures to retryable failed_pre_submit', async () => {
+		const { fold } = makeExecutor();
 		const command = {
 			serviceId: '53178494',
 			month: '2026-06',
 			adapterProfile,
 		};
-		const legacyDates = await legacy.refreshAvailabilityDates(command);
-		const flaggedDates = await flagged.refreshAvailabilityDates(command);
-		expect(flaggedDates).toEqual(legacyDates);
+		const dates = await fold.refreshAvailabilityDates(command);
+		expect(dates).toEqual([{ date: '2026-06-20', slots: 1 }]);
 
 		stepMocks.readDatesViaUrl.mockReturnValue(
 			Effect.fail(
 				new WizardStepError({ step: 'read-availability', message: 'read broke' }),
 			),
 		);
-		const legacyError = await captureExecutionError(
-			legacy.refreshAvailabilityDates(command),
+		const error = await captureExecutionError(
+			fold.refreshAvailabilityDates(command),
 		);
-		const flaggedError = await captureExecutionError(
-			flagged.refreshAvailabilityDates(command),
-		);
-		expect(transitionOf(flaggedError)).toEqual(transitionOf(legacyError));
-		expect(flaggedError.step).toBe('refresh-availability-dates');
-		expect(flaggedError.retryable).toBe(true);
+		expect(error.status).toBe('failed_pre_submit');
+		expect(error.step).toBe('refresh-availability-dates');
+		expect(error.retryable).toBe(true);
 	});
 
 	it('dispatches non-numeric service ids through the wizard read steps (worker parity)', async () => {
-		const { legacy, flagged } = makeExecutors();
+		const { fold } = makeExecutor();
 		const command = {
 			serviceId: 'relaxation-massage',
 			serviceName: 'Relaxation Massage',
 			month: '2026-06',
 			adapterProfile,
 		};
-		const legacyDates = await legacy.refreshAvailabilityDates(command);
-		const flaggedDates = await flagged.refreshAvailabilityDates(command);
-		expect(flaggedDates).toEqual(legacyDates);
-		expect(stepMocks.readAvailableDates).toHaveBeenCalledTimes(2);
+		const dates = await fold.refreshAvailabilityDates(command);
+		expect(dates).toEqual([{ date: '2026-06-21', slots: 1 }]);
+		expect(stepMocks.readAvailableDates).toHaveBeenCalledTimes(1);
 		expect(stepMocks.readDatesViaUrl).not.toHaveBeenCalled();
 
 		const slotsCommand = {
@@ -548,10 +389,9 @@ describe('flag ON: status-transition parity with the legacy path (stub steps)', 
 			date: '2026-06-21',
 			adapterProfile,
 		};
-		const legacySlots = await legacy.refreshAvailabilitySlots(slotsCommand);
-		const flaggedSlots = await flagged.refreshAvailabilitySlots(slotsCommand);
-		expect(flaggedSlots).toEqual(legacySlots);
-		expect(stepMocks.readTimeSlots).toHaveBeenCalledTimes(2);
+		const slots = await fold.refreshAvailabilitySlots(slotsCommand);
+		expect(slots).toEqual([{ datetime: '2026-06-21T15:00:00.000Z', available: true }]);
+		expect(stepMocks.readTimeSlots).toHaveBeenCalledTimes(1);
 	});
 });
 
@@ -573,7 +413,6 @@ describe('read-flow journal sampling (BRIDGE_FLOW_JOURNAL_SAMPLE; flagged path)'
 		const journal = createInMemoryFlowJournal();
 		const flagged = createAcuityBridgeJobExecutor({
 			redisClient: null,
-			flowRunner: true,
 			flowJournal: journal,
 		});
 		const dates = await flagged.refreshAvailabilityDates(datesCommand, {
@@ -589,7 +428,6 @@ describe('read-flow journal sampling (BRIDGE_FLOW_JOURNAL_SAMPLE; flagged path)'
 		const journal = createInMemoryFlowJournal();
 		const flagged = createAcuityBridgeJobExecutor({
 			redisClient: null,
-			flowRunner: true,
 			flowJournal: journal,
 		});
 		const dates = await flagged.refreshAvailabilityDates(datesCommand, {
@@ -607,7 +445,6 @@ describe('read-flow journal sampling (BRIDGE_FLOW_JOURNAL_SAMPLE; flagged path)'
 		const journal = createInMemoryFlowJournal();
 		const flagged = createAcuityBridgeJobExecutor({
 			redisClient: null,
-			flowRunner: true,
 			flowJournal: journal,
 		});
 		await flagged.createBookingWithPayment(bookingCommand('TEST-100'), {
@@ -639,7 +476,6 @@ describe('lease-time plan-hash skew (design §5 plan-hash pinning; flagged path 
 		const journal = createInMemoryFlowJournal();
 		const flagged = createAcuityBridgeJobExecutor({
 			redisClient: null,
-			flowRunner: true,
 			flowJournal: journal,
 		});
 		const record = await store.enqueueJob(
@@ -668,7 +504,6 @@ describe('lease-time plan-hash skew (design §5 plan-hash pinning; flagged path 
 		const journal = createInMemoryFlowJournal();
 		const flagged = createAcuityBridgeJobExecutor({
 			redisClient: null,
-			flowRunner: true,
 			flowJournal: journal,
 		});
 		const record = await store.enqueueJob(
@@ -704,7 +539,6 @@ describe('lease-time plan-hash skew (design §5 plan-hash pinning; flagged path 
 		const journal = createInMemoryFlowJournal();
 		const flagged = createAcuityBridgeJobExecutor({
 			redisClient: null,
-			flowRunner: true,
 			flowJournal: journal,
 		});
 		const record = await store.enqueueJob(

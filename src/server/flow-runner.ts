@@ -1,15 +1,17 @@
 /**
- * Flag-gated flow execution wiring for the bridge worker (TIN-2036, flip TIN-2072).
- * Design: docs/design/flow-dag-formalization.md §5 (fold semantics, plan-hash
- * pinning, idempotency boundaries), §10 (0.6.x block: "Flag default flips only on
- * parity evidence").
+ * Flow execution wiring for the bridge worker (TIN-2036; flip TIN-2072; deletion
+ * gate TIN-2093). Design: docs/design/flow-dag-formalization.md §5 (fold semantics,
+ * plan-hash pinning, idempotency boundaries), §10 0.7.0 (the deletion gate: the
+ * three legacy compositions and the `BRIDGE_FLOW_RUNNER` flag are deleted, so
+ * `runFlow` is the ONLY booking-execution path).
  *
- * THE PARITY CONTRACT: this module's status transitions are mapped to EQUAL the
- * legacy worker transitions (`exitToValue` / `assertPaymentBypassProven`
- * semantics), asserted by the parity tests and the trace-conformance harness
- * (docs/design/parity-evidence.md). With the evidence green, `runFlow` is now the
- * DEFAULT execution path; the legacy executor path (src/server/worker.ts) is
- * byte-for-byte preserved behind the `BRIDGE_FLOW_RUNNER=0` kill switch (rollback).
+ * THE PARITY CONTRACT: this module's status transitions reproduce what the (now
+ * deleted) legacy worker produced — same status vocabulary, same code derivation,
+ * same retryable rule, same step labels, same bypass-proof and reconcile_required
+ * boundaries. The recorded golden fixtures
+ * (src/server/__tests__/__fixtures__/trace-golden/), captured from the real legacy
+ * path before deletion, are the permanent baseline; the trace-conformance harness
+ * asserts the fold reproduces them byte-for-byte (docs/design/parity-evidence.md).
  */
 
 import { randomUUID } from 'node:crypto';
@@ -59,27 +61,6 @@ import {
 	recordFlowStepLanding,
 	recordFlowStepReroute,
 } from '../shared/metrics.js';
-
-// =============================================================================
-// FLAG
-// =============================================================================
-
-/**
- * BRIDGE_FLOW_RUNNER gate (design §10: "Flag default flips only on parity
- * evidence"). The parity evidence is in hand — the trace-conformance harness
- * (`src/server/__tests__/trace-conformance.test.ts`, docs/design/parity-evidence.md)
- * is green in CI on main — so the fold (`runFlow`) is now the DEFAULT execution
- * path.
- *
- * Default ON: when BRIDGE_FLOW_RUNNER is unset, the flag is on. The documented
- * kill switch `BRIDGE_FLOW_RUNNER=0` (or 'false') disables it and falls back to
- * the byte-for-byte legacy worker path (the rollback knob; design §10 0.6.x).
- * '1'/'true' remain accepted (explicit-on). Only the explicit-disable spellings
- * turn it off — any other value, like the unset case, is ON.
- */
-export const parseBridgeFlowRunnerEnabled = (
-	env: Partial<Record<'BRIDGE_FLOW_RUNNER', string>> = process.env,
-): boolean => env.BRIDGE_FLOW_RUNNER !== '0' && env.BRIDGE_FLOW_RUNNER !== 'false';
 
 // =============================================================================
 // JOURNAL SELECTION (rides the existing store selection order: Postgres → Redis →

@@ -20,8 +20,6 @@ import { Effect, pipe } from 'effect';
 import type { SchedulingAdapter } from '../types.js';
 import type { ScraperConfig } from './scraper.js';
 import type {
-	Booking,
-	BookingRequest,
 	Service,
 	SchedulingError,
 	SchedulingResult,
@@ -32,17 +30,8 @@ import { createAcuityServiceCatalog } from '../../shared/acuity-service-catalog.
 import { toSchedulingError, type MiddlewareError } from './errors.js';
 import { createRemoteWizardAdapter, type RemoteAdapterConfig } from '../../shared/remote-adapter.js';
 import {
-	navigateToBooking,
-	fillFormFields,
-	bypassPayment,
-	generateCouponCode,
-	submitBooking,
-	extractConfirmation,
-	toBooking,
 	readAvailableDates,
 	readTimeSlots,
-	type NavigateResult,
-	type ConfirmationData,
 } from './steps/index.js';
 import { readDatesViaUrl, readSlotsViaUrl } from './steps/read-via-url.js';
 
@@ -75,109 +64,7 @@ export interface WizardAdapterConfig extends Partial<BrowserConfig> {
 // EFFECT PROGRAMS
 // =============================================================================
 
-/**
- * Full booking creation via the Acuity wizard.
- *
- * Flow:
- * 1. Click through wizard: service → Book → calendar → time → continue
- * 2. Fill client form (standard + intake fields) → "Continue to Payment" → /payment page
- * 3. Apply 100% gift certificate on payment page (coupon toggle → enter code → Apply)
- * 4. Click "PAY & CONFIRM" at $0 total
- * 5. Extract confirmation data
- */
-const createBookingWithPaymentRefProgram = (
-	request: BookingRequest,
-	paymentRef: string,
-	paymentProcessor: string,
-	couponCode: string,
-	service?: Service,
-) =>
-	Effect.scoped(
-		Effect.gen(function* () {
-			// Step 1: Navigate through wizard to client form
-			const serviceName = service?.name ?? request.serviceId;
-			const nav: NavigateResult = yield* navigateToBooking({
-				serviceName,
-				datetime: request.datetime,
-				client: request.client,
-			});
-
-			if (nav.landingStep !== 'client-form') {
-				return yield* Effect.fail({
-					_tag: 'WizardStepError' as const,
-					step: 'navigate' as const,
-					message: `Wizard landed on '${nav.landingStep}' instead of client form. Service or datetime may be unavailable.`,
-				});
-			}
-
-			// Step 2: Fill form fields (standard + intake) and advance to /payment page
-			yield* fillFormFields({
-				client: request.client,
-				customFields: request.client.customFields,
-			});
-
-			// Step 3: Apply gift certificate on the payment page (total → $0)
-			yield* bypassPayment(couponCode);
-
-			// Step 4: Click "PAY & CONFIRM" at $0 total
-			yield* submitBooking();
-
-			// Step 5: Extract confirmation
-			const confirmation: ConfirmationData = yield* extractConfirmation();
-
-			return toBooking(
-				confirmation,
-				request,
-				paymentRef,
-				paymentProcessor,
-				service
-					? {
-							name: service.name,
-							duration: service.duration,
-							price: service.price,
-							currency: service.currency,
-						}
-					: undefined,
-			);
-		}),
-	);
-
 const isAcuityAppointmentTypeId = (serviceId: string): boolean => /^\d+$/.test(serviceId);
-
-/**
- * Simple booking creation (no payment bypass needed).
- * For card payments that go through Acuity's normal flow.
- */
-const createBookingProgram = (request: BookingRequest, serviceName?: string) =>
-	Effect.scoped(
-		Effect.gen(function* () {
-			const nav: NavigateResult = yield* navigateToBooking({
-				serviceName: serviceName ?? request.serviceId,
-				datetime: request.datetime,
-				client: request.client,
-			});
-
-			if (nav.landingStep !== 'client-form') {
-				return yield* Effect.fail({
-					_tag: 'WizardStepError' as const,
-					step: 'navigate' as const,
-					message: `Wizard landed on '${nav.landingStep}' instead of client form.`,
-				});
-			}
-
-			yield* fillFormFields({
-				client: request.client,
-				customFields: request.client.customFields,
-			});
-
-			// No payment bypass - form fills and advances to payment page
-			// where Acuity handles card payment normally
-			yield* submitBooking();
-			const confirmation: ConfirmationData = yield* extractConfirmation();
-
-			return toBooking(confirmation, request, '', 'acuity');
-		}),
-	);
 
 const isSchedulingError = (error: unknown): error is SchedulingError =>
 	typeof error === 'object' && error !== null && '_tag' in error;
@@ -420,27 +307,26 @@ export const createWizardAdapter = (config: WizardAdapterConfig): SchedulingAdap
 		// Write operations - Effect TS middleware
 		// -----------------------------------------------------------------------
 
-		createBooking: (request) => {
-			const serviceName = serviceCatalog.getCachedService(request.serviceId)?.name;
-			return runWizard(
-				createBookingProgram(request, serviceName) as Effect.Effect<Booking, MiddlewareError>,
-			);
-		},
+		// Synchronous booking writes were three divergent hand-written compositions;
+		// the 0.7.0 deletion gate (design §10) removed them so `runFlow` is the only
+		// booking-execution path. Browser bookings run exclusively through the async
+		// worker (POST /booking/jobs → BridgeJobExecutor → runFlow); the local
+		// SchedulingAdapter no longer carries a divergent in-process booking program.
+		createBooking: () =>
+			Effect.fail(
+				Errors.acuity(
+					'ASYNC_REQUIRED',
+					'Synchronous booking is retired; enqueue an async job (POST /booking/jobs) — runFlow is the only booking execution path (design §10 0.7.0)',
+				),
+			),
 
-		createBookingWithPaymentRef: (request, paymentRef, paymentProcessor) => {
-			const coupon = config.couponCode ?? generateCouponCode(paymentRef, paymentProcessor);
-			const service = serviceCatalog.getCachedService(request.serviceId);
-
-			return runWizard(
-				createBookingWithPaymentRefProgram(
-					request,
-					paymentRef,
-					paymentProcessor,
-					coupon,
-					service,
-				) as Effect.Effect<Booking, MiddlewareError>,
-			);
-		},
+		createBookingWithPaymentRef: () =>
+			Effect.fail(
+				Errors.acuity(
+					'ASYNC_REQUIRED',
+					'Synchronous booking-with-payment is retired; enqueue an async job (POST /booking/jobs) — runFlow is the only booking execution path (design §10 0.7.0)',
+				),
+			),
 
 		getBooking: () =>
 			Effect.fail(Errors.acuity('NOT_IMPLEMENTED', 'Get booking not yet supported via wizard')),

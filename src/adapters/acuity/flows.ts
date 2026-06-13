@@ -104,14 +104,14 @@ export const acuityFlows = {
 	availability_slots_refresh: acuityAvailabilitySlotsFlow,
 } as const;
 
-/** Plan-predicted step-id sequence per flow (the shadow-mode comparison baseline). */
+/** Plan-predicted step-id sequence per flow (the projection asserted by the plan tests). */
 export const acuityFlowStepIds = (kind: BridgeJobKind): readonly string[] =>
 	acuityFlows[kind].plan.nodes.map((node) => node.stepId);
 
 /**
  * Enqueue pinning (design §5 plan-hash pinning): the `planHash`/`flowVersion` pair
- * written into every BridgeJobRecord at enqueue — additive and UNCONDITIONAL (not
- * gated by BRIDGE_FLOW_RUNNER; only the lease-time skew check is flag-gated).
+ * written into every BridgeJobRecord at enqueue — additive and UNCONDITIONAL; only
+ * the lease-time skew check (flow-runner.ts) consumes it.
  */
 export const acuityFlowEnqueuePinning = (
 	kind: BridgeJobKind,

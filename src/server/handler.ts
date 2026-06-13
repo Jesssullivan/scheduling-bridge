@@ -1364,58 +1364,14 @@ const handleCheckSlot = async (
 	sendSuccess(res, available);
 };
 
-const handleCreateBooking = async (
-	req: IncomingMessage,
-	res: ServerResponse,
-	context: RequestContext,
-) => {
-	const body = (await parseBody(req)) as {
-		request: BookingRequest;
-		couponCode?: string;
-	};
-	const { request } = body;
-
-	const serviceName = await resolveServiceName(request.serviceId);
-	logRequestEvent('INFO', 'Booking create requested', context, {
-		event: 'booking_create_requested',
-		serviceId: request.serviceId,
-		datetime: request.datetime,
-	});
-
-	const result = await runEffect(
-		Effect.gen(function* () {
-			yield* acuitySteps.navigateToBooking({
-				serviceName: serviceName ?? request.serviceId,
-				datetime: request.datetime,
-				client: request.client,
-				appointmentTypeId: request.serviceId,
-			});
-			yield* acuitySteps.fillFormFields({
-				client: request.client,
-				customFields: request.client.customFields,
-			});
-			yield* acuitySteps.submitBooking();
-			const confirmation = yield* acuitySteps.extractConfirmation();
-			return acuitySteps.toBooking(confirmation, request, '', 'acuity');
-		}),
-	);
-
-	if (!result.ok) {
-		logRequestEvent('ERROR', 'Booking create failed', context, {
-			event: 'booking_create_failed',
-			serviceId: request.serviceId,
-			datetime: request.datetime,
-			errorTag: result.error._tag,
-			errorCode: 'code' in result.error ? result.error.code : 'UNKNOWN',
-			errorMessage:
-				'message' in result.error
-					? result.error.message
-					: 'Booking create failed',
-		});
-		return sendError(res, 500, result.error);
-	}
-	sendSuccess(res, result.value);
-};
+// The inline `Effect.gen` over `acuitySteps` that this route used to run was one of
+// the three divergent hand-written booking compositions. The 0.7.0 deletion gate
+// (design §10) removed all three so `runFlow` is the only booking-execution path:
+// synchronous booking is retired in favour of the async job path (POST /booking/jobs).
+// The route stays registered (the remote adapter and health registry reference it)
+// but answers with the same 410 ASYNC_REQUIRED tombstone as the deprecated paid route.
+const handleCreateBooking = (res: ServerResponse) =>
+	handleDeprecatedSyncPaymentBooking(res);
 
 const handleDeprecatedSyncPaymentBooking = (res: ServerResponse) =>
 	sendJson(res, 410, {
@@ -2523,7 +2479,7 @@ const server = createServer(async (req, res) => {
 			return await handleGetAsyncJob(operationId, res);
 		}
 		if (path === '/booking/create' && method === 'POST') {
-			return await handleCreateBooking(req, res, context);
+			return handleCreateBooking(res);
 		}
 		if (path === '/booking/create-with-payment' && method === 'POST') {
 			return handleDeprecatedSyncPaymentBooking(res);

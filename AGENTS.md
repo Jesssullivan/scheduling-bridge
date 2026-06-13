@@ -119,11 +119,14 @@ K8s async runtime truth:
 - `BRIDGE_INLINE_WORKER_ENABLED` defaults on when Postgres or Redis is
   configured, so a single HTTP deployment can drain queued jobs until a
   separate worker deployment exists.
-- `BRIDGE_FLOW_RUNNER` defaults on as of `0.6.x`: async jobs execute through the
-  `runFlow` fold, the flip gated on the trace-conformance parity evidence
-  (`docs/design/parity-evidence.md`, design §10). Rollback is `BRIDGE_FLOW_RUNNER=0`
-  (or `false`), which restores the byte-for-byte legacy worker path; shadow
-  metrics then diff the legacy trace against the plan the fold would have run.
+- `runFlow` is the ONLY async-job execution path as of `0.7.0`: the deletion gate
+  (design §10 0.7.0, the anti-renaming guarantee) removed the three legacy
+  hand-written compositions, the `BRIDGE_FLOW_RUNNER` flag, the kill switch, and
+  shadow mode — there is nothing to fall back to. The fold's parity with the
+  removed legacy path is locked by recorded golden fixtures
+  (`src/server/__tests__/__fixtures__/trace-golden/`, captured from the real legacy
+  path before deletion) and the trace-conformance harness
+  (`docs/design/parity-evidence.md`).
 - request-path date/slot prewarm must enqueue async refresh jobs; browser
   scraping for prewarm is worker-owned, not request-owned.
 - cutover claims for queue/cache readiness should use the auth-gated

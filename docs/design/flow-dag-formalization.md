@@ -599,11 +599,20 @@ deferred until reconciliation actually consumes it.
 
 **0.7.0 — the deletion gate (anti-renaming guarantee).**
 
-- The release is structurally blocked until all three hand-written compositions —
-  `wizard.ts:88-180`, `handler.ts:1843-1859`, `server/worker.ts:268-325` — are deleted and
-  `runFlow` is the only execution path. A conformance test asserts identical step traces
-  pre/post. Plan metadata cannot become dead data that drifts beside the real path: the
-  dual-path window is capped to one minor.
+- **Deletion-gate status: LANDED (TIN-2093).** All three hand-written compositions —
+  `wizard.ts createBookingWithPaymentRefProgram` (and its sibling `createBookingProgram`),
+  the `handler.ts` inline `Effect.gen` over `acuitySteps` (now a 410 ASYNC_REQUIRED
+  tombstone), and the `server/worker.ts` legacy executors — are deleted, so `runFlow` is the
+  only execution path. The `BRIDGE_FLOW_RUNNER` flag, its kill switch
+  (`parseBridgeFlowRunnerEnabled`), and shadow mode (`recordFlowShadowComparison` + the
+  shadow counters) are removed: with no legacy path there is nothing to fall back to or
+  shadow-diff against. The conformance test asserts the fold reproduces the legacy step
+  traces RECORDED as committed golden fixtures
+  (`src/server/__tests__/__fixtures__/trace-golden/`, captured from the real legacy path
+  before deletion) byte-for-byte. Plan metadata cannot become dead data that drifts beside
+  the real path: the dual-path window was capped to one minor and is now closed.
+  (The `wizard.ts` adapter write methods now fail `ASYNC_REQUIRED`, directing callers to the
+  async job path; the `__set*ForTest` seams survive 0.7.0 and are deleted in 0.8.0.)
 - Physical extraction behind the 0.6.0-defined `VendorFlowPack` tag: `SelectorRegistry` and
   station detectors become standalone modules; selector de-tenanting completes — MI entries
   move to selector-profile data (per §7). `payment/coupon-bypass` segment + double capability
