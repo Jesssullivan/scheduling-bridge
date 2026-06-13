@@ -219,7 +219,8 @@ export interface AcuityBridgeJobExecutorOptions {
 	readonly redisClient?: IORedis | null;
 	/**
 	 * BRIDGE_FLOW_RUNNER override for tests; default reads the env flag
-	 * (`parseBridgeFlowRunnerEnabled`, OFF unless '1'/'true' — design §10 0.6.0).
+	 * (`parseBridgeFlowRunnerEnabled`, ON unless the `BRIDGE_FLOW_RUNNER=0`/'false'
+	 * kill switch is set — design §10 0.6.x flip).
 	 */
 	readonly flowRunner?: boolean;
 	/** FlowJournal override for tests; default rides the store selection order. */
@@ -294,9 +295,13 @@ export const createAcuityBridgeJobExecutor = (
 				return dates;
 			}
 
-			// Legacy path (DEFAULT) + shadow mode: diff the plan-predicted step sequence
-			// vs the executed step ids into shared/metrics.ts (plans only, no dual
-			// execution of effects — design §10 0.6.0).
+			// Legacy path (kill switch `BRIDGE_FLOW_RUNNER=0`) + shadow mode: diff the
+			// plan-predicted step sequence vs the executed step ids into
+			// shared/metrics.ts (plans only, no dual execution of effects — design §10).
+			// Shadow runs on the NON-executing path: the fold is the default now, so
+			// when legacy executes (kill switch) we diff its real trace against the plan
+			// the fold WOULD have run. When the fold executes (default) it IS the plan,
+			// so no shadow comparison is needed.
 			const executedStepIds: string[] = [];
 			try {
 				executedStepIds.push('acuity/read-dates');
@@ -427,7 +432,10 @@ export const createAcuityBridgeJobExecutor = (
 				);
 			}
 
-			// Legacy path (DEFAULT) + shadow mode (plans only; zero behavior change).
+			// Legacy path (kill switch `BRIDGE_FLOW_RUNNER=0`) + shadow mode: diff the
+			// executed step ids vs the plan the fold WOULD run (plans only; no dual
+			// effect execution). Shadow rides the non-executing path — see the dates
+			// branch above; the fold is the default and needs no shadow.
 			const executedStepIds: string[] = [];
 			try {
 				const serviceName = command.serviceName ?? command.request.serviceId;

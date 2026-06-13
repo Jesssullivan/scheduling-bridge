@@ -180,6 +180,7 @@ dashboard state when `/health` is available.
 | `BRIDGE_REDIS_ASYNC_PREFIX`                   | No                                       | `bridge-async:v1`                           | Redis key prefix for async jobs and snapshots                                                                                |
 | `BRIDGE_REDIS_ASYNC_JOB_TTL_SECONDS`          | No                                       | `604800`                                    | Redis TTL for async job and idempotency records; lower in K8s if historical retryable refresh failures make queue stats noisy |
 | `BRIDGE_INLINE_WORKER_ENABLED`                | No                                       | `true` when Postgres or Redis is configured | Drain async jobs inside the HTTP container; set `false` only when a separate worker deployment is active                     |
+| `BRIDGE_FLOW_RUNNER`                           | No                                       | `1` (on)                                    | Execute async jobs through the `runFlow` fold (default since 0.6.x, gated on parity evidence). Kill switch / rollback: set `0` (or `false`) to fall back to the byte-for-byte legacy worker path. `1`/`true` are explicit-on; any other value is on |
 | `BRIDGE_WORKER_POLL_MS`                       | No                                       | `1000`                                      | Worker queue poll interval                                                                                                   |
 | `BRIDGE_WORKER_BATCH_SIZE`                    | No                                       | `5`                                         | Maximum jobs drained per worker poll                                                                                         |
 | `BRIDGE_WORKER_CONCURRENCY`                   | No                                       | `1`                                         | Maximum jobs executed concurrently within one worker poll; raise only when browser/page limiter and queue metrics support it |
@@ -220,6 +221,11 @@ The bridge emits NDJSON logs to stdout/stderr for runtime analysis.
 - `SCHEDULING_BRIDGE_PROFILE_SLOT_READS=1` forces profile emission for all slot reads
 - internal readiness emits queue depth, oldest queue age, snapshot age, readiness
   result, and per-scope freshness metrics
+- the `runFlow` fold (the default execution path; see `BRIDGE_FLOW_RUNNER` above)
+  emits per-stepId Prometheus metrics. Under the `BRIDGE_FLOW_RUNNER=0` kill switch
+  the legacy path additionally emits shadow-comparison counters
+  (`acuity_flow_shadow_runs_total`, `acuity_flow_shadow_step_mismatch_total`)
+  diffing the executed trace against the plan the fold would have run
 
 ## Deployment
 
