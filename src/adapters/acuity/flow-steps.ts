@@ -25,6 +25,8 @@ import { Effect, Schema, type Scope } from 'effect';
 import type { MiddlewareError } from './errors.js';
 import type { BrowserService } from '../../shared/browser-service.js';
 import type { FlowStep } from '../../flow/step.js';
+import type { FuzzyResolution } from '../../flow/fuzzy.js';
+import type { ServiceResolutionSummary } from './service-resolver.js';
 import type { LandingObservation, StationId } from '../../flow/station.js';
 import type { StateOf } from '../../flow/state.js';
 import type { ClientInfo } from '../../core/types.js';
@@ -304,11 +306,32 @@ type BookingStep<
 	BrowserService | Scope.Scope
 >;
 
-/** `navigateToBooking` (steps/navigate.ts) as a FlowStep. */
-export const acuityNavigateStep: BookingStep<
-	'serviceId' | 'datetime' | 'serviceName' | 'client',
-	'navigation'
-> = {
+/**
+ * Project the navigate step's JSON-safe `ServiceResolutionSummary` onto the
+ * journal-facing `FuzzyResolution` vocabulary (design §6: the strategy trail maps
+ * 1:1 — value/confidence/strategy/matchedLabel/threshold/alternates).
+ */
+export const serviceResolutionToFuzzy = (
+	summary: ServiceResolutionSummary,
+): FuzzyResolution<string> => ({
+	value: summary.matchedName,
+	confidence: summary.confidence,
+	strategy: summary.strategy,
+	matchedLabel: summary.matchedName,
+	threshold: summary.threshold,
+	alternates: summary.alternates,
+});
+
+/**
+ * `navigateToBooking` (steps/navigate.ts) as a FlowStep. A factory so the per-flow
+ * fuzzy admitting threshold (`minConfidence` — data on the flow definition, see
+ * `ACUITY_FLOW_MIN_CONFIDENCE` in flows.ts; design §6) reaches the ServiceResolver
+ * cascade inside navigate. StepMeta is identical regardless of the threshold: the
+ * plan shape and planHash do NOT change.
+ */
+export const makeAcuityNavigateStep = (options?: {
+	readonly minConfidence?: number;
+}): BookingStep<'serviceId' | 'datetime' | 'serviceName' | 'client', 'navigation'> => ({
 	meta: {
 		id: 'acuity/navigate',
 		needs: ['serviceId', 'datetime', 'serviceName', 'client'],
@@ -338,6 +361,9 @@ export const acuityNavigateStep: BookingStep<
 			datetime: input.datetime,
 			client: fromClientState(input.client),
 			appointmentTypeId: input.serviceId,
+			...(options?.minConfidence !== undefined
+				? { minConfidence: options.minConfidence }
+				: {}),
 		}).pipe(
 			Effect.map((nav) => ({
 				state: {
@@ -351,9 +377,20 @@ export const acuityNavigateStep: BookingStep<
 					},
 				},
 				observed: landingObservation(['acuity:client-form'], nav.landingStep),
+				// Fuzzy-in audit trail: surfaced so the fold journals it per checkpoint
+				// (run.ts reads `outcome.resolutions` into rows + confidenceFloor).
+				...(nav.serviceResolution
+					? { resolutions: [serviceResolutionToFuzzy(nav.serviceResolution)] }
+					: {}),
 			})),
 		),
-};
+});
+
+/** The default navigate step (cascade-floor admitting threshold). */
+export const acuityNavigateStep: BookingStep<
+	'serviceId' | 'datetime' | 'serviceName' | 'client',
+	'navigation'
+> = makeAcuityNavigateStep();
 
 /** `fillFormFields` (steps/fill-form.ts) as a FlowStep. */
 export const acuityFillFormStep: BookingStep<'client' | 'navigation', 'form'> = {

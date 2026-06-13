@@ -19,6 +19,7 @@
 import type { BridgeJobKind } from '../../async/types.js';
 import { makeFlow, type Flow } from '../../flow/flow.js';
 import type { MiddlewareError } from './errors.js';
+import { DEFAULT_SERVICE_MIN_CONFIDENCE } from './service-resolver.js';
 import {
 	ACUITY_BOOKING_INITIAL_KEYS,
 	ACUITY_DATES_INITIAL_KEYS,
@@ -29,10 +30,10 @@ import {
 	acuityBypassPaymentStep,
 	acuityExtractConfirmationStep,
 	acuityFillFormStep,
-	acuityNavigateStep,
 	acuityReadDatesStep,
 	acuityReadSlotsStep,
 	acuitySubmitStep,
+	makeAcuityNavigateStep,
 	type AcuityAvailabilityDatesFlowSpec,
 	type AcuityAvailabilitySlotsFlowSpec,
 	type AcuityBookingFlowSpec,
@@ -41,9 +42,27 @@ import {
 /** Semver of the 0.6.0 flow shapes; bump when a flow's plan shape changes. */
 export const ACUITY_FLOW_VERSION = '1.0.0';
 
+/**
+ * Per-flow fuzzy admitting thresholds (design §6: "Thresholds (per-field
+ * `minConfidence`) are data on the flow definition: policy tightening is a diff, not
+ * a code change"). Consumed by the navigate step's ServiceResolver cascade and by the
+ * plan dry-run endpoint's catalog matcher. The default equals the cascade floor, so
+ * exact/normalized matching behavior is unchanged. Deliberately NOT part of the
+ * FlowPlan: tightening policy must not churn planHash pinning.
+ */
+export const ACUITY_FLOW_MIN_CONFIDENCE: Record<BridgeJobKind, number> = {
+	booking_create_with_payment: DEFAULT_SERVICE_MIN_CONFIDENCE,
+	availability_dates_refresh: DEFAULT_SERVICE_MIN_CONFIDENCE,
+	availability_slots_refresh: DEFAULT_SERVICE_MIN_CONFIDENCE,
+};
+
 export const acuityBookingFlow: Flow<AcuityBookingFlowSpec, MiddlewareError | undefined, any> =
 	makeFlow(acuityBookingFlowSpec, ACUITY_BOOKING_INITIAL_KEYS)
-		.add(acuityNavigateStep)
+		.add(
+			makeAcuityNavigateStep({
+				minConfidence: ACUITY_FLOW_MIN_CONFIDENCE.booking_create_with_payment,
+			}),
+		)
 		.add(acuityFillFormStep)
 		.add(acuityBypassPaymentStep)
 		.add(acuitySubmitStep)

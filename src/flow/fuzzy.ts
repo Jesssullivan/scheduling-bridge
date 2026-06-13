@@ -10,17 +10,19 @@
  */
 
 import { Context, Data, Effect, Layer } from 'effect';
-import {
-	fuzzyConfidence,
-	normalize,
-	tokenOverlap,
-} from '../adapters/acuity/service-resolver.js';
+import { scoreLabel } from '../adapters/acuity/service-resolver.js';
 
 // Re-export the shared pure scoring machinery for matcher implementations.
+// `scoreLabel` and the cascade thresholds live beside the in-page cascade
+// (service-resolver.ts) so navigate's resolution and the catalog matcher
+// share one scoring source of truth.
 export {
+	FUZZY_THRESHOLD,
+	TOKEN_THRESHOLD,
 	fuzzyConfidence,
 	levenshtein,
 	normalize,
+	scoreLabel,
 	tokenOverlap,
 } from '../adapters/acuity/service-resolver.js';
 
@@ -74,43 +76,8 @@ export class ServiceMatcher extends Context.Tag('scheduling-bridge/ServiceMatche
 // 0.7.0 lanes per design §6.
 
 // =============================================================================
-// SHARED SCORING MACHINERY (pure)
+// SHARED SCORING MACHINERY (pure; sourced from service-resolver.ts)
 // =============================================================================
-
-/** Cascade thresholds, mirroring service-resolver.ts strategy constants. */
-export const TOKEN_THRESHOLD = 0.6;
-export const FUZZY_THRESHOLD = 0.6;
-
-/**
- * Score one label against a query through the cascade (sans id-match, which needs a ref):
- * normalized-exact (0.95), token-overlap (raw >= 0.6 scaled onto 0.5-0.9), then
- * fuzzy/Levenshtein (raw >= 0.6 scaled onto 0.3-0.7). Returns the best admitted strategy,
- * or a zero-confidence 'fuzzy' score when nothing is admitted.
- */
-export const scoreLabel = (
-	query: string,
-	label: string,
-): { readonly strategy: FuzzyStrategy; readonly confidence: number } => {
-	if (normalize(query) === normalize(label) && normalize(query).length > 0) {
-		return { strategy: 'normalized-exact', confidence: 0.95 };
-	}
-
-	const overlap = tokenOverlap(query, label);
-	if (overlap >= TOKEN_THRESHOLD) {
-		// Scale confidence: threshold maps to 0.5, perfect match maps to 0.9
-		const confidence = 0.5 + ((overlap - TOKEN_THRESHOLD) / (1 - TOKEN_THRESHOLD)) * 0.4;
-		return { strategy: 'token-overlap', confidence };
-	}
-
-	const fuzzy = fuzzyConfidence(query, label);
-	if (fuzzy >= FUZZY_THRESHOLD) {
-		// Scale: 0.6 threshold -> 0.3 confidence, 1.0 -> 0.7
-		const confidence = 0.3 + ((fuzzy - FUZZY_THRESHOLD) / (1 - FUZZY_THRESHOLD)) * 0.4;
-		return { strategy: 'fuzzy', confidence };
-	}
-
-	return { strategy: 'fuzzy', confidence: 0 };
-};
 
 /** Default service matcher: id-match first, then the label cascade over candidates. */
 export const makeServiceMatcher = (

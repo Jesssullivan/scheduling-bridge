@@ -15,11 +15,16 @@
  */
 
 import { Effect } from 'effect';
-import type { Page, ElementHandle } from 'playwright-core';
+import type { Page } from 'playwright-core';
 import { BrowserService } from '../../../shared/browser-service.js';
 import { observePageOpEffect } from '../../../shared/metrics.js';
 import { WizardStepError } from '../errors.js';
 import { resolveSelector, probe, Selectors } from '../selectors.js';
+import {
+	resolveServiceOnPage,
+	toServiceResolutionSummary,
+	type ServiceResolutionSummary,
+} from '../service-resolver.js';
 import type { ClientInfo } from '../../../core/types.js';
 
 // =============================================================================
@@ -35,6 +40,12 @@ export interface NavigateParams {
 	readonly client: ClientInfo;
 	/** Appointment type ID — if known, verified against URL after "Book" click */
 	readonly appointmentTypeId?: string;
+	/**
+	 * Per-flow fuzzy admitting threshold for service resolution (design §6: thresholds
+	 * are data on the flow definition). Defaults to `DEFAULT_SERVICE_MIN_CONFIDENCE`,
+	 * the cascade floor, which preserves exact/normalized matching behavior.
+	 */
+	readonly minConfidence?: number;
 }
 
 export interface NavigateResult {
@@ -44,11 +55,22 @@ export interface NavigateResult {
 	readonly calendarId: string | null;
 	readonly selectedDate: string;
 	readonly selectedTime: string;
+	/**
+	 * Fuzzy-in audit trail (design §6): how the ServiceResolver cascade matched the
+	 * requested service. JSON-safe (no ElementHandle); surfaced as a `FuzzyResolution`
+	 * in `StepOutcome.resolutions` by the flow wrapper so the fold journals it.
+	 */
+	readonly serviceResolution?: ServiceResolutionSummary;
 }
 
 export const normalizeServiceNameForMatch = (name: string): string =>
 	name.trim().replace(/\s+/g, ' ').toLowerCase();
 
+/**
+ * Legacy substring matcher, kept only as an exported helper for callers/tests that
+ * still reference it. Service selection itself goes through the ServiceResolver
+ * 4-strategy cascade (`resolveServiceOnPage`) as of the 0.6.x fuzzy-in lane.
+ */
 export const serviceNameMatches = (candidateName: string, requestedName: string): boolean => {
 	const candidate = normalizeServiceNameForMatch(candidateName);
 	const requested = normalizeServiceNameForMatch(requestedName);
@@ -95,10 +117,11 @@ export const navigateToBooking = (params: NavigateParams) =>
 		});
 
 		// Step 2: Find and click target service's "Book" button
-		const { appointmentTypeId, calendarId } = yield* selectService(
+		const { appointmentTypeId, calendarId, serviceResolution } = yield* selectService(
 			page,
 			params.serviceName,
 			params.appointmentTypeId,
+			params.minConfidence,
 		);
 
 		// Step 3: Navigate calendar to target date and click
@@ -123,6 +146,7 @@ export const navigateToBooking = (params: NavigateParams) =>
 			calendarId,
 			selectedDate: targetDate.toISOString().split('T')[0],
 			selectedTime: targetTime,
+			serviceResolution,
 		} satisfies NavigateResult;
 	}));
 
@@ -131,13 +155,16 @@ export const navigateToBooking = (params: NavigateParams) =>
 // =============================================================================
 
 /**
- * Find the service by name and click its "Book" button.
+ * Find the service via the ServiceResolver 4-strategy cascade (id-match →
+ * normalized-exact → token-overlap → fuzzy; design §6 fuzzy-in, replacing the legacy
+ * substring `serviceNameMatches` scan) and click its "Book" button.
  * After clicking, waits for URL to include /appointment/<id>/calendar/<id>.
  */
 const selectService = (
 	page: Page,
 	serviceName: string,
 	expectedAppointmentTypeId?: string,
+	minConfidence?: number,
 ) =>
 	Effect.gen(function* () {
 		// Wait for service list to load
@@ -152,35 +179,15 @@ const selectService = (
 			),
 		);
 
-		// Find the service item matching our target name
-		const serviceItem: ElementHandle | null = yield* Effect.tryPromise({
-			try: async () => {
-				const items = await page.$$(Selectors.serviceList[0]);
-				for (const item of items) {
-					const nameEl = await item.$(Selectors.serviceName[0]);
-					const name = await nameEl?.textContent();
-					if (name && serviceNameMatches(name, serviceName)) {
-						return item;
-					}
-				}
-				return null;
-			},
-			catch: (e) =>
-				new WizardStepError({
-					step: 'navigate',
-					message: `Error searching services: ${e instanceof Error ? e.message : String(e)}`,
-					cause: e,
-				}),
-		});
-
-		if (!serviceItem) {
-			return yield* Effect.fail(
-				new WizardStepError({
-					step: 'navigate',
-					message: `Service "${serviceName}" not found on the page`,
-				}),
-			);
-		}
+		// Resolve the service item through the cascade. Below-threshold resolutions
+		// fail here with a typed ServiceResolverError (never a low-confidence click).
+		const resolution = yield* resolveServiceOnPage(
+			page,
+			serviceName,
+			expectedAppointmentTypeId,
+			minConfidence,
+		);
+		const serviceItem = resolution.element;
 
 		// Click the "Book" button within this service item
 		const bookBtn = yield* Effect.tryPromise({
@@ -232,7 +239,11 @@ const selectService = (
 			);
 		}
 
-		return { appointmentTypeId, calendarId };
+		return {
+			appointmentTypeId,
+			calendarId,
+			serviceResolution: toServiceResolutionSummary(resolution),
+		};
 	});
 
 // =============================================================================
