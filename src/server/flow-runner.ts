@@ -1,14 +1,15 @@
 /**
- * Flag-gated flow execution wiring for the bridge worker (TIN-2036).
+ * Flag-gated flow execution wiring for the bridge worker (TIN-2036, flip TIN-2072).
  * Design: docs/design/flow-dag-formalization.md §5 (fold semantics, plan-hash
- * pinning, idempotency boundaries), §10 (0.6.0 block: execution through `runFlow`
- * only when BRIDGE_FLOW_RUNNER is on, default off).
+ * pinning, idempotency boundaries), §10 (0.6.x block: "Flag default flips only on
+ * parity evidence").
  *
- * THE INVIOLABLE 0.6.0 CONSTRAINT: nothing in this module runs unless the flag is
- * on. The legacy executor path (src/server/worker.ts) is byte-for-byte preserved as
- * the default; flagged-path status transitions are mapped to EQUAL the legacy
- * transitions (`exitToValue` / `assertPaymentBypassProven` semantics), asserted by
- * the parity tests.
+ * THE PARITY CONTRACT: this module's status transitions are mapped to EQUAL the
+ * legacy worker transitions (`exitToValue` / `assertPaymentBypassProven`
+ * semantics), asserted by the parity tests and the trace-conformance harness
+ * (docs/design/parity-evidence.md). With the evidence green, `runFlow` is now the
+ * DEFAULT execution path; the legacy executor path (src/server/worker.ts) is
+ * byte-for-byte preserved behind the `BRIDGE_FLOW_RUNNER=0` kill switch (rollback).
  */
 
 import { randomUUID } from 'node:crypto';
@@ -64,13 +65,21 @@ import {
 // =============================================================================
 
 /**
- * BRIDGE_FLOW_RUNNER gate (design §10: `BRIDGE_FLOW_RUNNER=1`, default off). The
- * repo's boolean-knob convention is 'true'/'false' (BRIDGE_INLINE_WORKER_ENABLED),
- * so both spellings are accepted; everything else — including unset — is OFF.
+ * BRIDGE_FLOW_RUNNER gate (design §10: "Flag default flips only on parity
+ * evidence"). The parity evidence is in hand — the trace-conformance harness
+ * (`src/server/__tests__/trace-conformance.test.ts`, docs/design/parity-evidence.md)
+ * is green in CI on main — so the fold (`runFlow`) is now the DEFAULT execution
+ * path.
+ *
+ * Default ON: when BRIDGE_FLOW_RUNNER is unset, the flag is on. The documented
+ * kill switch `BRIDGE_FLOW_RUNNER=0` (or 'false') disables it and falls back to
+ * the byte-for-byte legacy worker path (the rollback knob; design §10 0.6.x).
+ * '1'/'true' remain accepted (explicit-on). Only the explicit-disable spellings
+ * turn it off — any other value, like the unset case, is ON.
  */
 export const parseBridgeFlowRunnerEnabled = (
 	env: Partial<Record<'BRIDGE_FLOW_RUNNER', string>> = process.env,
-): boolean => env.BRIDGE_FLOW_RUNNER === '1' || env.BRIDGE_FLOW_RUNNER === 'true';
+): boolean => env.BRIDGE_FLOW_RUNNER !== '0' && env.BRIDGE_FLOW_RUNNER !== 'false';
 
 // =============================================================================
 // JOURNAL SELECTION (rides the existing store selection order: Postgres → Redis →

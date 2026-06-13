@@ -1,12 +1,14 @@
 /**
- * BRIDGE_FLOW_RUNNER wiring tests (TIN-2036; design §5, §10 0.6.0 block):
+ * BRIDGE_FLOW_RUNNER wiring tests (TIN-2036; flip TIN-2072; design §5, §10 0.6.x):
  *
- * - Flag OFF (the DEFAULT): the legacy executor path runs exactly as today, the flow
- *   journal is never touched (runFlow not invoked), and shadow mode diffs the
- *   plan-predicted step sequence vs the executed step ids into shared/metrics.ts.
- * - Flag ON: booking and availability jobs execute through runFlow with one session
- *   layer per segment, and every status transition EQUALS the legacy transition —
- *   asserted by running BOTH executors over the same substituted stub steps.
+ * - Kill switch BRIDGE_FLOW_RUNNER=0 (rollback to legacy): the legacy executor path
+ *   runs exactly as before the flip, the flow journal is never touched (runFlow not
+ *   invoked), and shadow mode diffs the plan-predicted step sequence vs the executed
+ *   step ids into shared/metrics.ts.
+ * - Flag ON (the DEFAULT after the 0.6.x flip): booking and availability jobs execute
+ *   through runFlow with one session layer per segment, and every status transition
+ *   EQUALS the legacy transition — asserted by running BOTH executors over the same
+ *   substituted stub steps.
  * - Lease-time plan-hash skew (flagged path only): mismatch ⇒ requeue with
  *   FLOW_PLAN_SKEW; mismatch after an effectful-once 'started' journal row ⇒
  *   reconcile_required.
@@ -72,7 +74,10 @@ vi.mock('../../shared/browser-service.js', async (importOriginal) => {
 });
 
 import { createAcuityBridgeJobExecutor } from '../worker.js';
-import { selectFlowJournal } from '../flow-runner.js';
+import {
+	parseBridgeFlowRunnerEnabled,
+	selectFlowJournal,
+} from '../flow-runner.js';
 import {
 	createInMemoryFlowJournal,
 	type FlowJournalShape,
@@ -231,11 +236,38 @@ beforeEach(() => {
 	);
 });
 
-describe('flag OFF (default): legacy path + shadow mode, zero behavior change', () => {
+describe('parseBridgeFlowRunnerEnabled default direction (0.6.x flip)', () => {
+	it('defaults ON when BRIDGE_FLOW_RUNNER is unset', () => {
+		expect(parseBridgeFlowRunnerEnabled({})).toBe(true);
+	});
+
+	it('accepts the explicit-on spellings', () => {
+		expect(parseBridgeFlowRunnerEnabled({ BRIDGE_FLOW_RUNNER: '1' })).toBe(true);
+		expect(parseBridgeFlowRunnerEnabled({ BRIDGE_FLOW_RUNNER: 'true' })).toBe(
+			true,
+		);
+	});
+
+	it('disables only on the documented kill-switch spellings', () => {
+		expect(parseBridgeFlowRunnerEnabled({ BRIDGE_FLOW_RUNNER: '0' })).toBe(false);
+		expect(parseBridgeFlowRunnerEnabled({ BRIDGE_FLOW_RUNNER: 'false' })).toBe(
+			false,
+		);
+	});
+
+	it('treats any other value as ON (fail-open to the default path)', () => {
+		expect(parseBridgeFlowRunnerEnabled({ BRIDGE_FLOW_RUNNER: 'yes' })).toBe(
+			true,
+		);
+	});
+});
+
+describe('kill switch BRIDGE_FLOW_RUNNER=0: legacy path + shadow mode, zero behavior change', () => {
 	it('executes the legacy booking path without touching the flow journal', async () => {
 		const journal = poisonJournal();
 		const executor = createAcuityBridgeJobExecutor({
 			redisClient: null,
+			flowRunner: false,
 			flowJournal: journal,
 		});
 		const before = await shadowRunCount('booking_create_with_payment', 'match');
@@ -262,7 +294,10 @@ describe('flag OFF (default): legacy path + shadow mode, zero behavior change', 
 		stepMocks.submitBooking.mockReturnValue(
 			Effect.fail(new WizardStepError({ step: 'submit', message: 'boom' })),
 		);
-		const executor = createAcuityBridgeJobExecutor({ redisClient: null });
+		const executor = createAcuityBridgeJobExecutor({
+			redisClient: null,
+			flowRunner: false,
+		});
 		const before = await shadowRunCount('booking_create_with_payment', 'prefix');
 
 		await captureExecutionError(
@@ -276,7 +311,10 @@ describe('flag OFF (default): legacy path + shadow mode, zero behavior change', 
 	});
 
 	it('shadows the availability refresh flows too', async () => {
-		const executor = createAcuityBridgeJobExecutor({ redisClient: null });
+		const executor = createAcuityBridgeJobExecutor({
+			redisClient: null,
+			flowRunner: false,
+		});
 		const before = await shadowRunCount('availability_dates_refresh', 'match');
 
 		const dates = await executor.refreshAvailabilityDates({

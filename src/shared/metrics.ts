@@ -427,13 +427,15 @@ export const setAvailabilitySnapshotAge = (
 	);
 };
 
-// ─── Flow shadow mode (design docs/design/flow-dag-formalization.md §10 0.6.0) ──
+// ─── Flow shadow mode (design docs/design/flow-dag-formalization.md §10 0.6.x) ──
 //
-// While BRIDGE_FLOW_RUNNER is off (the default), the legacy execution paths diff the
-// FlowPlan-predicted step sequence against the step ids the legacy composition
-// actually executed. Plans only — no dual execution of effects, zero behavior change.
-// Step-id label cardinality is bounded by the registered flow plans (a handful of
-// stable ids), never per-request data.
+// The shadow runs on the non-executing path. After the 0.6.x flip the fold (runFlow)
+// is the default, so shadow only fires under the `BRIDGE_FLOW_RUNNER=0` kill switch:
+// the legacy execution paths then diff the FlowPlan-predicted step sequence (what the
+// fold WOULD have run) against the step ids the legacy composition actually executed.
+// Plans only — no dual execution of effects, zero behavior change. Step-id label
+// cardinality is bounded by the registered flow plans (a handful of stable ids),
+// never per-request data.
 
 export type FlowShadowResult = 'match' | 'prefix' | 'mismatch';
 
@@ -441,6 +443,12 @@ export type FlowShadowResult = 'match' | 'prefix' | 'mismatch';
  * Compare the plan-predicted step-id sequence against the actually-executed one and
  * record the outcome. A failed legacy run legitimately executes a prefix of the plan,
  * so prefixes are distinguished from genuine shape mismatches.
+ *
+ * Recorded only on the legacy worker path (src/server/worker.ts), which after the
+ * 0.6.x flip runs only under the `BRIDGE_FLOW_RUNNER=0` kill switch. The shadow
+ * therefore measures the non-executing path: when legacy runs (rollback) it diffs
+ * the real trace against the plan the fold would have run. When the fold runs
+ * (default) it IS the plan and needs no shadow comparison.
  */
 export const recordFlowShadowComparison = (
 	flowId: string,
