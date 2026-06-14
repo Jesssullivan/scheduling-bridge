@@ -156,7 +156,7 @@ describe('makeDateMatcher membership (behavior-preserving with the wizard inline
 		}
 	});
 
-	it('is providable through DateMatcherLive behind the scheduling-bridge tag', async () => {
+	it('is providable through DateMatcherLive behind the scheduling-kit tag', async () => {
 		const resolution = await Effect.runPromise(
 			Effect.gen(function* () {
 				const matcher = yield* DateMatcher;
@@ -164,7 +164,7 @@ describe('makeDateMatcher membership (behavior-preserving with the wizard inline
 			}).pipe(Effect.provide(DateMatcherLive)),
 		);
 		expect(resolution.strategy).toBe('id-match');
-		expect(DateMatcher.key).toBe('scheduling-bridge/DateMatcher');
+		expect(DateMatcher.key).toBe('scheduling-kit/DateMatcher');
 	});
 });
 
