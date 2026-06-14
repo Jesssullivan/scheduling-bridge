@@ -12,6 +12,16 @@
  */
 
 import { Context, Effect, Layer } from 'effect';
+import {
+	FUZZY_THRESHOLD,
+	TOKEN_THRESHOLD,
+	fuzzyConfidence,
+	levenshtein,
+	normalize,
+	scoreLabel,
+	tokenOverlap,
+	type FuzzyStrategy,
+} from '@tummycrypt/scheduling-kit/fuzzy';
 import type { Page, ElementHandle } from 'playwright-core';
 import { ServiceResolverError } from './errors.js';
 import { Selectors } from './selectors.js';
@@ -27,7 +37,7 @@ export interface ServiceResolution {
 	/** Confidence score 0-1 */
 	readonly confidence: number;
 	/** Which strategy produced the match */
-	readonly strategy: 'id-match' | 'normalized-exact' | 'token-overlap' | 'fuzzy';
+	readonly strategy: FuzzyStrategy;
 	/** The name as it appears on the page */
 	readonly matchedName: string;
 }
@@ -95,107 +105,17 @@ export class ServiceResolver extends Context.Tag('scheduling-bridge/ServiceResol
 	ServiceResolverShape
 >() {}
 
-// =============================================================================
-// STRING MATCHING UTILITIES
-// =============================================================================
-
-/** Normalize a string: lowercase, strip non-alphanumeric (keep spaces), collapse whitespace. */
-export const normalize = (s: string): string =>
-	s.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
-
-/** Tokenize: split on whitespace into lowercase words. */
-const tokenize = (s: string): Set<string> =>
-	new Set(normalize(s).split(' ').filter(Boolean));
-
-/** Token overlap score: |intersection| / max(|a|, |b|). */
-export const tokenOverlap = (a: string, b: string): number => {
-	const setA = tokenize(a);
-	const setB = tokenize(b);
-	if (setA.size === 0 || setB.size === 0) return 0;
-
-	let intersection = 0;
-	for (const token of setA) {
-		if (setB.has(token)) intersection++;
-	}
-
-	return intersection / Math.max(setA.size, setB.size);
-};
-
-/** Levenshtein edit distance between two strings. */
-export const levenshtein = (a: string, b: string): number => {
-	const m = a.length;
-	const n = b.length;
-
-	// Optimize for empty strings
-	if (m === 0) return n;
-	if (n === 0) return m;
-
-	// Single-row DP
-	const row = Array.from({ length: n + 1 }, (_, i) => i);
-
-	for (let i = 1; i <= m; i++) {
-		let prev = i;
-		for (let j = 1; j <= n; j++) {
-			const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-			const val = Math.min(
-				row[j] + 1,      // deletion
-				prev + 1,         // insertion
-				row[j - 1] + cost // substitution
-			);
-			row[j - 1] = prev;
-			prev = val;
-		}
-		row[n] = prev;
-	}
-
-	return row[n];
-};
-
-/** Fuzzy match confidence: 1 - (distance / maxLen). */
-export const fuzzyConfidence = (a: string, b: string): number => {
-	const na = normalize(a);
-	const nb = normalize(b);
-	const maxLen = Math.max(na.length, nb.length);
-	if (maxLen === 0) return 0;
-
-	const dist = levenshtein(na, nb);
-	return Math.max(0, 1 - dist / maxLen);
-};
-
-/** Cascade strategy thresholds (re-exported by src/flow/fuzzy.ts). */
-export const TOKEN_THRESHOLD = 0.6;
-export const FUZZY_THRESHOLD = 0.6;
-
-/**
- * Score one label against a query through the cascade (sans id-match, which needs a ref):
- * normalized-exact (0.95), token-overlap (raw >= 0.6 scaled onto 0.5-0.9), then
- * fuzzy/Levenshtein (raw >= 0.6 scaled onto 0.3-0.7). Returns the best admitted strategy,
- * or a zero-confidence 'fuzzy' score when nothing is admitted. (Shared with the flow-layer
- * `ServiceMatcher`; src/flow/fuzzy.ts re-exports it.)
- */
-export const scoreLabel = (
-	query: string,
-	label: string,
-): { readonly strategy: ServiceResolution['strategy']; readonly confidence: number } => {
-	if (normalize(query) === normalize(label) && normalize(query).length > 0) {
-		return { strategy: 'normalized-exact', confidence: 0.95 };
-	}
-
-	const overlap = tokenOverlap(query, label);
-	if (overlap >= TOKEN_THRESHOLD) {
-		// Scale confidence: threshold maps to 0.5, perfect match maps to 0.9
-		const confidence = 0.5 + ((overlap - TOKEN_THRESHOLD) / (1 - TOKEN_THRESHOLD)) * 0.4;
-		return { strategy: 'token-overlap', confidence };
-	}
-
-	const fuzzy = fuzzyConfidence(query, label);
-	if (fuzzy >= FUZZY_THRESHOLD) {
-		// Scale: 0.6 threshold -> 0.3 confidence, 1.0 -> 0.7
-		const confidence = 0.3 + ((fuzzy - FUZZY_THRESHOLD) / (1 - FUZZY_THRESHOLD)) * 0.4;
-		return { strategy: 'fuzzy', confidence };
-	}
-
-	return { strategy: 'fuzzy', confidence: 0 };
+// The pure string-scoring machinery now lives in scheduling-kit. Re-export it
+// here for the existing Acuity adapter/tests while the implementation consumes
+// the shared package authority.
+export {
+	FUZZY_THRESHOLD,
+	TOKEN_THRESHOLD,
+	fuzzyConfidence,
+	levenshtein,
+	normalize,
+	scoreLabel,
+	tokenOverlap,
 };
 
 // =============================================================================
@@ -323,22 +243,20 @@ const tryTokenOverlap = (
 	serviceName: string,
 ): Effect.Effect<ServiceResolution, ServiceResolverError> => {
 	let bestMatch: PageService | null = null;
-	let bestScore = 0;
+	let bestConfidence = 0;
 
 	for (const svc of pageServices) {
-		const score = tokenOverlap(serviceName, svc.name);
-		if (score > bestScore) {
-			bestScore = score;
+		const score = scoreLabel(serviceName, svc.name);
+		if (score.strategy === 'token-overlap' && score.confidence > bestConfidence) {
+			bestConfidence = score.confidence;
 			bestMatch = svc;
 		}
 	}
 
-	if (bestMatch && bestScore >= TOKEN_THRESHOLD) {
-		// Scale confidence: threshold maps to 0.5, perfect match maps to 0.9
-		const confidence = 0.5 + (bestScore - TOKEN_THRESHOLD) / (1 - TOKEN_THRESHOLD) * 0.4;
+	if (bestMatch && bestConfidence > 0) {
 		return Effect.succeed({
 			element: bestMatch.element,
-			confidence,
+			confidence: bestConfidence,
 			strategy: 'token-overlap' as const,
 			matchedName: bestMatch.name,
 		});
@@ -347,7 +265,7 @@ const tryTokenOverlap = (
 	return Effect.fail(new ServiceResolverError({
 		serviceName,
 		strategies: ['token-overlap'],
-		message: `Best token overlap score ${bestScore.toFixed(2)} below threshold ${TOKEN_THRESHOLD}`,
+		message: `No token-overlap match cleared the shared scorer threshold ${TOKEN_THRESHOLD}`,
 	}));
 };
 
@@ -356,24 +274,21 @@ const tryFuzzyMatch = (
 	pageServices: PageService[],
 	serviceName: string,
 ): Effect.Effect<ServiceResolution, ServiceResolverError> => {
-	// FUZZY_THRESHOLD 0.6: distance/maxLen < 0.4 means confidence > 0.6
 	let bestMatch: PageService | null = null;
 	let bestConfidence = 0;
 
 	for (const svc of pageServices) {
-		const conf = fuzzyConfidence(serviceName, svc.name);
-		if (conf > bestConfidence) {
-			bestConfidence = conf;
+		const score = scoreLabel(serviceName, svc.name);
+		if (score.strategy === 'fuzzy' && score.confidence > bestConfidence) {
+			bestConfidence = score.confidence;
 			bestMatch = svc;
 		}
 	}
 
-	if (bestMatch && bestConfidence >= FUZZY_THRESHOLD) {
-		// Scale: 0.6 threshold -> 0.3 confidence, 1.0 -> 0.7
-		const confidence = 0.3 + (bestConfidence - FUZZY_THRESHOLD) / (1 - FUZZY_THRESHOLD) * 0.4;
+	if (bestMatch && bestConfidence > 0) {
 		return Effect.succeed({
 			element: bestMatch.element,
-			confidence,
+			confidence: bestConfidence,
 			strategy: 'fuzzy' as const,
 			matchedName: bestMatch.name,
 		});
@@ -382,7 +297,7 @@ const tryFuzzyMatch = (
 	return Effect.fail(new ServiceResolverError({
 		serviceName,
 		strategies: ['fuzzy'],
-		message: `Best fuzzy confidence ${bestConfidence.toFixed(2)} below threshold ${FUZZY_THRESHOLD}`,
+		message: `No fuzzy match cleared the shared scorer threshold ${FUZZY_THRESHOLD}`,
 	}));
 };
 

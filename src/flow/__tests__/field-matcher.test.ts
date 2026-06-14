@@ -111,7 +111,7 @@ describe('makeFieldMatcher / FieldMatcherLive', () => {
 		}
 	});
 
-	it('is providable through FieldMatcherLive behind the scheduling-bridge tag', async () => {
+	it('is providable through FieldMatcherLive behind the scheduling-kit tag', async () => {
 		const resolution = await Effect.runPromise(
 			Effect.gen(function* () {
 				const matcher = yield* FieldMatcher;
@@ -119,7 +119,7 @@ describe('makeFieldMatcher / FieldMatcherLive', () => {
 			}).pipe(Effect.provide(FieldMatcherLive)),
 		);
 		expect(resolution.value.id).toBe('work-on');
-		expect(FieldMatcher.key).toBe('scheduling-bridge/FieldMatcher');
+		expect(FieldMatcher.key).toBe('scheduling-kit/FieldMatcher');
 	});
 });
 

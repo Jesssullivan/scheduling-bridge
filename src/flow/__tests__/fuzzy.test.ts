@@ -83,7 +83,7 @@ describe('makeServiceMatcher', () => {
 		}
 	});
 
-	it('is providable through the ServiceMatcherLive layer behind the scheduling-bridge tag', async () => {
+	it('is providable through the ServiceMatcherLive layer behind the scheduling-kit tag', async () => {
 		const resolution = await Effect.runPromise(
 			Effect.gen(function* () {
 				const matcher = yield* ServiceMatcher;
@@ -91,7 +91,7 @@ describe('makeServiceMatcher', () => {
 			}).pipe(Effect.provide(ServiceMatcherLive)),
 		);
 		expect(resolution.strategy).toBe('normalized-exact');
-		expect(ServiceMatcher.key).toBe('scheduling-bridge/ServiceMatcher');
+		expect(ServiceMatcher.key).toBe('scheduling-kit/ServiceMatcher');
 	});
 });
 
